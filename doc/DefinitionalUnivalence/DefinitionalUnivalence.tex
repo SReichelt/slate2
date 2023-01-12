@@ -1,0 +1,581 @@
+\documentclass[a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[parfill]{parskip}
+\usepackage[utf8]{inputenc}
+\usepackage{titlesec}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+
+\title{A Type Theory with Definitional Univalence}
+\author{Sebastian Reichelt}
+
+\titleformat{\paragraph}{\bfseries}{\theparagraph}{}{}
+
+\setlength{\skip\footins}{0.5cm}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{theorem}[definition]{Theorem}
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{corollary}[definition]{Corollary}
+\newtheorem{conjecture}[definition]{Conjecture}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+\newtheorem*{remarks}{Remarks}
+\newtheorem*{example}{Example}
+
+\newcommand{\defn}{\emph}
+
+\let\defeq\equiv
+\renewcommand{\phi}{\varphi}
+\renewcommand{\equiv}{\simeq}
+\renewcommand{\emptyset}{\varnothing}
+\newcommand{\iso}{\cong}
+
+\newcommand{\pathOver}[1]{=^{#1}}
+
+\newcommand{\univVar}{\mathcal}
+\newcommand{\U}{\univVar{U}}
+
+\newcommand{\primType}{\mathbf}
+\newcommand{\0}{\primType{0}}
+\newcommand{\1}{\primType{1}}
+\newcommand{\2}{\primType{2}}
+\newcommand{\Id}{\primType{Id}}
+
+\newcommand{\nm}{\mathsf}
+
+\newcommand{\id}{\nm{id}}
+\newcommand{\intro}{\nm{intro}}
+\newcommand{\elim}{\nm{elim}}
+\newcommand{\fst}{\nm{fst}}
+\newcommand{\snd}{\nm{snd}}
+\newcommand{\funext}{\nm{funext}}
+\newcommand{\refl}{\nm{refl}}
+\newcommand{\symm}{\nm{symm}}
+\newcommand{\trans}{\nm{trans}}
+\newcommand{\ap}{\nm{ap}}
+
+\newcommand{\combinator}{\nm}
+\newcommand{\idFun}{\combinator{I}}
+\newcommand{\revAppFun}{\combinator{T}}
+\newcommand{\constFun}{\combinator{K}}
+\newcommand{\compFun}{\combinator{B'}}
+\newcommand{\revCompFun}{\combinator{B}}
+\newcommand{\swapFun}{\combinator{C}}
+\newcommand{\dupFun}{\combinator{W}}
+\newcommand{\revSelfAppFun}{\combinator{O}}
+\newcommand{\substFun}{\combinator{S'}}
+\newcommand{\revSubstFun}{\combinator{S}}
+\newcommand{\constPi}{\combinator{Kd}}
+\newcommand{\appPi}{\combinator{Ad}}
+\newcommand{\compFunPi}{\combinator{Bd}}
+
+\newcommand{\rightInv}{\nm{rightInv}}
+\newcommand{\leftInv}{\nm{leftInv}}
+
+\begin{document}
+
+\maketitle
+
+(Warning: WIP, still contains important gaps)
+
+\section{Abstract}
+
+We present a way to enrich an intensional type theory (containing $\Pi$ and $\Sigma$ types and
+universes, but lacking induction for the moment) with identity types that \emph{definitionally}
+match the behavior of identities in Homotopy Type Theory (HoTT) \cite{hottbook}.
+Specifically, for every type $A$ that is an application of a primitive type former, and instances
+$a,b : A,$ the expression $[a = b]$ reduces according to the extensionality principle for that type
+former as known from HoTT -- in particular, univalence if $A$ is a universe. We construct a function
+that implements dependent elimination for identities (i.e.\ the J rule, known as path induction in
+HoTT).
+
+Thus equality has the same properties as in HoTT except that univalence (and function
+extensionality etc.) holds definitionally, preserving computation -- and improving even over cubical
+type theory \cite{cubical} in this regard, where univalence is a theorem but not a definitional
+equality.\footnote{The idea seems similar to ``higher observational type theory'' \cite{higher-ott},
+which at the time of this writing is work in progress.}
+A practical advantage is that arbitrarily complex algebraic structures can trivially be transported
+along type equivalences in a theorem prover implementing this type theory, while preserving all
+properties that can be defined on them. Since the resulting transport functions are reducible to a
+form that avoids univalence or even function extensionality, those reduced terms can potentially
+even be exported to theorem provers \emph{not} implementing this type theory.
+
+The single trick that greatly simplifies the construction of this type theory is to replace lambda
+abstractions with the $\revSubstFun,$ $\constFun,$ and $\idFun$ combinators \cite{combinators}.
+Crucially, these combinators as well as all type formers and introduction and elimination rules are
+well-typed (dependent) functions. Therefore we can assume that the only terms in the theory are
+primitive constants and well-typed applications thereof (even though a practical implementation may
+work with lambda abstractions instead or in addition). This enables us to define the behavior of
+identities by induction over all primitive functions.
+
+%Since the type theory is strongly normalizing and no normal form contains any identity types, a
+%corollary is that identity types are conservative over (at least this restricted version of)
+%intensional type theory.
+
+\section{Base Theory}
+
+The type theory we define is based on Martin-Löf dependent type theory with universes
+\[\U_0 : \U_1 : \U_2 : \dots\]
+
+The only primitive terms are the constants that we introduce below, and function application, which
+we write in the form ``$f(x),$'' with ``$f(x,y,\dots)$'' as a shorthand for ``$f(x)(y)\dots$''
+All other terms that are usually regarded as primitive, such as type formers and lambda
+abstractions, are actually applications of primitive constants, as described in the following
+subsections.
+
+A consequence is that many definitions become recursive. In particular, typing judgments often
+refer to terms that are defined later. This should not be seen as a problem because the definition
+of the theory can be separated into four distinct phases:
+\begin{enumerate}
+  \item First, all primitive constants are introduced as untyped terms.
+  \item Then reduction rules are defined on these untyped terms.
+  \item Next, the primitive constants are enriched with typing judgments.
+  \item Finally, we can verify the type correctness of every individual reduction rule, taking
+  reduction within types into account.
+\end{enumerate}
+The caveat is that the reduction rules would be completely unintelligible without type information.
+Therefore we choose the lesser evil of frequently referring to terms that are defined later in the
+article, sometimes explicitly but often implicitly.
+
+\subsection{Primitive Type Formers}
+
+We assume that the theory contains the following type formers. These are quite minimalist in
+order to demonstrate our basic approach; more type formers such as W types can be added if an
+appropriate definition of equality exists for the types that they produce.
+\begin{itemize}
+  \item There are three primitive types $\0, \1, \2 : \U_n$ in any universe $\U_n.$
+  \item If $\U_m$ and $\U_n$ are universes, $A : \U_m,$ and $P : A \to \U_n,$ there is a primitive
+  type $\Pi(P) : \U_{\max(m,n)},$ which we often write as $\prod_{a : A} P(a).$ As usual, for
+  $B : \U_n$ we define $[A \to B] :\defeq \prod_{a : A} B.$
+  \item Similarly, we define $\Sigma(P) : \U_{\max(m,n)},$ often written as $\sum_{a : A} P(a),$
+  and $[A \times B] :\defeq \sum_{a : A} B.$
+  \item $\U_n : \U_{n+1}$ is considered a type former as well.
+\end{itemize}
+
+We can regard $\Pi$ and $\Sigma$ as (dependent) functions
+\[\Pi, \Sigma : \prod_{A : \U_m} [[A \to \U_n] \to \U_{\max(m,n)}],\]
+so that all type formers are just constants with specific types.
+
+\subsection{Other Primitive Constants}
+
+We define all introduction and elimination rules, including the three combinators which are
+essentially the introduction rules for $\Pi$ types, as primitive constants with appropriate types.
+
+\begin{itemize}
+  \item $\elim_{\0,A} : \0 \to A$ for any type $A.$
+
+  \item $\star : \1.$
+
+  \item $0,1 : \2.$
+
+  \item $\elim_{\2,A} : A \to A \to [\2 \to A]$ for any type $A.$
+
+  \item $\idFun_A : A \to A$ for any type $A.$
+
+  \item $\constFun_{AB} : B \to [A \to B]$ for all types $A$ and $B.$
+
+  \item $\displaystyle \revSubstFun_{PQ} : \left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]$\\[1ex]
+  for $A : \U_l,$ $P : A \to \U_m,$ and $Q : \prod_{a : A} [P(a) \to \U_n].$
+
+  $\idFun,$ $\constFun,$ and $\revSubstFun$ define how to interpret function definitions of the form
+  \begin{align*}
+    f : A &\to     B_a\\
+        a &\mapsto b_a
+  \end{align*}
+  throughout this article.
+  \begin{itemize}
+    \item If $b_a$ is $a,$ then $f :\defeq \idFun_A.$
+    \item If $b_a$ is a constant $b : B,$ i.e.\ $a$ does not appear in $b_a,$ then
+    $f :\defeq \constFun_{AB}(b).$
+    \item If $b_a$ is a function application $g_a(c_a)$ with $c_a : C_a$ and
+    $g_a : \prod_{c : C_a} B_{ac},$ then $f :\defeq \revSubstFun_{PQ}(g,c)$ with
+  \end{itemize}
+  \begin{align*}
+    P : A &\to     \U_m & Q : A \to C_a &\to     \U_n   & g : A &\to     \textstyle\prod_{c : C_a} B_{ac} & c : A &\to     C_a\\
+        a &\mapsto C_a, &     (a,c)     &\mapsto B_{ac},&     a &\mapsto g_a,                             &     a &\mapsto c_a.
+  \end{align*}
+
+  Note that in the definition of $Q,$ we already extended the function notation to nested functions,
+  which we write as functions with multiple arguments, each of which may depend on the previous.
+
+  \item $\intro_{\Sigma(P)} : \Pi_{a : A} [P(a) \to \Sigma(P)]$ for $A : \U_m$ and $P : A \to \U_n.$
+
+  \item $\fst_{\Sigma(P)} : \Sigma(P) \to A$ for $A : \U_m$ and $P : A \to \U_n.$
+
+  \item $\snd_{\Sigma(P)} : \prod_{p : \Sigma(P)} P(\fst_{\Sigma(P)}(p))$ for $A : \U_m$ and $P : A \to \U_n.$
+\end{itemize}
+
+\subsection{Reduction Rules}
+
+The reduction rules should be entirely unsurprising.
+\begin{itemize}
+  \item $\elim_{\2,A}(a,b,0) :\defeq a$
+  \item $\elim_{\2,A}(a,b,1) :\defeq b$
+  \item $\idFun_A(a) :\defeq a$
+  \item $\constFun_{AB}(b,a) :\defeq b$
+  \item $\revSubstFun_{PQ}(g,f,a) :\defeq g(a,f(a))$
+  \item $\fst_{\Sigma(P)}(\intro_{\Sigma(P)}(a,b)) :\defeq a$
+  \item $\snd_{\Sigma(P)}(\intro_{\Sigma(P)}(a,b)) :\defeq b$
+\end{itemize}
+
+\section{Identity Types}
+
+For each $T : \U_n$ and $x,y : T$ we define a new type $[x = y] : \U_n,$ technically by introducing
+a new type former but with reduction rules that provide a `definition' for it by case analysis on
+$T.$
+\begin{itemize}
+  \item For $a,b : \1,$ $[a = b] :\defeq \1.$
+  \item For $a,b : \2,$ $[a = b] :\defeq \elim_{\2, [a = b]}(\elim_{\2, [a = b]}(\1, \0, a), \elim_{\2, [a = b]}(\0, \1, a),b).$
+  \item For $A : U_m,$ $P : A \to \U_n,$ and $f,g : \Pi(P),$
+  $[f = g] :\defeq \prod_{a : A}\,[f(a) = g(a)].$
+  \item For $A : U_m,$ $P : A \to \U_n,$ and $p,q : \Sigma(P),$
+  $[p = q] :\defeq \sum_{e : \fst(p) = \fst(q)} [\snd(p) \pathOver{\ap_P(e)} \snd(q)],$
+  where $\ap$ and the notation ``$\pathOver{f}$'' are defined below.
+  \item For $A,B : \U_n$ we define $[A = B] :\defeq [A \equiv B],$ where ``$\equiv$'' denotes the
+  type of equivalences as constructed in Homotopy Type Theory (HoTT).
+
+  For $e : A = B,$ $a : A,$ and $b : B,$ we define $[a \pathOver{e} b] :\defeq [e(a) = b],$
+  analogously to HoTT.
+\end{itemize}
+
+$\refl,$ composition, and inverse are defined by induction in the obvious way.
+
+\subsection{Functoriality}
+
+For $P : A \to \U_n,$ $f : \Pi(P),$ and $a,b : A,$ we define a function
+\[\ap_f : \prod_{e : a = b}\:[f(a) \pathOver{\ap_P(e)} f(b)]\]
+by induction over all primitive functions $f$ (including type formers) and their applications,
+i.e.\ we introduce this function as a primitive constant but also define reduction rules for all
+possible cases.
+
+The type of $\ap$ refers to $\ap$ itself, but this is unproblematic because reduction rules are not
+affected by types. For example, if $P$ is constant, so we have $f : A \to B$ for some $B,$ then
+$\ap_P(e) \defeq \refl_B$ as defined below, and the typing judgment of $\ap_f$ reduces to
+\[\ap_f : a = b \to f(a) = f(b).\]
+
+Note that when $f$ maps to a type, $\ap_f$ maps to an equivalence between types; for now we will
+only specify the forward direction in such cases, and leave the remaining data as an exercise for
+the reader.
+
+\begin{itemize}
+  \item $\ap_{\Pi_A} : P = P' \to \Pi(P) = \Pi(P'),$ for $P,P' : A \to \U_n,$ is defined by
+  \begin{align*}
+    \ap_{\Pi_A} : \left[\prod_{a : A} [P(a) \equiv P'(a)]\right] \to \Pi(P) \to A &\to     P'(a)\\
+                  (e_P,f,a)                                                       &\mapsto e_P(a,f(a)).
+  \end{align*}
+
+  \item $\ap_\Pi : \prod_{e_A : A = A'} [\Pi_A \pathOver{\ap_Q(e_A)} \Pi_{A'}],$ where
+  \begin{align*}
+    Q : \U_m &\to     U_{\max(m,n)+1}\\
+        A    &\mapsto [[A \to \U_n] \to \U_{\max(m,n)}]
+  \end{align*}
+  so that
+  \begin{align*}
+    \ap_Q : [A \equiv A'] \to [[A \to \U_n] \to \U_{\max(m,n)}] \to [A' \to \U_n] &\to     \U_{\max(m,n)}\\
+            (e_A,R,P')                                                            &\mapsto R(P' \circ e_A),
+  \end{align*}
+  i.e.\ $\ap_\Pi : \prod_{e_A : A \equiv A'} \prod_{P' : A' \to \U_n} [\Pi(P' \circ e_A) \equiv \Pi(P')],$
+  is defined by
+  \begin{align*}
+    \ap_\Pi : [A \equiv A'] \to [A' \to \U_n] \to \Pi(P' \circ e_A) \to A' &\to     P'(a')\\
+              (e_A,P',f,a')                                                &\mapsto \ap_{P'}(\rightInv_{e_A}(a'),f(e_A^{-1}(a'))),
+  \end{align*}
+  where $\rightInv$ denotes the appropriate identity in the definition of type equivalence.
+
+  \item $\ap_{\Sigma_A} : P = P' \to \Sigma(P) = \Sigma(P'),$ for $P,P' : A \to \U_n,$ is
+  defined by
+  \begin{align*}
+    \ap_{\Sigma_A} : \left[\prod_{a : A} [P(a) \equiv P'(a)]\right] \to \Sigma(P) &\to     \Sigma(P')\\
+                     (e_P,p)                                                      &\mapsto (a,e_P(\fst(p),\snd(p))).
+  \end{align*}
+
+  \item $\ap_\Sigma : \prod_{e_A : A = A'} [\Sigma_A \pathOver{\ap_Q(e_A)} \Sigma_{A'}],$ where
+  \begin{align*}
+    Q : \U_m &\to     U_{\max(m,n)+1}\\
+        A    &\mapsto [[A \to \U_n] \to \U_{\max(m,n)}]
+  \end{align*}
+  as above, is defined by
+  \begin{align*}
+    \ap_\Sigma : [A \equiv A'] \to [A' \to \U_n] \to \Sigma(P' \circ e_A) &\to     \Sigma(P')\\
+                 (e_A,P',p)                                               &\mapsto (e_A(\fst(p)),\snd(p)).
+  \end{align*}
+
+  \item We also need to consider the type former for the identity type itself, i.e.
+  \begin{align*}
+    \Id_A : A \to A &\to     \U_n\\
+            (a,b)   &\mapsto [a = b].
+  \end{align*}
+  We define its reduction rules generically, but we will need to verify that these match the
+  corresponding rule when $A$ is an application of a primitive type former.
+
+  $\ap_{\Id_A(a)} : b = b' \to [a = b] = [a = b']$ is defined by
+  \begin{align*}
+    \ap_{\Id_A(a)} : b = b' \to a = b &\to     a = b'\\
+                     (e_b,f)          &\mapsto e_b \circ f.
+  \end{align*}
+
+  \item $\ap_{\Id_A} : a = a' \to [a = b] = [a' = b]$ is defined by
+  \begin{align*}
+    \ap_{\Id_A} : a = a' \to a = b &\to     a' = b\\
+                  (e_a,f)          &\mapsto f \circ e_a^{-1}.
+  \end{align*}
+
+  \item $\ap_\Id : \prod_{e_A : A = A'} [\Id_A \pathOver{\ap_P(e_A)} \Id_{A'}],$ where
+  \begin{align*}
+    P : \U_n &\to     U_{n+1}\\
+        A    &\mapsto [A \to A \to \U_n]
+  \end{align*}
+  so that
+  \begin{align*}
+    \ap_P : [A \equiv A'] \to [A \to A \to \U_n] \to A' \to A' &\to     \U_n\\
+            (e_A,R,a',b')                                      &\mapsto R(e_A^{-1}(a'),e_A^{-1}(b')),
+  \end{align*}
+  is defined by
+  \begin{align*}
+    \ap_\Id : [A \equiv A'] \to e_A^{-1}(a') = e_A^{-1}(b') &\to     a' = b'\\
+              (e_A,f)                                       &\mapsto (\rightInv_{e_A}(b'))^{-1} \circ \ap_{e_A}(f) \circ \rightInv_{e_A}(a').
+  \end{align*}
+
+  \item $\ap_{\idFun_A} : a = a' \to \idFun_A(a) = \idFun_A(a')$ is $\idFun_{[a = a']}.$
+
+  \item $\ap_\idFun : \prod_{e_A : A = A'} [\idFun_A \pathOver{\ap_P(e_A)} \idFun_A'],$
+  where
+  \begin{align*}
+    P : \U_n &\to     U_{n+1}\\
+        A    &\mapsto [A \to A]
+  \end{align*}
+  so that
+  \begin{align*}
+    \ap_P : [A \equiv A'] \to [A \to A] \to A' &\to     A'\\
+            (e_A,f,a')                         &\mapsto e_A(f(e_A^{-1}(a'))),
+  \end{align*}
+  is defined by
+  \begin{align*}
+    \ap_\idFun : [A \equiv A'] \to A' &\to     e_A(e_A^{-1}(a')) = a'\\
+                 (e_A,a')             &\mapsto \rightInv_{e_A}(a').\\
+                 %                    &\defeq  \ap_{\idFun_A}(\rightInv_{e_A}(a')),
+  \end{align*}
+
+  \item $\ap_{\constFun_{AB}(b)} : a = a' \to \constFun_{AB}(b,a) = \constFun_{AB}(b,a')$ is
+  defined by
+  \begin{align*}
+    \ap_{\constFun_{AB}(b)} : a = a' &\to     b = b\\
+                              e_a    &\mapsto \refl_b.
+  \end{align*}
+
+  \item $\ap_{\constFun_{AB}} : b = b' \to \constFun_{AB}(b) = \constFun_{AB}(b')$ is
+  defined by
+  \begin{align*}
+    \ap_{\constFun_{AB}} : b = b' \to A &\to     b = b'\\
+                           (e_b,a)      &\mapsto e_b.
+  \end{align*}
+
+  \item $\ap_{\constFun_A} : \prod_{e_B : B = B'} [\constFun_{AB} \pathOver{\ap_P(e_B)} \constFun_{AB'}],$
+  where
+  \begin{align*}
+    P : \U_n &\to     \U_{\max(m,n)+1}\\
+        B    &\mapsto [B \to [A \to B]]
+  \end{align*}
+  so that
+  \begin{align*}
+    \ap_P : [B \equiv B'] \to [B \to [A \to B]] \to B' \to A &\to     B'\\
+            (e_B,f,b',a)                                     &\mapsto e_B(f(e_B^{-1}(b'),a)),
+  \end{align*}
+  is defined by
+  \begin{align*}
+    \ap_{\constFun_A} : [B \equiv B'] \to B' \to A &\to     e_B(e_B^{-1}(b')) = b'\\
+                        (e_B,b',a)                 &\mapsto \rightInv_{e_B}(b')\\
+                        %                          &\defeq  \ap_{\constFun_{AB'}}(\rightInv_{e_B}(b'),a).
+  \end{align*}
+
+  \item $\ap_{\constFun} : \prod_{e_A : A = A'} [\constFun_A \pathOver{\ap_P(e_A)} \constFun_{A'}],$
+  where
+  \begin{align*}
+    P : \U_n &\to     \U_{\max(m,n)+1}\\
+        A    &\mapsto \prod_{B : \U_n} [B \to [A \to B]]
+  \end{align*}
+  so that
+  \begin{align*}
+    \ap_P : [A \equiv A'] \to \left[\prod_{B : \U_n} [B \to [A \to B]]\right] \to \U_n \to B \to A' &\to     B\\
+            (e_A,f,B,b,a')                                                                          &\mapsto f(b,e_A^{-1}(a')),
+  \end{align*}
+  is defined by
+  \begin{align*}
+    \ap_{\constFun} : [A \equiv A'] \to \U_n \to B \to A' &\to     b = b\\
+                      (e_A,B,b,a')                        &\mapsto \refl_b\\
+                      %                                   &\defeq  \ap_{\constFun_{A'B}(b)}(\rightInv_{e_A}(a')).
+  \end{align*}
+
+  \item $\ap_{\revSubstFun_{PQ}(g,f)} : a = a' \to \revSubstFun_{PQ}(g,f,a) = \revSubstFun_{PQ}(g,f,a')$
+  is defined by
+  \begin{align*}
+    \ap_{\revSubstFun_{PQ}(g,f)} : a = a' &\to     g(a,f(a)) = g(a',f(a'))\\
+                                   e_a    &\mapsto \ap_{g(a')}(\ap_f(e_a)) \circ \ap_g(e_a,f(a))\\
+                                          &=       \ap_g(e_a,f(a')) \circ \ap_{g(a)}(\ap_f(e_a)).
+  \end{align*}
+
+  \item $\ap_{\revSubstFun_{PQ}(g)} : f = f' \to \revSubstFun_{PQ}(g,f) = \revSubstFun_{PQ}(g,f')$
+  is defined by
+  \begin{align*}
+    \ap_{\revSubstFun_{PQ}(g)} : f = f' \to A &\to     g(a,f(a)) = g(a,f'(a))\\
+                                 (e_f,a)      &\mapsto \ap_{g(a)}(e_f(a)).
+  \end{align*}
+
+  \item $\ap_{\revSubstFun_{PQ}} : g = g' \to \revSubstFun_{PQ}(g) = \revSubstFun_{PQ}(g')$
+  is defined by
+  \begin{align*}
+    \ap_{\revSubstFun_{PQ}} : g = g' \to \Pi(P) \to A &\to     g(a,f(a)) = g'(a,f(a))\\
+                              (e_g,f,a)               &\mapsto e_g(a,f(a)).
+  \end{align*}
+
+  \item $\ap_{\revSubstFun_P} : \prod_{e_Q : Q = Q'} [\revSubstFun_{PQ} \pathOver{\ap_R(e_Q)} \revSubstFun_{PQ'}],$
+  where
+  \begin{align*}
+    R : \U_{\max(l,m,n+1)} &\to     \U_{\max(l,m,n)+1}\\
+        Q                  &\mapsto \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right]
+  \end{align*}
+  so that
+  \begin{align*}
+    \ap_R : \left[\prod_{a : A} \prod_{b : P(a)} [Q(a,b) \equiv Q'(a,b)]\right] &\to\\
+            \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right] &\to\\
+            \left[\prod_{a : A} \prod_{b : P(a)} Q'(a,b)\right] \to \Pi(P) \to A &\to     Q'(a,f(a))\\
+            (e_Q,h,g',f,a)                                                       &\mapsto e_Q(a,f(a),h(e_Q^{-1}(g'),f,a))
+  \end{align*}
+  (with $e_Q^{-1}(g')$ defined in the obvious way), is defined by
+  \begin{align*}
+    \ap_{\revSubstFun_P} : \left[\prod_{a : A} \prod_{b : P(a)} [Q(a,b) \equiv Q'(a,b)]\right] &\to\\
+                           \left[\prod_{a : A} \prod_{b : P(a)} Q'(a,b)\right] \to \Pi(P) \to A &\to     e_Q(a,f(a),(e_Q(a,f(a)))^{-1}(g'(a,f(a)))) = g'(a,f(a))\\
+                           (e_Q,g',f,a)                                                         &\mapsto \rightInv_{e_Q(a,f(a))}(g'(a,f(a)))\\
+                                                                                                &\defeq  \ap_{\revSubstFun_{PQ'}}(\rightInv_{e_Q}(g'),f,a)
+  \end{align*}
+  (with $\rightInv_{e_Q}(g')$ defined in the obvious way).
+
+  \item $\ap_{\revSubstFun_A} : \prod_{e_P : P = P'} [\revSubstFun_P \pathOver{\ap_R(e_P)} \revSubstFun_{P'}],$
+  where
+  \begin{align*}
+    R : \U_{\max(l,m+1)} &\to     \U_{\max(l,m,n)+1}\\
+        P                &\mapsto \prod_{Q : \prod_{a : A} [P(a) \to \U_n]} \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right],
+  \end{align*}
+  is defined by
+  \begin{align*}
+    \ap_{\revSubstFun_A} : \left[\prod_{a : A} [P(a) \equiv P'(a)]\right] \to \left[\prod_{a : A} [P'(a) \to \U_n]\right] &\to\\
+                           \left[\prod_{a : A} \prod_{b' : P'(a)} Q'(a,b')\right] \to \Pi(P') \to A &\to     g'(a,e_P(a,((e_P(a))^{-1})(f'(a)))) = g'(a,f'(a))\\
+                           (e_P,Q',g',f',a)                                                         &\mapsto \ap_{g'(a)}(\rightInv_{e_P(a)}(f'(a)))\\
+                                                                                                    &\defeq  \ap_{\revSubstFun_{P'Q'}(g')}(\rightInv_{e_P}(f'),a)
+  \end{align*}
+  (with $\rightInv_{e_P}(f')$ defined in the obvious way).
+
+  \item $\ap_{\revSubstFun} : \prod_{e_A : A = A'} [\revSubstFun_A \pathOver{\ap_R(e_A)} \revSubstFun_{A'}],$
+  where
+  \begin{align*}
+    R : \U_l &\to     \U_{\max(l,m,n)+1}\\
+        A    &\mapsto \prod_{P : A \to \U_m}\,\prod_{Q : \prod_{a : A} [P(a) \to \U_n]} \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right],
+  \end{align*}
+  is defined by
+  \begin{align*}
+    \ap_\revSubstFun : [A \equiv A'] &\to\\
+                       [A' \to \U_m] \to \left[\prod_{a' : A'} [P'(a') \to \U_n]\right] &\to\\
+                       \left[\prod_{a' : A'} \prod_{b' : P'(a')} Q'(a',b')\right] \to \Pi(P') \to A' &\to     g'(e_A(e_A^{-1}(a')),f'(e_A(e_A^{-1}(a')))) = g'(a',f'(a'))\\
+                       (e_A,P',Q',g',f',a')                                                          &\mapsto \ap_{\revSubstFun_{P'Q'}(g',f')}(\rightInv_{e_A}(a')).
+  \end{align*}
+
+  \item $\ap$ for the remaining introduction and elimination functions is straightforward.
+\end{itemize}
+
+$\ap$ respects reflexivity and composition, thus turning functions into functors. We also need to
+ensure that reduction of $\ap$ is confluent with other reductions. Informally, we can observe from
+the type constraints in each case that there is almost always only one possible definition of
+$\ap.$ Two exceptions are currently known:
+\begin{itemize}
+  \item There are two possible definitions of $\ap_{\revSubstFun_{PQ}(g,f)},$ which are equal
+  because naturality is always guaranteed. This equality might not be definitional.
+  \item For an equivalence $e$ between types, the equality between $(e^{-1})^{-1}$ and $e$ might
+  not be definitional.
+\end{itemize}
+
+\subsection{Elimination}
+
+For $A : \U_m,$ $a : A,$ $P : \prod_{b : A} [a = b \to \U_n],$ $b,b' : A,$ and $e_b : b = b',$ we
+have
+\[\ap_P(e_b) : P(b) \pathOver{\ap_S(e_b)} P(b'),\]
+where
+\begin{align*}
+  S : A &\to     \U_{\max(m,n+1)}\\
+      b &\mapsto [a = b \to \U_n].
+\end{align*}
+Due to the behavior of $\ap$ with respect to equality, we have
+\begin{align*}
+  \ap_S : b = b' \to [a = b \to \U_n] \to a = b' &\to     \U_n\\
+          (e_b,P,f)                              &\mapsto P(e_b^{-1} \circ f),
+\end{align*}
+and therefore
+\[\ap_P(e_b) : \prod_{f : b = b'} [P(b,e_b^{-1} \circ f) \equiv P(b',f)]\]
+and in particular an instance of
+\[P(b,\refl_b) \equiv P(b',e_b),\]
+corresponding to based path induction.
+
+\section{Conclusion}
+
+We have constructed a type theory where identity types reduce according to their extensionality
+principle in HoTT, including univalence, while at the same time behaving as expected regarding
+substitution principles. A consequence is that in a potential theorem prover implementing this type
+theory, equality is very well-behaved.
+\begin{itemize}
+  \item For each structure, which can be regarded as a nested $\Sigma$ type, equality of its
+  instances is \emph{by definition} the same as isomorphism.
+  \item Transporting proofs and data along an equivalence of types (in particular, along an
+  isomorphism of algebraic structures), is the same as rewriting along an equality. In contrast to
+  HoTT, no explicit conversion between equality and equivalence is necessary, and the resulting
+  transportation is defined directly in terms of the equivalence instead of containing an
+  irreducible axiom.
+  \item Function extensionality holds by definition.
+\end{itemize}
+
+\section{Future Work}
+
+We are currently verifying by computer that all reduction rules are well-typed, with respect to all
+possible reductions performed on the types involved in each particular rule. To ensure consistency,
+however, stronger guarantees are needed. While termination looks relatively obvious, the potential
+lack of confluence (due to some necessarily arbitrary choices) is worrying.
+
+To be useful, a type former for inductive types must be added. This should hopefully be fairly
+straightforward because the correct definition of equality on inductive types is always obvious.
+A less obvious case is the addition of higher inductive types (HITs), where the situation is
+exactly reversed: the entire concept of HITs is footed on the complexity of their identity types.
+
+One goal is obviously the implementation of this theory in a theorem prover. To achieve this, it
+may make sense to translate the reduction rules on combinators back to lambda terms, so that
+combinators are no longer needed.
+
+A library of mathematics in such a prover would have an interesting property: Proofs and
+constructions that look simple but contain complex rewrites would reduce to terms that are
+``exportable,'' both to other provers and also to theories constructed in the prover itself. For
+example, such terms will often still be valid when types are replaced with categories, higher
+categories, or topological spaces. From another angle, this suggests that the prover could contain
+a reflection mechanism that allows such structures to be treated as types, by providing appropriate
+mappings.
+
+Finally, there is certainly room for lots of minor improvements. For example, the definition of
+$[a \pathOver{e} b]$ as $[e(a) = b]$ often leads to equalities that unnecessarily include the term
+$e^{-1}$ on the left-hand side instead of $e$ on the right-hand side. In a practical implementation,
+it would be useful to specialize the definition for the case that $a$ and $b$ are functions and $e$
+originates from an equivalence on their domains, so that equality of structures reduces to the usual
+definition of isomorphism instead of a type that is only equivalent but not definitionally so.
+
+Also, the definition of equality for the type $\2$ is a bit ad-hoc. If $\2$ was regarded as a
+\emph{universe} containing the \emph{types} $\0$ and $\1$ (i.e.\ classical propositions, due to the
+elimination function) instead of values $0$ and $1,$ equivalence of types would yield the correct
+definition. Although this just seems like a minor curiosity, there may be a useful extension of this
+principle that generalizes the concept of universes, perhaps in a way that subsumes the envisioned
+reflection mechanism.
+
+\bibliographystyle{plain}
+\bibliography{DefinitionalUnivalence}
+
+\end{document}

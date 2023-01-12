@@ -1,0 +1,10 @@
+scratch
+target
+*.log
+*.out
+*.aux
+*.bbl
+*.blg
+*.fdb*
+*.fls
+*.synctex.gz
