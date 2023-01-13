@@ -33,9 +33,12 @@ impl MetaLogic {
             })
             .collect();
 
+        let lambda_handler = create_lambda_handler(&Context::new(&constants));
+
         let mut idx = 0;
         for (_, type_str) in constants_init {
-            constants[idx].type_expr = Expr::parse(type_str, &Context::new(&constants))?;
+            let ctx = Context::new(&constants);
+            constants[idx].type_expr = Expr::parse(type_str, &ctx, lambda_handler.as_ref())?;
             idx += 1;
         }
 
@@ -49,20 +52,18 @@ impl MetaLogic {
                     let ctx = root_ctx.with_locals(&params);
                     params.push(Param {
                         name: Some(Rc::new((*name).into())),
-                        type_expr: Expr::parse(type_str, &ctx)?,
+                        type_expr: Expr::parse(type_str, &ctx, lambda_handler.as_ref())?,
                     })
                 }
                 let ctx = root_ctx.with_locals(&params);
-                let source = Expr::parse(source_init, &ctx)?;
-                let target = Expr::parse(target_init, &ctx)?;
+                let source = Expr::parse(source_init, &ctx, lambda_handler.as_ref())?;
+                let target = Expr::parse(target_init, &ctx, lambda_handler.as_ref())?;
                 Ok(ReductionRule {
                     params,
                     body: ReductionBody { source, target },
                 })
             })
             .collect();
-
-        let lambda_handler = create_lambda_handler(&root_ctx);
 
         Ok(MetaLogic {
             constants,
@@ -81,6 +82,14 @@ impl MetaLogic {
         Some(ctx.get_var(var_idx))
     }
 
+    pub fn parse_expr(&self, s: &str, ctx: &Context<Param>) -> Result<Expr, String> {
+        Expr::parse(s, ctx, self.lambda_handler.as_ref())
+    }
+
+    pub fn print_expr(&self, expr: &Expr, ctx: &Context<Param>) -> String {
+        Expr::print(expr, ctx, self.lambda_handler.as_ref())
+    }
+
     pub fn get_expr_type(&self, expr: &Expr, ctx: &Context<Param>) -> Result<Expr, String> {
         match expr {
             Expr::Var(Var(idx)) => Ok(ctx.shifted_to_context(&ctx.get_var(*idx).type_expr, *idx)),
@@ -94,18 +103,10 @@ impl MetaLogic {
                 let arg = &app.body;
                 let fun_type = self.get_expr_type(fun, ctx)?;
                 let arg_type = self.get_expr_type(arg, ctx)?;
-                let prop_param = Param {
-                    name: None,
-                    type_expr: self.lambda_handler.get_prop_type(arg_type.clone(), ctx)?,
-                };
-                let prop_var_ctx = ctx.with_local(&prop_param);
-                let prop_var = Expr::var(-1);
-                let arg_type_in_prop_var_ctx =
-                    arg_type.with_shifted_vars(ctx.locals_start(), 0, -1);
-                let cmp_fun_type = self.lambda_handler.get_pi_type(
-                    arg_type_in_prop_var_ctx,
-                    prop_var,
-                    &prop_var_ctx,
+                let (prop_param, cmp_fun_type) = self.lambda_handler.get_semi_generic_dep_type(
+                    arg_type,
+                    DependentTypeCtorKind::Pi,
+                    ctx,
                 )?;
                 if let Some(mut prop_vec) = fun_type.match_expr(
                     &Some(self),
@@ -116,10 +117,11 @@ impl MetaLogic {
                     let prop = prop_vec.pop().unwrap();
                     Ok(Expr::apply(prop, arg.clone(), ctx))
                 } else {
-                    let fun_str = fun.print(ctx);
-                    let fun_type_str = fun_type.print(ctx);
-                    let arg_str = arg.print(ctx);
-                    let arg_type_str = arg_type.print(ctx);
+                    let fun_str = self.print_expr(fun, ctx);
+                    let fun_type_str = self.print_expr(&fun_type, ctx);
+                    let arg_str = self.print_expr(arg, ctx);
+                    let arg_type = self.get_expr_type(arg, ctx)?;
+                    let arg_type_str = self.print_expr(&arg_type, ctx);
                     Err(format!("application type mismatch: {fun_str} : {fun_type_str} cannot be applied to {arg_str} : {arg_type_str}"))
                 }
             }
@@ -127,9 +129,10 @@ impl MetaLogic {
                 let body_ctx = ctx.with_local(&lambda.param);
                 let body_type = self.get_expr_type(&lambda.body, &body_ctx)?;
                 let body_type_lambda = Expr::lambda(lambda.param.clone(), body_type);
-                self.lambda_handler.get_pi_type(
+                self.lambda_handler.get_dep_type(
                     lambda.param.type_expr.clone(),
                     body_type_lambda,
+                    DependentTypeCtorKind::Pi,
                     ctx,
                 )
             }
@@ -160,10 +163,10 @@ impl MetaLogic {
         if source_type.compare(ctx.locals_start(), &target_type, &Some(self)) {
             Ok(())
         } else {
-            let source_str = rule.body.source.print(&ctx);
-            let source_type_str = source_type.print(&ctx);
-            let target_str = rule.body.target.print(&ctx);
-            let target_type_str = target_type.print(&ctx);
+            let source_str = self.print_expr(&rule.body.source, &ctx);
+            let source_type_str = self.print_expr(&source_type, &ctx);
+            let target_str = self.print_expr(&rule.body.target, &ctx);
+            let target_type_str = self.print_expr(&target_type, &ctx);
             Err(format!("type conflict in reduction rule between {source_str} : {source_type_str} and {target_str} : {target_type_str}"))
         }
     }
@@ -379,7 +382,7 @@ impl Expr {
     }
 
     pub fn multi_lambda(params: SmallVec<[Param; INLINE_PARAMS]>, mut body: Expr) -> Self {
-        for param in params {
+        for param in params.into_iter().rev() {
             body = Self::lambda(param, body);
         }
         body
@@ -394,22 +397,30 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    pub fn parse(s: &str, ctx: &Context<Param>) -> Result<Self, String> {
+    pub fn parse(
+        s: &str,
+        ctx: &Context<Param>,
+        lambda_handler: &dyn LambdaHandler,
+    ) -> Result<Self, String> {
         let mut parser_input = ParserInput(s);
         let mut parsing_context = ParsingContext {
             input: &mut parser_input,
             context: ctx,
+            lambda_handler,
         };
         parsing_context.parse()
     }
 
-    pub fn print(&self, ctx: &Context<Param>) -> String {
+    pub fn print(&self, ctx: &Context<Param>, lambda_handler: &dyn LambdaHandler) -> String {
         let mut result = String::new();
         let mut printing_context = PrintingContext {
             output: &mut result,
             context: ctx,
+            lambda_handler,
         };
-        printing_context.print_expr(&self, false, false).unwrap();
+        printing_context
+            .print_expr(&self, false, false, false, false)
+            .unwrap();
         result
     }
 
@@ -661,36 +672,140 @@ pub struct ReductionBody {
     pub target: Expr,
 }
 
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum DependentTypeCtorKind {
+    Pi,
+    Sigma,
+}
+
 pub trait LambdaHandler {
-    fn get_type_type(&self) -> Result<Expr, String>;
+    fn get_universe_type(&self) -> Result<Expr, String>;
 
-    fn get_pi_type(&self, domain: Expr, prop: Expr, ctx: &Context<Param>) -> Result<Expr, String>;
+    fn get_dep_type(
+        &self,
+        domain: Expr,
+        prop: Expr,
+        kind: DependentTypeCtorKind,
+        ctx: &Context<Param>,
+    ) -> Result<Expr, String>;
 
-    fn get_fun_type(
+    fn get_indep_type(
         &self,
         domain: Expr,
         codomain: Expr,
+        kind: DependentTypeCtorKind,
         ctx: &Context<Param>,
     ) -> Result<Expr, String> {
         let prop = Expr::const_lambda(domain.clone(), codomain, ctx);
-        self.get_pi_type(domain, prop, ctx)
+        self.get_dep_type(domain, prop, kind, ctx)
     }
 
     fn get_prop_type(&self, domain: Expr, ctx: &Context<Param>) -> Result<Expr, String> {
-        self.get_fun_type(domain, self.get_type_type()?, ctx)
+        self.get_indep_type(
+            domain,
+            self.get_universe_type()?,
+            DependentTypeCtorKind::Pi,
+            ctx,
+        )
+    }
+
+    fn get_semi_generic_dep_type(
+        &self,
+        domain: Expr,
+        kind: DependentTypeCtorKind,
+        ctx: &Context<Param>,
+    ) -> Result<(Param, Expr), String> {
+        let domain_in_prop_var_ctx = domain.with_shifted_vars(ctx.locals_start(), 0, -1);
+        let prop_param = Param {
+            name: None,
+            type_expr: self.get_prop_type(domain, ctx)?,
+        };
+        let prop_var_ctx = ctx.with_local(&prop_param);
+        let prop_var = Expr::var(-1);
+        let dep_type = self.get_dep_type(domain_in_prop_var_ctx, prop_var, kind, &prop_var_ctx)?;
+        Ok((prop_param, dep_type))
+    }
+
+    fn get_generic_dep_type(
+        &self,
+        kind: DependentTypeCtorKind,
+        ctx: &Context<Param>,
+    ) -> Result<(Param, Param, Expr), String> {
+        let domain_param = Param {
+            name: None,
+            type_expr: self.get_universe_type()?,
+        };
+        let domain_var_ctx = ctx.with_local(&domain_param);
+        let domain_var = Expr::var(-1);
+        let (prop_param, dep_type) =
+            self.get_semi_generic_dep_type(domain_var, kind, &domain_var_ctx)?;
+        Ok((domain_param, prop_param, dep_type))
+    }
+
+    fn get_generic_indep_type(
+        &self,
+        kind: DependentTypeCtorKind,
+        ctx: &Context<Param>,
+    ) -> Result<(Param, Param, Expr), String> {
+        let domain_param = Param {
+            name: None,
+            type_expr: self.get_universe_type()?,
+        };
+        let codomain_param = Param {
+            name: None,
+            type_expr: self.get_universe_type()?,
+        };
+        let domain_var_ctx = ctx.with_local(&domain_param);
+        let codomain_var_ctx = domain_var_ctx.with_local(&codomain_param);
+        let domain_var = Expr::var(-2);
+        let codomain_var = Expr::var(-1);
+        let indep_type = self.get_indep_type(domain_var, codomain_var, kind, &codomain_var_ctx)?;
+        Ok((domain_param, codomain_param, indep_type))
     }
 }
 
 struct ParsingContext<'a, 'b, 'c, 'd: 'c> {
     input: &'a mut ParserInput<'b>,
     context: &'a Context<'c, 'd, 'a, Param>,
+    lambda_handler: &'a dyn LambdaHandler,
 }
 
 impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
     fn parse(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_prod()?;
+        if self.input.try_read_char('→') {
+            let codomain = self.parse()?;
+            expr = self.lambda_handler.get_indep_type(
+                expr,
+                codomain,
+                DependentTypeCtorKind::Pi,
+                self.context,
+            )?;
+        }
+        Ok(expr)
+    }
+
+    fn parse_prod(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_app()?;
+        if self.input.try_read_char('×') {
+            let right = self.parse_app()?;
+            expr = self.lambda_handler.get_indep_type(
+                expr,
+                right,
+                DependentTypeCtorKind::Sigma,
+                self.context,
+            )?;
+        }
+        Ok(expr)
+    }
+
+    fn parse_app(&mut self) -> Result<Expr, String> {
+        self.input.skip_whitespace();
         if let Some(mut expr) = self.try_parse_one()? {
+            self.input.skip_whitespace();
             while let Some(arg) = self.try_parse_one()? {
                 expr = Expr::app(expr, arg);
+                self.input.skip_whitespace();
             }
             Ok(expr)
         } else {
@@ -699,31 +814,19 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
     }
 
     fn try_parse_one(&mut self) -> Result<Option<Expr>, String> {
-        self.input.skip_whitespace();
         if self.input.try_read_char('(') {
             let expr = self.parse()?;
             self.input.read_char(')')?;
             Ok(Some(expr))
         } else if self.input.try_read_char('λ') {
-            self.input.skip_whitespace();
-            if let Some(param_name_str) = self.input.try_read_name() {
-                let param_name = String::from(param_name_str);
-                self.input.read_char(':')?;
-                let param_type = self.parse()?;
-                self.input.read_char('.')?;
-                let param = Param {
-                    name: Some(Rc::new(param_name)),
-                    type_expr: param_type,
-                };
-                let mut body_ctx = ParsingContext {
-                    input: self.input,
-                    context: &self.context.with_local(&param),
-                };
-                let body = body_ctx.parse()?;
-                Ok(Some(Expr::lambda(param, body)))
-            } else {
-                self.input.expected("identifier")
-            }
+            let (params, body) = self.parse_lambda()?;
+            Ok(Some(Expr::multi_lambda(params, body)))
+        } else if self.input.try_read_char('Π') {
+            let expr = self.parse_dep_type(DependentTypeCtorKind::Pi)?;
+            Ok(Some(expr))
+        } else if self.input.try_read_char('Σ') {
+            let expr = self.parse_dep_type(DependentTypeCtorKind::Sigma)?;
+            Ok(Some(expr))
         } else if let Some(name) = self.input.try_read_name() {
             if let Some(var_idx) = self.context.get_var_index(name) {
                 Ok(Some(Expr::var(var_idx)))
@@ -735,11 +838,71 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
             Ok(None)
         }
     }
+
+    fn parse_lambda(&mut self) -> Result<(SmallVec<[Param; INLINE_PARAMS]>, Expr), String> {
+        self.input.skip_whitespace();
+        if let Some(param_name_str) = self.input.try_read_name() {
+            let mut param_names: SmallVec<[String; INLINE_PARAMS]> =
+                smallvec![param_name_str.into()];
+            self.input.skip_whitespace();
+            while let Some(param_name_str) = self.input.try_read_name() {
+                param_names.push(param_name_str.into());
+                self.input.skip_whitespace();
+            }
+            self.input.read_char(':')?;
+            let param_type = self.parse()?;
+            self.input.read_char('.')?;
+            let mut params: SmallVec<[Param; INLINE_PARAMS]> =
+                SmallVec::with_capacity(param_names.len());
+            let locals_start = self.context.locals_start();
+            let mut shift: VarIndex = 0;
+            for param_name in param_names {
+                params.push(Param {
+                    name: Some(Rc::new(param_name)),
+                    type_expr: param_type.with_shifted_vars(locals_start, 0, shift),
+                });
+                shift -= 1;
+            }
+            let mut body_ctx = ParsingContext {
+                input: self.input,
+                context: &self.context.with_locals(&params),
+                lambda_handler: self.lambda_handler,
+            };
+            let body = body_ctx.parse()?;
+            Ok((params, body))
+        } else {
+            self.input.expected("identifier")
+        }
+    }
+
+    fn parse_dep_type(&mut self, kind: DependentTypeCtorKind) -> Result<Expr, String> {
+        let (mut params, body) = self.parse_lambda()?;
+        self.create_multi_dep_type(&mut params, body, kind, self.context)
+    }
+
+    fn create_multi_dep_type(
+        &self,
+        params: &mut [Param],
+        body: Expr,
+        kind: DependentTypeCtorKind,
+        ctx: &Context<Param>,
+    ) -> Result<Expr, String> {
+        if let Some((param, rest_params)) = params.split_first_mut() {
+            let rest_ctx = ctx.with_local(param);
+            let rest = self.create_multi_dep_type(rest_params, body, kind, &rest_ctx)?;
+            let domain = param.type_expr.clone();
+            let prop = Expr::lambda(std::mem::take(param), rest);
+            self.lambda_handler.get_dep_type(domain, prop, kind, ctx)
+        } else {
+            Ok(body)
+        }
+    }
 }
 
 struct PrintingContext<'a, 'b, 'c: 'b, W: fmt::Write> {
     output: &'a mut W,
     context: &'a Context<'b, 'c, 'a, Param>,
+    lambda_handler: &'a dyn LambdaHandler,
 }
 
 impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
@@ -748,16 +911,40 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         expr: &Expr,
         parens_for_app: bool,
         parens_for_lambda: bool,
+        parens_for_fun: bool,
+        parens_for_prod: bool,
     ) -> fmt::Result {
+        if self.try_print_special(
+            expr,
+            DependentTypeCtorKind::Pi,
+            'Π',
+            '→',
+            parens_for_lambda,
+            parens_for_fun,
+        )? {
+            return Ok(());
+        }
+
+        if self.try_print_special(
+            expr,
+            DependentTypeCtorKind::Sigma,
+            'Σ',
+            '×',
+            parens_for_lambda,
+            parens_for_prod,
+        )? {
+            return Ok(());
+        }
+
         match expr {
             Expr::Var(Var(idx)) => self.context.get_var(*idx).print_name(self.output)?,
             Expr::App(app) => {
                 if parens_for_app {
                     self.output.write_char('(')?;
                 }
-                self.print_expr(&app.param, false, true)?;
+                self.print_expr(&app.param, false, true, true, true)?;
                 self.output.write_char(' ')?;
-                self.print_expr(&app.body, true, true)?;
+                self.print_expr(&app.body, true, true, true, true)?;
                 if parens_for_app {
                     self.output.write_char(')')?;
                 }
@@ -767,13 +954,7 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
                     self.output.write_char('(')?;
                 }
                 self.output.write_str("λ ")?;
-                self.print_param(&lambda.param)?;
-                self.output.write_str(". ")?;
-                let mut body_ctx = PrintingContext {
-                    output: self.output,
-                    context: &self.context.with_local(&lambda.param),
-                };
-                body_ctx.print_expr(&lambda.body, false, false)?;
+                self.print_lambda(lambda)?;
                 if parens_for_lambda {
                     self.output.write_char(')')?;
                 }
@@ -782,10 +963,91 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         Ok(())
     }
 
+    fn print_lambda(&mut self, lambda: &LambdaExpr) -> fmt::Result {
+        self.print_param(&lambda.param)?;
+        self.output.write_str(". ")?;
+        let mut body_ctx = PrintingContext {
+            output: self.output,
+            context: &self.context.with_local(&lambda.param),
+            lambda_handler: self.lambda_handler,
+        };
+        body_ctx.print_expr(&lambda.body, false, false, true, true)?;
+        Ok(())
+    }
+
     fn print_param(&mut self, param: &Param) -> fmt::Result {
         param.print_name(self.output)?;
         self.output.write_str(" : ")?;
-        self.print_expr(&param.type_expr, false, false)?;
+        self.print_expr(&param.type_expr, false, true, false, false)?;
         Ok(())
+    }
+
+    fn try_print_special(
+        &mut self,
+        expr: &Expr,
+        kind: DependentTypeCtorKind,
+        prefix: char,
+        infix: char,
+        parens_for_prefix: bool,
+        parens_for_infix: bool,
+    ) -> Result<bool, fmt::Error> {
+        if let Ok((domain_param, codomain_param, generic_indep_type)) = self
+            .lambda_handler
+            .get_generic_indep_type(kind, self.context)
+        {
+            if let Some(arg_vec) = expr.match_expr(
+                &None,
+                &[domain_param, codomain_param],
+                &generic_indep_type,
+                self.context.locals_start(),
+            ) {
+                let domain = &arg_vec[0];
+                let codomain = &arg_vec[1];
+                if parens_for_infix {
+                    self.output.write_char('(')?;
+                }
+                self.print_expr(&domain, false, true, true, true)?;
+                self.output.write_char(' ')?;
+                self.output.write_char(infix)?;
+                self.output.write_char(' ')?;
+                self.print_expr(
+                    &codomain,
+                    false,
+                    true,
+                    kind != DependentTypeCtorKind::Pi,
+                    true,
+                )?;
+                if parens_for_infix {
+                    self.output.write_char(')')?;
+                }
+                return Ok(true);
+            }
+        }
+
+        if let Ok((domain_param, prop_param, generic_dep_type)) =
+            self.lambda_handler.get_generic_dep_type(kind, self.context)
+        {
+            if let Some(arg_vec) = expr.match_expr(
+                &None,
+                &[domain_param, prop_param],
+                &generic_dep_type,
+                self.context.locals_start(),
+            ) {
+                if let Expr::Lambda(lambda) = &arg_vec[1] {
+                    if parens_for_prefix {
+                        self.output.write_char('(')?;
+                    }
+                    self.output.write_char(prefix)?;
+                    self.output.write_char(' ')?;
+                    self.print_lambda(lambda)?;
+                    if parens_for_prefix {
+                        self.output.write_char(')')?;
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
 }
