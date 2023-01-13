@@ -149,8 +149,11 @@ mod tests {
         assert!(mltt.get_expr_type(&app_mismatch, &root_ctx).is_err());
     }
 
-    // TODO: test that all declared types are actually types
-    // TODO: test that all declared types reduce uniquely (are confluent)
+    #[test]
+    fn test_type_of_types() {
+        let mltt = get_mltt();
+        mltt.check_type_of_types().unwrap();
+    }
 
     #[test]
     fn test_reduction_rule_types() {
@@ -158,5 +161,6 @@ mod tests {
         mltt.check_reduction_rule_types().unwrap();
     }
 
+    // TODO: test that all declared types reduce uniquely (are confluent)
     // TODO test that specific known terms with multiple reductions are confluent
 }

@@ -141,9 +141,10 @@ impl MetaLogic {
 
     pub fn check_reduction_rule_types(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
+        let root_ctx = self.get_root_context();
 
         for rule in &self.reduction_rules {
-            if let Err(error) = self.check_reduction_rule_type(rule) {
+            if let Err(error) = self.check_reduction_rule_type(rule, &root_ctx) {
                 errors.push(error);
             }
         }
@@ -155,20 +156,97 @@ impl MetaLogic {
         }
     }
 
-    pub fn check_reduction_rule_type(&self, rule: &ReductionRule) -> Result<(), String> {
-        let root_ctx = self.get_root_context();
-        let ctx = root_ctx.with_locals(&rule.params);
-        let source_type = self.get_expr_type(&rule.body.source, &ctx)?;
-        let target_type = self.get_expr_type(&rule.body.target, &ctx)?;
-        if source_type.compare(ctx.locals_start(), &target_type, &Some(self)) {
+    fn check_reduction_rule_type(
+        &self,
+        rule: &ReductionRule,
+        ctx: &Context<Param>,
+    ) -> Result<(), String> {
+        let rule_ctx = ctx.with_locals(&rule.params);
+        let source_type = self.get_expr_type(&rule.body.source, &rule_ctx)?;
+        let target_type = self.get_expr_type(&rule.body.target, &rule_ctx)?;
+        if source_type.compare(rule_ctx.locals_start(), &target_type, &Some(self)) {
             Ok(())
         } else {
-            let source_str = self.print_expr(&rule.body.source, &ctx);
-            let source_type_str = self.print_expr(&source_type, &ctx);
-            let target_str = self.print_expr(&rule.body.target, &ctx);
-            let target_type_str = self.print_expr(&target_type, &ctx);
+            let source_str = self.print_expr(&rule.body.source, &rule_ctx);
+            let source_type_str = self.print_expr(&source_type, &rule_ctx);
+            let target_str = self.print_expr(&rule.body.target, &rule_ctx);
+            let target_type_str = self.print_expr(&target_type, &rule_ctx);
             Err(format!("type conflict in reduction rule between {source_str} : {source_type_str} and {target_str} : {target_type_str}"))
         }
+    }
+
+    pub fn check_type_of_types(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        let root_ctx = self.get_root_context();
+
+        for constant in &self.constants {
+            if let Err(error) = self.check_type_of_types_in_param(constant, &root_ctx) {
+                errors.push(error);
+            }
+        }
+
+        for rule in &self.reduction_rules {
+            if let Err(error) = self.check_type_of_types_in_reduction_rule(rule, &root_ctx) {
+                errors.push(error);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn check_type_of_types_in_param(&self, param: &Param, ctx: &Context<Param>) -> Result<(), String> {
+        self.check_type_of_types_in_expr(&param.type_expr, ctx)?;
+        let type_type = self.get_expr_type(&param.type_expr, ctx)?;
+        let cmp_type_type = self.lambda_handler.get_universe_type()?;
+        if type_type.compare(ctx.locals_start(), &cmp_type_type, &Some(self)) {
+            Ok(())
+        } else {
+            let type_str = self.print_expr(&param.type_expr, &ctx);
+            let type_type_str = self.print_expr(&type_type, &ctx);
+            let cmp_type_type_str = self.print_expr(&cmp_type_type, &ctx);
+            Err(format!("parameter type {type_str} : {type_type_str} must have type {cmp_type_type_str} instead"))
+        }
+    }
+
+    fn check_type_of_types_in_params(&self, params: &[Param], ctx: &Context<Param>) -> Result<(), String> {
+        for param_idx in 0..params.len() {
+            let param = &params[param_idx];
+            let param_ctx = ctx.with_locals(&params[0..param_idx]);
+            self.check_type_of_types_in_param(param, &param_ctx)?;
+        }
+        Ok(())
+    }
+
+    fn check_type_of_types_in_expr(&self, expr: &Expr, ctx: &Context<Param>) -> Result<(), String> {
+        match expr {
+            Expr::Var(_) => {},
+            Expr::App(app) => {
+                self.check_type_of_types_in_expr(&app.param, ctx)?;
+                self.check_type_of_types_in_expr(&app.body, ctx)?;
+            },
+            Expr::Lambda(lambda) => {
+                self.check_type_of_types_in_param(&lambda.param, ctx)?;
+                let body_ctx = ctx.with_local(&lambda.param);
+                self.check_type_of_types_in_expr(&lambda.body, &body_ctx)?;
+            },
+        };
+        Ok(())
+    }
+
+    fn check_type_of_types_in_reduction_rule(
+        &self,
+        rule: &ReductionRule,
+        ctx: &Context<Param>,
+    ) -> Result<(), String> {
+        self.check_type_of_types_in_params(&rule.params, ctx)?;
+        let rule_ctx = ctx.with_locals(&rule.params);
+        self.check_type_of_types_in_expr(&rule.body.source, &rule_ctx)?;
+        self.check_type_of_types_in_expr(&rule.body.target, &rule_ctx)?;
+        Ok(())
     }
 }
 
