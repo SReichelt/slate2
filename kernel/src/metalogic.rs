@@ -85,13 +85,18 @@ impl MetaLogic {
         match expr {
             Expr::Var(Var(idx)) => Ok(ctx.shifted_to_context(&ctx.get_var(*idx).type_expr, *idx)),
             Expr::App(app) => {
+                // Finding the result type of an application is surprisingly tricky because the
+                // application itself does not include the type parameters of its function. Instead,
+                // to determine the property we need to match the type of the actual function
+                // argument against a term that denotes a sufficiently generic pi type. Then we
+                // apply the property to the argument of the application.
                 let fun = &app.param;
                 let arg = &app.body;
                 let fun_type = self.get_expr_type(fun, ctx)?;
                 let arg_type = self.get_expr_type(arg, ctx)?;
                 let prop_param = Param {
                     name: None,
-                    type_expr: self.lambda_handler.get_prop_type(arg_type.clone(), ctx),
+                    type_expr: self.lambda_handler.get_prop_type(arg_type.clone(), ctx)?,
                 };
                 let prop_var_ctx = ctx.with_local(&prop_param);
                 let prop_var = Expr::var(-1);
@@ -101,7 +106,7 @@ impl MetaLogic {
                     arg_type_in_prop_var_ctx,
                     prop_var,
                     &prop_var_ctx,
-                );
+                )?;
                 if let Some(mut prop_vec) = fun_type.match_expr(
                     &Some(self),
                     &[prop_param],
@@ -122,32 +127,45 @@ impl MetaLogic {
                 let body_ctx = ctx.with_local(&lambda.param);
                 let body_type = self.get_expr_type(&lambda.body, &body_ctx)?;
                 let body_type_lambda = Expr::lambda(lambda.param.clone(), body_type);
-                Ok(self.lambda_handler.get_pi_type(
+                self.lambda_handler.get_pi_type(
                     lambda.param.type_expr.clone(),
                     body_type_lambda,
                     ctx,
-                ))
+                )
             }
         }
     }
 
-    pub fn check_reduction_rule_types(&self) -> Result<(), String> {
-        let root_ctx = self.get_root_context();
+    pub fn check_reduction_rule_types(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
 
         for rule in &self.reduction_rules {
-            let ctx = root_ctx.with_locals(&rule.params);
-            let source_type = self.get_expr_type(&rule.body.source, &ctx)?;
-            let target_type = self.get_expr_type(&rule.body.target, &ctx)?;
-            if !source_type.compare(ctx.locals_start(), &target_type, &Some(self)) {
-                let source_str = rule.body.source.print(&ctx);
-                let source_type_str = source_type.print(&ctx);
-                let target_str = rule.body.target.print(&ctx);
-                let target_type_str = target_type.print(&ctx);
-                return Err(format!("type conflict in reduction rule between {source_str} : {source_type_str} and {target_str} : {target_type_str}"));
+            if let Err(error) = self.check_reduction_rule_type(rule) {
+                errors.push(error);
             }
         }
 
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn check_reduction_rule_type(&self, rule: &ReductionRule) -> Result<(), String> {
+        let root_ctx = self.get_root_context();
+        let ctx = root_ctx.with_locals(&rule.params);
+        let source_type = self.get_expr_type(&rule.body.source, &ctx)?;
+        let target_type = self.get_expr_type(&rule.body.target, &ctx)?;
+        if source_type.compare(ctx.locals_start(), &target_type, &Some(self)) {
+            Ok(())
+        } else {
+            let source_str = rule.body.source.print(&ctx);
+            let source_type_str = source_type.print(&ctx);
+            let target_str = rule.body.target.print(&ctx);
+            let target_type_str = target_type.print(&ctx);
+            Err(format!("type conflict in reduction rule between {source_str} : {source_type_str} and {target_str} : {target_type_str}"))
+        }
     }
 }
 
@@ -644,17 +662,22 @@ pub struct ReductionBody {
 }
 
 pub trait LambdaHandler {
-    fn get_type_type(&self) -> Expr;
+    fn get_type_type(&self) -> Result<Expr, String>;
 
-    fn get_pi_type(&self, domain: Expr, prop: Expr, ctx: &Context<Param>) -> Expr;
+    fn get_pi_type(&self, domain: Expr, prop: Expr, ctx: &Context<Param>) -> Result<Expr, String>;
 
-    fn get_fun_type(&self, domain: Expr, codomain: Expr, ctx: &Context<Param>) -> Expr {
+    fn get_fun_type(
+        &self,
+        domain: Expr,
+        codomain: Expr,
+        ctx: &Context<Param>,
+    ) -> Result<Expr, String> {
         let prop = Expr::const_lambda(domain.clone(), codomain, ctx);
         self.get_pi_type(domain, prop, ctx)
     }
 
-    fn get_prop_type(&self, domain: Expr, ctx: &Context<Param>) -> Expr {
-        self.get_fun_type(domain, self.get_type_type(), ctx)
+    fn get_prop_type(&self, domain: Expr, ctx: &Context<Param>) -> Result<Expr, String> {
+        self.get_fun_type(domain, self.get_type_type()?, ctx)
     }
 }
 

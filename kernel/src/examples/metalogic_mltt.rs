@@ -32,16 +32,16 @@ impl MLTTLambdaHandler {
 }
 
 impl LambdaHandler for MLTTLambdaHandler {
-    fn get_type_type(&self) -> Expr {
-        Expr::var(self.u_idx)
+    fn get_type_type(&self) -> Result<Expr, String> {
+        Ok(Expr::var(self.u_idx))
     }
 
-    fn get_pi_type(&self, domain: Expr, prop: Expr, _: &Context<Param>) -> Expr {
-        Expr::multi_app(Expr::var(self.pi_idx), smallvec![domain, prop])
+    fn get_pi_type(&self, domain: Expr, prop: Expr, _: &Context<Param>) -> Result<Expr, String> {
+        Ok(Expr::multi_app(Expr::var(self.pi_idx), smallvec![domain, prop]))
     }
 
-    fn get_fun_type(&self, domain: Expr, codomain: Expr, _: &Context<Param>) -> Expr {
-        Expr::multi_app(Expr::var(self.fun_idx), smallvec![domain, codomain])
+    fn get_fun_type(&self, domain: Expr, codomain: Expr, _: &Context<Param>) -> Result<Expr, String> {
+        Ok(Expr::multi_app(Expr::var(self.fun_idx), smallvec![domain, codomain]))
     }
 }
 
@@ -84,7 +84,7 @@ mod tests {
         let mltt = get_mltt();
         let root_ctx = mltt.get_root_context();
 
-        let non_fun_app = Expr::parse("λ A : U. A(A)", &root_ctx).unwrap();
+        let non_fun_app = Expr::parse("λ A : U. A A", &root_ctx).unwrap();
         assert!(mltt.get_expr_type(&non_fun_app, &root_ctx).is_err());
 
         let app_mismatch = Expr::parse("λ F : Fun U U. F F", &root_ctx).unwrap();
