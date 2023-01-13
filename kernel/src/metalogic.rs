@@ -13,8 +13,8 @@ pub struct MetaLogic {
     lambda_handler: Box<dyn LambdaHandler>,
 }
 
-type ParamInit<'a> = (&'a str, &'a str);
-type ReductionRuleInit<'a> = (&'a [ParamInit<'a>], &'a str, &'a str);
+pub type ParamInit<'a> = (&'a str, &'a str);
+pub type ReductionRuleInit<'a> = (&'a [ParamInit<'a>], &'a str, &'a str);
 
 impl MetaLogic {
     pub fn construct<F>(

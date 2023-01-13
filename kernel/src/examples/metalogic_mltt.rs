@@ -1,52 +1,74 @@
 use smallvec::smallvec;
 
-use crate::{context::*, context_object::*, metalogic::*};
+use crate::{context::*, context_object::*, metalogic::*, metalogic_helpers::*};
 
 pub fn get_mltt() -> MetaLogic {
-    MetaLogic::construct(
+    MetaLogic::construct_semantically(
         &[
-            ("U", "U"),
-            ("Pi", "Π A : U. ((A → U) → U)"),
-            ("Sigma", "Π A : U. ((A → U) → U)"),
-            (
-                "Sigma_intro",
-                "Π A : U. Π P : A → U. Π a : A. (P a → Sigma A P)",
-            ),
-            ("Sigma_fst", "Π A : U. Π P : A → U. (Sigma A P → A)"),
-            (
-                "Sigma_snd",
-                "Π A : U. Π P : A → U. Π p : Sigma A P. P (Sigma_fst A P p)",
-            ),
-            ("pair", "Π A B : U. (A → B → (A × B))"),
-            ("pair_fst", "Π A B : U. ((A × B) → A)"),
-            ("pair_snd", "Π A B : U. ((A × B) → B)"),
+            TypeInit {
+                ctor: ("U", "U"),
+                intro: &[],
+                elim: &[],
+                red: &[],
+            },
+            TypeInit {
+                ctor: ("Pi", "Π A : U. ((A → U) → U)"),
+                intro: &[],
+                elim: &[],
+                red: &[],
+            },
+            TypeInit {
+                ctor: ("Sigma", "Π A : U. ((A → U) → U)"),
+                intro: &[(
+                    "Sigma_intro",
+                    "Π A : U. Π P : A → U. Π a : A. (P a → Sigma A P)",
+                )],
+                elim: &[
+                    ("Sigma_fst", "Π A : U. Π P : A → U. (Sigma A P → A)"),
+                    (
+                        "Sigma_snd",
+                        "Π A : U. Π P : A → U. Π p : Sigma A P. P (Sigma_fst A P p)",
+                    ),
+                ],
+                red: &[
+                    (
+                        &[("A", "U"), ("P", "A → U"), ("a", "A"), ("b", "P a")],
+                        "Sigma_fst A P (Sigma_intro A P a b)",
+                        "a",
+                    ),
+                    (
+                        &[("A", "U"), ("P", "A → U"), ("a", "A"), ("b", "P a")],
+                        "Sigma_snd A P (Sigma_intro A P a b)",
+                        "b",
+                    ),
+                ],
+            },
         ],
         &[
-            (
-                &[("A", "U"), ("P", "A → U"), ("a", "A"), ("b", "P a")],
-                "Sigma_fst A P (Sigma_intro A P a b)",
-                "a",
-            ),
-            (
-                &[("A", "U"), ("P", "A → U"), ("a", "A"), ("b", "P a")],
-                "Sigma_snd A P (Sigma_intro A P a b)",
-                "b",
-            ),
-            (
-                &[("A", "U"), ("B", "U")],
-                "pair A B",
-                "Sigma_intro A (λ a : A. B)",
-            ),
-            (
-                &[("A", "U"), ("B", "U")],
-                "pair_fst A B",
-                "Sigma_fst A (λ a : A. B)",
-            ),
-            (
-                &[("A", "U"), ("B", "U")],
-                "pair_snd A B",
-                "Sigma_snd A (λ a : A. B)",
-            ),
+            DefInit {
+                sym: ("pair", "Π A B : U. (A → B → (A × B))"),
+                red: &[(
+                    &[("A", "U"), ("B", "U")],
+                    "pair A B",
+                    "Sigma_intro A (λ a : A. B)",
+                )],
+            },
+            DefInit {
+                sym: ("pair_fst", "Π A B : U. ((A × B) → A)"),
+                red: &[(
+                    &[("A", "U"), ("B", "U")],
+                    "pair_fst A B",
+                    "Sigma_fst A (λ a : A. B)",
+                )],
+            },
+            DefInit {
+                sym: ("pair_snd", "Π A B : U. ((A × B) → B)"),
+                red: &[(
+                    &[("A", "U"), ("B", "U")],
+                    "pair_snd A B",
+                    "Sigma_snd A (λ a : A. B)",
+                )],
+            },
         ],
         |ctx| Box::new(MLTTLambdaHandler::new(ctx)),
     )
@@ -110,7 +132,10 @@ mod tests {
         assert_eq!(mltt.print_expr(&id_ctor_type, &root_ctx), "U → U");
 
         let const_ctor = mltt.parse_expr("λ A B : U. A", &root_ctx).unwrap();
-        assert_eq!(mltt.print_expr(&const_ctor, &root_ctx), "λ A : U. λ B : U. A");
+        assert_eq!(
+            mltt.print_expr(&const_ctor, &root_ctx),
+            "λ A : U. λ B : U. A"
+        );
         let const_ctor_type = mltt.get_expr_type(&const_ctor, &root_ctx).unwrap();
         assert_eq!(mltt.print_expr(&const_ctor_type, &root_ctx), "U → U → U");
 
@@ -123,9 +148,15 @@ mod tests {
         assert_eq!(mltt.print_expr(&id_fun_type, &root_ctx), "Π A : U. (A → A)");
 
         let inner_const_fun = mltt.parse_expr("λ A : U. λ a b : A. a", &root_ctx).unwrap();
-        assert_eq!(mltt.print_expr(&inner_const_fun, &root_ctx), "λ A : U. λ a : A. λ b : A. a");
+        assert_eq!(
+            mltt.print_expr(&inner_const_fun, &root_ctx),
+            "λ A : U. λ a : A. λ b : A. a"
+        );
         let inner_const_fun_type = mltt.get_expr_type(&inner_const_fun, &root_ctx).unwrap();
-        assert_eq!(mltt.print_expr(&inner_const_fun_type, &root_ctx), "Π A : U. (A → A → A)");
+        assert_eq!(
+            mltt.print_expr(&inner_const_fun_type, &root_ctx),
+            "Π A : U. (A → A → A)"
+        );
 
         let pair_fun = mltt
             .parse_expr("λ A B : U. λ a : A. λ b : B. pair A B a b", &root_ctx)
@@ -162,5 +193,5 @@ mod tests {
     }
 
     // TODO: test that all declared types reduce uniquely (are confluent)
-    // TODO test that specific known terms with multiple reductions are confluent
+    // TODO: test that specific known terms with multiple reductions are confluent
 }
