@@ -27,7 +27,7 @@ use std::fmt::Debug;
 
 use smallvec::{smallvec, SmallVec};
 
-use crate::{context_object::*, expr::*};
+use crate::generic::{context_object::*, expr::*};
 
 #[derive(Clone, PartialEq)]
 pub enum InnerExpr {

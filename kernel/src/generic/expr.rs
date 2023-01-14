@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use smallvec::SmallVec;
 
-use crate::context_object::*;
+use crate::generic::context_object::*;
 
 /// A simple variable reference. This is the prototypical context object, but obviously does not
 /// support substitution by itself.

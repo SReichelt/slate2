@@ -1,4 +1,6 @@
-use crate::{context::*, metalogic::*};
+use super::{expr::*, metalogic::*};
+
+use crate::generic::context::*;
 
 pub struct TypeInit<'a> {
     pub ctor: ParamInit<'a>,

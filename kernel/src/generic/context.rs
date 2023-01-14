@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use crate::context_object::{ContextObject, VarIndex};
+use crate::generic::context_object::*;
 
 pub trait NamedObject {
     fn get_name(&self) -> Option<&str>;

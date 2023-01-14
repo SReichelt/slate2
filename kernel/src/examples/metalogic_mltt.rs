@@ -1,6 +1,9 @@
 use smallvec::smallvec;
 
-use crate::{context::*, context_object::*, metalogic::*, metalogic_helpers::*};
+use crate::{
+    generic::{context::*, context_object::*},
+    metalogic::{expr::*, helpers::*, metalogic::*},
+};
 
 pub fn get_mltt() -> MetaLogic {
     MetaLogic::construct_semantically(
