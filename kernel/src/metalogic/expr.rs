@@ -100,23 +100,23 @@ impl ContextObjectWithSubst<Expr> for Expr {
     }
 }
 
-impl ContextObjectWithCmp<Option<&MetaLogic>> for Expr {
+impl ContextObjectWithCmp<Option<&[ReductionRule]>> for Expr {
     fn shift_and_compare(
         &self,
         start: VarIndex,
         end: VarIndex,
         shift: VarIndex,
         target: &Self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
     ) -> bool {
         if self.shift_and_compare_impl(start, end, shift, target, cmp_data) {
             return true;
         }
 
-        if let Some(metalogic) = cmp_data {
-            let self_red_opt = self.reduce_head(metalogic, start);
+        if let Some(reduction_rules) = cmp_data {
+            let self_red_opt = self.reduce_head(reduction_rules, start);
             let target_start = start - end;
-            let target_red_opt = target.reduce_head(metalogic, target_start);
+            let target_red_opt = target.reduce_head(reduction_rules, target_start);
             if self_red_opt.is_some() || target_red_opt.is_some() {
                 let self_red = self_red_opt.as_ref().unwrap_or(self);
                 let target_red = target_red_opt.as_ref().unwrap_or(target);
@@ -130,7 +130,7 @@ impl ContextObjectWithCmp<Option<&MetaLogic>> for Expr {
     }
 }
 
-impl ContextObjectWithSubstCmp<Expr, Option<&MetaLogic>> for Expr {
+impl ContextObjectWithSubstCmp<Expr, Option<&[ReductionRule]>> for Expr {
     fn substitute_and_compare(
         &self,
         shift_start: VarIndex,
@@ -138,7 +138,7 @@ impl ContextObjectWithSubstCmp<Expr, Option<&MetaLogic>> for Expr {
         args: &mut [Expr],
         args_filled: &mut [bool],
         target: &Self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
     ) -> bool {
         if self.substitute_and_compare_impl(
             shift_start,
@@ -236,26 +236,20 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    pub fn parse(
-        s: &str,
-        ctx: &Context<Param>,
-        lambda_handler: &dyn LambdaHandler,
-    ) -> Result<Self, String> {
+    pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self, String> {
         let mut parser_input = ParserInput(s);
         let mut parsing_context = ParsingContext {
             input: &mut parser_input,
             context: ctx,
-            lambda_handler,
         };
         parsing_context.parse_expr()
     }
 
-    pub fn print(&self, ctx: &Context<Param>, lambda_handler: &dyn LambdaHandler) -> String {
+    pub fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         let mut printing_context = PrintingContext {
             output: &mut result,
             context: ctx,
-            lambda_handler,
         };
         printing_context
             .print_expr(&self, false, false, false, false)
@@ -263,39 +257,24 @@ impl Expr {
         result
     }
 
-    pub fn reduce(
-        &mut self,
-        metalogic: &MetaLogic,
-        locals_start: VarIndex,
-        convert_to_combinators: bool,
-    ) -> bool {
+    pub fn reduce(&mut self, ctx: &MetaLogicContext, convert_to_combinators: bool) -> bool {
         let mut reduced = false;
 
         loop {
             match self {
                 Expr::Var(_) => {}
                 Expr::App(app) => {
-                    reduced |= app
-                        .param
-                        .reduce(metalogic, locals_start, convert_to_combinators);
-                    reduced |= app
-                        .body
-                        .reduce(metalogic, locals_start, convert_to_combinators);
+                    reduced |= app.param.reduce(ctx, convert_to_combinators);
+                    reduced |= app.body.reduce(ctx, convert_to_combinators);
                 }
                 Expr::Lambda(lambda) => {
-                    reduced |= lambda.param.type_expr.reduce(
-                        metalogic,
-                        locals_start,
-                        convert_to_combinators,
-                    );
-                    reduced |=
-                        lambda
-                            .body
-                            .reduce(metalogic, locals_start - 1, convert_to_combinators);
+                    reduced |= lambda.param.type_expr.reduce(ctx, convert_to_combinators);
+                    let body_ctx = ctx.with_local(&lambda.param);
+                    reduced |= lambda.body.reduce(&body_ctx, convert_to_combinators);
                 }
             }
 
-            if let Some(red) = self.reduce_head(metalogic, locals_start) {
+            if let Some(red) = self.reduce_head(ctx.reduction_rules, ctx.context.locals_start()) {
                 *self = red;
                 reduced = true;
             } else {
@@ -304,18 +283,26 @@ impl Expr {
         }
     }
 
-    fn reduce_head(&self, metalogic: &MetaLogic, locals_start: VarIndex) -> Option<Expr> {
-        let mut expr = self.reduce_head_once(metalogic, locals_start)?;
-        while let Some(expr_red) = expr.reduce_head_once(metalogic, locals_start) {
+    fn reduce_head(
+        &self,
+        reduction_rules: &[ReductionRule],
+        locals_start: VarIndex,
+    ) -> Option<Expr> {
+        let mut expr = self.reduce_head_once(reduction_rules, locals_start)?;
+        while let Some(expr_red) = expr.reduce_head_once(reduction_rules, locals_start) {
             expr = expr_red
         }
         Some(expr)
     }
 
-    fn reduce_head_once(&self, metalogic: &MetaLogic, locals_start: VarIndex) -> Option<Expr> {
+    fn reduce_head_once(
+        &self,
+        reduction_rules: &[ReductionRule],
+        locals_start: VarIndex,
+    ) -> Option<Expr> {
         if let Expr::App(app) = self {
             let mut fun = &app.param;
-            let fun_red_opt = fun.reduce_head(metalogic, locals_start);
+            let fun_red_opt = fun.reduce_head(reduction_rules, locals_start);
             if let Some(fun_red) = &fun_red_opt {
                 fun = fun_red;
             }
@@ -327,7 +314,7 @@ impl Expr {
             }
         }
 
-        for rule in metalogic.get_reduction_rules() {
+        for rule in reduction_rules {
             if let Some(mut args) =
                 self.match_expr(&None, &rule.params, &rule.body.source, locals_start)
             {
@@ -343,7 +330,7 @@ impl Expr {
 
     pub fn match_expr(
         &self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
         match_params: &[Param],
         match_expr: &Expr,
         locals_start: VarIndex,
@@ -367,13 +354,65 @@ impl Expr {
         None
     }
 
+    pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
+        match self {
+            Expr::Var(Var(idx)) => Ok(ctx
+                .context
+                .shifted_to_context(&ctx.context.get_var(*idx).type_expr, *idx)),
+            Expr::App(app) => {
+                // Finding the result type of an application is surprisingly tricky because the
+                // application itself does not include the type parameters of its function. Instead,
+                // to determine the property we need to match the type of the actual function
+                // argument against a term that denotes a sufficiently generic pi type. Then we
+                // apply the property to the argument of the application.
+                let fun = &app.param;
+                let arg = &app.body;
+                let fun_type = fun.get_type(ctx)?;
+                let arg_type = arg.get_type(ctx)?;
+                let locals_start = ctx.context.locals_start();
+                let (prop_param, cmp_fun_type) = ctx.lambda_handler.get_semi_generic_dep_type(
+                    arg_type,
+                    DependentTypeCtorKind::Pi,
+                    locals_start,
+                )?;
+                if let Some(mut prop_vec) = fun_type.match_expr(
+                    &Some(ctx.reduction_rules),
+                    &[prop_param],
+                    &cmp_fun_type,
+                    locals_start,
+                ) {
+                    let prop = prop_vec.pop().unwrap();
+                    Ok(Expr::apply(prop, arg.clone(), locals_start))
+                } else {
+                    let fun_str = fun.print(ctx);
+                    let fun_type_str = fun_type.print(ctx);
+                    let arg_str = arg.print(ctx);
+                    let arg_type = arg.get_type(ctx)?;
+                    let arg_type_str = arg_type.print(ctx);
+                    Err(format!("application type mismatch: {fun_str} : {fun_type_str} cannot be applied to {arg_str} : {arg_type_str}"))
+                }
+            }
+            Expr::Lambda(lambda) => {
+                let body_ctx = ctx.with_local(&lambda.param);
+                let body_type = lambda.body.get_type(&body_ctx)?;
+                let body_type_lambda = Expr::lambda(lambda.param.clone(), body_type);
+                ctx.lambda_handler.get_dep_type(
+                    lambda.param.type_expr.clone(),
+                    body_type_lambda,
+                    DependentTypeCtorKind::Pi,
+                    ctx.context.locals_start(),
+                )
+            }
+        }
+    }
+
     fn shift_and_compare_impl(
         &self,
         start: VarIndex,
         end: VarIndex,
         shift: VarIndex,
         target: &Self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
     ) -> bool {
         match (self, target) {
             (Expr::Var(var), Expr::Var(target_var)) => {
@@ -396,7 +435,7 @@ impl Expr {
         args: &mut [Expr],
         args_filled: &mut [bool],
         target: &Self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
     ) -> bool {
         if let Expr::Var(var) = self {
             if let Some(result) =
@@ -499,21 +538,21 @@ impl ContextObjectWithSubst<Expr> for Param {
     }
 }
 
-impl ContextObjectWithCmp<Option<&MetaLogic>> for Param {
+impl ContextObjectWithCmp<Option<&[ReductionRule]>> for Param {
     fn shift_and_compare(
         &self,
         start: VarIndex,
         end: VarIndex,
         shift: VarIndex,
         target: &Self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
     ) -> bool {
         self.type_expr
             .shift_and_compare(start, end, shift, &target.type_expr, cmp_data)
     }
 }
 
-impl ContextObjectWithSubstCmp<Expr, Option<&MetaLogic>> for Param {
+impl ContextObjectWithSubstCmp<Expr, Option<&[ReductionRule]>> for Param {
     fn substitute_and_compare(
         &self,
         shift_start: VarIndex,
@@ -521,7 +560,7 @@ impl ContextObjectWithSubstCmp<Expr, Option<&MetaLogic>> for Param {
         args: &mut [Expr],
         args_filled: &mut [bool],
         target: &Self,
-        cmp_data: &Option<&MetaLogic>,
+        cmp_data: &Option<&[ReductionRule]>,
     ) -> bool {
         self.type_expr.substitute_and_compare(
             shift_start,

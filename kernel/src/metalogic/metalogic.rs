@@ -36,12 +36,20 @@ impl MetaLogic {
 
         let mut idx = 0;
         for (_, type_str) in constants_init {
-            let ctx = Context::new(&constants);
-            constants[idx].type_expr = Expr::parse(type_str, &ctx, lambda_handler.as_ref())?;
+            let ctx = MetaLogicContext {
+                context: Context::new(&constants),
+                reduction_rules: &[],
+                lambda_handler: lambda_handler.as_ref(),
+            };
+            constants[idx].type_expr = Expr::parse(type_str, &ctx)?;
             idx += 1;
         }
 
-        let root_ctx = Context::new(&constants);
+        let root_ctx = MetaLogicContext {
+            context: Context::new(&constants),
+            reduction_rules: &[],
+            lambda_handler: lambda_handler.as_ref(),
+        };
 
         let reduction_rules: Result<Vec<ReductionRule>, String> = reduction_rules_init
             .iter()
@@ -51,12 +59,12 @@ impl MetaLogic {
                     let ctx = root_ctx.with_locals(&params);
                     params.push(Param {
                         name: Some(Rc::new((*name).into())),
-                        type_expr: Expr::parse(type_str, &ctx, lambda_handler.as_ref())?,
+                        type_expr: Expr::parse(type_str, &ctx)?,
                     })
                 }
                 let ctx = root_ctx.with_locals(&params);
-                let source = Expr::parse(source_init, &ctx, lambda_handler.as_ref())?;
-                let target = Expr::parse(target_init, &ctx, lambda_handler.as_ref())?;
+                let source = Expr::parse(source_init, &ctx)?;
+                let target = Expr::parse(target_init, &ctx)?;
                 Ok(ReductionRule {
                     params,
                     body: ReductionBody { source, target },
@@ -71,82 +79,34 @@ impl MetaLogic {
         })
     }
 
-    pub fn get_root_context(&self) -> Context<Param> {
-        Context::new(&self.constants)
+    pub fn get_root_context(&self) -> MetaLogicContext {
+        MetaLogicContext {
+            context: Context::new(&self.constants),
+            reduction_rules: &self.reduction_rules,
+            lambda_handler: self.lambda_handler.as_ref(),
+        }
     }
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
         let ctx = self.get_root_context();
-        let var_idx = ctx.get_var_index(name, 0)?;
-        Some(ctx.get_var(var_idx))
+        let var_idx = ctx.context.get_var_index(name, 0)?;
+        Some(ctx.context.get_var(var_idx))
     }
 
-    pub fn get_reduction_rules(&self) -> &[ReductionRule] {
-        &self.reduction_rules
+    pub fn parse_expr(&self, s: &str) -> Result<Expr, String> {
+        Expr::parse(s, &self.get_root_context())
     }
 
-    pub fn parse_expr(&self, s: &str, ctx: &Context<Param>) -> Result<Expr, String> {
-        Expr::parse(s, ctx, self.lambda_handler.as_ref())
+    pub fn print_expr(&self, expr: &Expr) -> String {
+        expr.print(&self.get_root_context())
     }
 
-    pub fn print_expr(&self, expr: &Expr, ctx: &Context<Param>) -> String {
-        expr.print(ctx, self.lambda_handler.as_ref())
+    pub fn reduce_expr(&self, expr: &mut Expr, convert_to_combinators: bool) -> bool {
+        expr.reduce(&self.get_root_context(), convert_to_combinators)
     }
 
-    pub fn reduce_expr(
-        &self,
-        expr: &mut Expr,
-        ctx: &Context<Param>,
-        convert_to_combinators: bool,
-    ) -> bool {
-        expr.reduce(self, ctx.locals_start(), convert_to_combinators)
-    }
-
-    pub fn get_expr_type(&self, expr: &Expr, ctx: &Context<Param>) -> Result<Expr, String> {
-        match expr {
-            Expr::Var(Var(idx)) => Ok(ctx.shifted_to_context(&ctx.get_var(*idx).type_expr, *idx)),
-            Expr::App(app) => {
-                // Finding the result type of an application is surprisingly tricky because the
-                // application itself does not include the type parameters of its function. Instead,
-                // to determine the property we need to match the type of the actual function
-                // argument against a term that denotes a sufficiently generic pi type. Then we
-                // apply the property to the argument of the application.
-                let fun = &app.param;
-                let arg = &app.body;
-                let fun_type = self.get_expr_type(fun, ctx)?;
-                let arg_type = self.get_expr_type(arg, ctx)?;
-                let locals_start = ctx.locals_start();
-                let (prop_param, cmp_fun_type) = self.lambda_handler.get_semi_generic_dep_type(
-                    arg_type,
-                    DependentTypeCtorKind::Pi,
-                    locals_start,
-                )?;
-                if let Some(mut prop_vec) =
-                    fun_type.match_expr(&Some(self), &[prop_param], &cmp_fun_type, locals_start)
-                {
-                    let prop = prop_vec.pop().unwrap();
-                    Ok(Expr::apply(prop, arg.clone(), locals_start))
-                } else {
-                    let fun_str = self.print_expr(fun, ctx);
-                    let fun_type_str = self.print_expr(&fun_type, ctx);
-                    let arg_str = self.print_expr(arg, ctx);
-                    let arg_type = self.get_expr_type(arg, ctx)?;
-                    let arg_type_str = self.print_expr(&arg_type, ctx);
-                    Err(format!("application type mismatch: {fun_str} : {fun_type_str} cannot be applied to {arg_str} : {arg_type_str}"))
-                }
-            }
-            Expr::Lambda(lambda) => {
-                let body_ctx = ctx.with_local(&lambda.param);
-                let body_type = self.get_expr_type(&lambda.body, &body_ctx)?;
-                let body_type_lambda = Expr::lambda(lambda.param.clone(), body_type);
-                self.lambda_handler.get_dep_type(
-                    lambda.param.type_expr.clone(),
-                    body_type_lambda,
-                    DependentTypeCtorKind::Pi,
-                    ctx.locals_start(),
-                )
-            }
-        }
+    pub fn get_expr_type(&self, expr: &Expr) -> Result<Expr, String> {
+        expr.get_type(&self.get_root_context())
     }
 
     pub fn check_reduction_rule_types(&self) -> Result<(), Vec<String>> {
@@ -169,18 +129,22 @@ impl MetaLogic {
     fn check_reduction_rule_type(
         &self,
         rule: &ReductionRule,
-        ctx: &Context<Param>,
+        ctx: &MetaLogicContext,
     ) -> Result<(), String> {
         let rule_ctx = ctx.with_locals(&rule.params);
-        let source_type = self.get_expr_type(&rule.body.source, &rule_ctx)?;
-        let target_type = self.get_expr_type(&rule.body.target, &rule_ctx)?;
-        if source_type.compare(rule_ctx.locals_start(), &target_type, &Some(self)) {
+        let source_type = rule.body.source.get_type(&rule_ctx)?;
+        let target_type = rule.body.target.get_type(&rule_ctx)?;
+        if source_type.compare(
+            rule_ctx.context.locals_start(),
+            &target_type,
+            &Some(&self.reduction_rules),
+        ) {
             Ok(())
         } else {
-            let source_str = self.print_expr(&rule.body.source, &rule_ctx);
-            let source_type_str = self.print_expr(&source_type, &rule_ctx);
-            let target_str = self.print_expr(&rule.body.target, &rule_ctx);
-            let target_type_str = self.print_expr(&target_type, &rule_ctx);
+            let source_str = rule.body.source.print(&rule_ctx);
+            let source_type_str = source_type.print(&rule_ctx);
+            let target_str = rule.body.target.print(&rule_ctx);
+            let target_type_str = target_type.print(&rule_ctx);
             Err(format!("type conflict in reduction rule between {source_str} : {source_type_str} and {target_str} : {target_type_str}"))
         }
     }
@@ -211,17 +175,21 @@ impl MetaLogic {
     fn check_type_of_types_in_param(
         &self,
         param: &Param,
-        ctx: &Context<Param>,
+        ctx: &MetaLogicContext,
     ) -> Result<(), String> {
         self.check_type_of_types_in_expr(&param.type_expr, ctx)?;
-        let type_type = self.get_expr_type(&param.type_expr, ctx)?;
+        let type_type = param.type_expr.get_type(ctx)?;
         let cmp_type_type = self.lambda_handler.get_universe_type()?;
-        if type_type.compare(ctx.locals_start(), &cmp_type_type, &Some(self)) {
+        if type_type.compare(
+            ctx.context.locals_start(),
+            &cmp_type_type,
+            &Some(&self.reduction_rules),
+        ) {
             Ok(())
         } else {
-            let type_str = self.print_expr(&param.type_expr, &ctx);
-            let type_type_str = self.print_expr(&type_type, &ctx);
-            let cmp_type_type_str = self.print_expr(&cmp_type_type, &ctx);
+            let type_str = param.type_expr.print(&ctx);
+            let type_type_str = type_type.print(&ctx);
+            let cmp_type_type_str = cmp_type_type.print(&ctx);
             Err(format!("parameter type {type_str} : {type_type_str} must have type {cmp_type_type_str} instead"))
         }
     }
@@ -229,7 +197,7 @@ impl MetaLogic {
     fn check_type_of_types_in_params(
         &self,
         params: &[Param],
-        ctx: &Context<Param>,
+        ctx: &MetaLogicContext,
     ) -> Result<(), String> {
         for param_idx in 0..params.len() {
             let param = &params[param_idx];
@@ -239,7 +207,11 @@ impl MetaLogic {
         Ok(())
     }
 
-    fn check_type_of_types_in_expr(&self, expr: &Expr, ctx: &Context<Param>) -> Result<(), String> {
+    fn check_type_of_types_in_expr(
+        &self,
+        expr: &Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<(), String> {
         match expr {
             Expr::Var(_) => {}
             Expr::App(app) => {
@@ -258,7 +230,7 @@ impl MetaLogic {
     fn check_type_of_types_in_reduction_rule(
         &self,
         rule: &ReductionRule,
-        ctx: &Context<Param>,
+        ctx: &MetaLogicContext,
     ) -> Result<(), String> {
         self.check_type_of_types_in_params(&rule.params, ctx)?;
         let rule_ctx = ctx.with_locals(&rule.params);
@@ -379,4 +351,36 @@ pub trait LambdaHandler {
         prop2: Expr,
         locals_start: VarIndex,
     ) -> Result<Expr, String>;
+}
+
+pub struct MetaLogicContext<'a, 'b: 'a, 'c> {
+    pub context: Context<'a, 'b, 'c, Param>,
+    pub reduction_rules: &'a [ReductionRule],
+    pub lambda_handler: &'a dyn LambdaHandler,
+}
+
+impl<'a, 'b, 'c> MetaLogicContext<'a, 'b, 'c> {
+    pub fn with_local<'d, 'e>(&'e self, param: &'d Param) -> MetaLogicContext<'d, 'b, 'e>
+    where
+        'a: 'd,
+        'c: 'e,
+    {
+        MetaLogicContext {
+            context: self.context.with_local(param),
+            reduction_rules: self.reduction_rules,
+            lambda_handler: self.lambda_handler,
+        }
+    }
+
+    pub fn with_locals<'d, 'e>(&'e self, params: &'d [Param]) -> MetaLogicContext<'d, 'b, 'e>
+    where
+        'a: 'd,
+        'c: 'e,
+    {
+        MetaLogicContext {
+            context: self.context.with_locals(params),
+            reduction_rules: self.reduction_rules,
+            lambda_handler: self.lambda_handler,
+        }
+    }
 }

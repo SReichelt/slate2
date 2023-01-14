@@ -2,12 +2,11 @@ use std::fmt;
 
 use super::{expr::*, metalogic::*};
 
-use crate::generic::{context::*, expr::*};
+use crate::generic::expr::*;
 
 pub struct PrintingContext<'a, 'b, 'c: 'b, W: fmt::Write> {
     pub output: &'a mut W,
-    pub context: &'a Context<'b, 'c, 'a, Param>,
-    pub lambda_handler: &'a dyn LambdaHandler,
+    pub context: &'a MetaLogicContext<'b, 'c, 'a>,
 }
 
 impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
@@ -43,9 +42,9 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
 
         match expr {
             Expr::Var(Var(idx)) => {
-                let param = self.context.get_var(*idx);
+                let param = self.context.context.get_var(*idx);
                 param.print_name(self.output)?;
-                let occurrence = self.context.get_name_occurrence(*idx, param);
+                let occurrence = self.context.context.get_name_occurrence(*idx, param);
                 if occurrence != 0 {
                     self.output.write_fmt(format_args!("@{occurrence}"))?;
                 }
@@ -81,7 +80,6 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         let mut body_ctx = PrintingContext {
             output: self.output,
             context: &self.context.with_local(&lambda.param),
-            lambda_handler: self.lambda_handler,
         };
         body_ctx.print_expr(&lambda.body, false, false, true, true)?;
         Ok(())
@@ -103,9 +101,10 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         parens_for_prefix: bool,
         parens_for_infix: bool,
     ) -> Result<bool, fmt::Error> {
-        let locals_start = self.context.locals_start();
+        let locals_start = self.context.context.locals_start();
 
         if let Ok((domain_param, codomain_param, generic_indep_type)) = self
+            .context
             .lambda_handler
             .get_generic_indep_type(kind, locals_start)
         {
@@ -138,8 +137,10 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
             }
         }
 
-        if let Ok((domain_param, prop_param, generic_dep_type)) =
-            self.lambda_handler.get_generic_dep_type(kind, locals_start)
+        if let Ok((domain_param, prop_param, generic_dep_type)) = self
+            .context
+            .lambda_handler
+            .get_generic_dep_type(kind, locals_start)
         {
             if let Some(arg_vec) = expr.match_expr(
                 &None,
