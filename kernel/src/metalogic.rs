@@ -87,7 +87,16 @@ impl MetaLogic {
     }
 
     pub fn print_expr(&self, expr: &Expr, ctx: &Context<Param>) -> String {
-        Expr::print(expr, ctx, self.lambda_handler.as_ref())
+        expr.print(ctx, self.lambda_handler.as_ref())
+    }
+
+    pub fn reduce_expr(
+        &self,
+        expr: &mut Expr,
+        ctx: &Context<Param>,
+        convert_to_combinators: bool,
+    ) -> bool {
+        expr.reduce(self, ctx.locals_start(), convert_to_combinators)
     }
 
     pub fn get_expr_type(&self, expr: &Expr, ctx: &Context<Param>) -> Result<Expr, String> {
@@ -103,19 +112,17 @@ impl MetaLogic {
                 let arg = &app.body;
                 let fun_type = self.get_expr_type(fun, ctx)?;
                 let arg_type = self.get_expr_type(arg, ctx)?;
+                let locals_start = ctx.locals_start();
                 let (prop_param, cmp_fun_type) = self.lambda_handler.get_semi_generic_dep_type(
                     arg_type,
                     DependentTypeCtorKind::Pi,
-                    ctx,
+                    locals_start,
                 )?;
-                if let Some(mut prop_vec) = fun_type.match_expr(
-                    &Some(self),
-                    &[prop_param],
-                    &cmp_fun_type,
-                    ctx.locals_start(),
-                ) {
+                if let Some(mut prop_vec) =
+                    fun_type.match_expr(&Some(self), &[prop_param], &cmp_fun_type, locals_start)
+                {
                     let prop = prop_vec.pop().unwrap();
-                    Ok(Expr::apply(prop, arg.clone(), ctx))
+                    Ok(Expr::apply(prop, arg.clone(), locals_start))
                 } else {
                     let fun_str = self.print_expr(fun, ctx);
                     let fun_type_str = self.print_expr(&fun_type, ctx);
@@ -133,7 +140,7 @@ impl MetaLogic {
                     lambda.param.type_expr.clone(),
                     body_type_lambda,
                     DependentTypeCtorKind::Pi,
-                    ctx,
+                    ctx.locals_start(),
                 )
             }
         }
@@ -198,7 +205,11 @@ impl MetaLogic {
         }
     }
 
-    fn check_type_of_types_in_param(&self, param: &Param, ctx: &Context<Param>) -> Result<(), String> {
+    fn check_type_of_types_in_param(
+        &self,
+        param: &Param,
+        ctx: &Context<Param>,
+    ) -> Result<(), String> {
         self.check_type_of_types_in_expr(&param.type_expr, ctx)?;
         let type_type = self.get_expr_type(&param.type_expr, ctx)?;
         let cmp_type_type = self.lambda_handler.get_universe_type()?;
@@ -212,7 +223,11 @@ impl MetaLogic {
         }
     }
 
-    fn check_type_of_types_in_params(&self, params: &[Param], ctx: &Context<Param>) -> Result<(), String> {
+    fn check_type_of_types_in_params(
+        &self,
+        params: &[Param],
+        ctx: &Context<Param>,
+    ) -> Result<(), String> {
         for param_idx in 0..params.len() {
             let param = &params[param_idx];
             let param_ctx = ctx.with_locals(&params[0..param_idx]);
@@ -223,16 +238,16 @@ impl MetaLogic {
 
     fn check_type_of_types_in_expr(&self, expr: &Expr, ctx: &Context<Param>) -> Result<(), String> {
         match expr {
-            Expr::Var(_) => {},
+            Expr::Var(_) => {}
             Expr::App(app) => {
                 self.check_type_of_types_in_expr(&app.param, ctx)?;
                 self.check_type_of_types_in_expr(&app.body, ctx)?;
-            },
+            }
             Expr::Lambda(lambda) => {
                 self.check_type_of_types_in_param(&lambda.param, ctx)?;
                 let body_ctx = ctx.with_local(&lambda.param);
                 self.check_type_of_types_in_expr(&lambda.body, &body_ctx)?;
-            },
+            }
         };
         Ok(())
     }
@@ -433,10 +448,9 @@ impl Expr {
         fun
     }
 
-    pub fn apply(fun: Expr, arg: Expr, ctx: &Context<Param>) -> Self {
+    pub fn apply(fun: Expr, arg: Expr, locals_start: VarIndex) -> Self {
         if let Expr::Lambda(lambda) = fun {
             let mut expr = lambda.body;
-            let locals_start = ctx.locals_start();
             expr.substitute(locals_start - 1, -1, &mut [arg], true);
             expr
         } else {
@@ -447,10 +461,10 @@ impl Expr {
     pub fn multi_apply(
         mut fun: Expr,
         args: SmallVec<[Expr; INLINE_PARAMS]>,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Self {
         for arg in args {
-            fun = Self::apply(fun, arg, ctx);
+            fun = Self::apply(fun, arg, locals_start);
         }
         fun
     }
@@ -466,16 +480,16 @@ impl Expr {
         body
     }
 
-    pub fn const_lambda(domain: Expr, mut body: Expr, ctx: &Context<Param>) -> Self {
+    pub fn const_lambda(domain: Expr, mut body: Expr, locals_start: VarIndex) -> Self {
         let param = Param {
             name: None,
             type_expr: domain,
         };
-        body.shift_vars(ctx.locals_start(), 0, -1);
+        body.shift_vars(locals_start, 0, -1);
         Self::lambda(param, body)
     }
 
-    pub fn parse(
+    fn parse(
         s: &str,
         ctx: &Context<Param>,
         lambda_handler: &dyn LambdaHandler,
@@ -489,7 +503,7 @@ impl Expr {
         parsing_context.parse()
     }
 
-    pub fn print(&self, ctx: &Context<Param>, lambda_handler: &dyn LambdaHandler) -> String {
+    fn print(&self, ctx: &Context<Param>, lambda_handler: &dyn LambdaHandler) -> String {
         let mut result = String::new();
         let mut printing_context = PrintingContext {
             output: &mut result,
@@ -500,6 +514,47 @@ impl Expr {
             .print_expr(&self, false, false, false, false)
             .unwrap();
         result
+    }
+
+    fn reduce(
+        &mut self,
+        metalogic: &MetaLogic,
+        locals_start: VarIndex,
+        convert_to_combinators: bool,
+    ) -> bool {
+        let mut reduced = false;
+
+        loop {
+            match self {
+                Expr::Var(_) => {}
+                Expr::App(app) => {
+                    reduced |= app
+                        .param
+                        .reduce(metalogic, locals_start, convert_to_combinators);
+                    reduced |= app
+                        .body
+                        .reduce(metalogic, locals_start, convert_to_combinators);
+                }
+                Expr::Lambda(lambda) => {
+                    reduced |= lambda.param.type_expr.reduce(
+                        metalogic,
+                        locals_start,
+                        convert_to_combinators,
+                    );
+                    reduced |=
+                        lambda
+                            .body
+                            .reduce(metalogic, locals_start - 1, convert_to_combinators);
+                }
+            }
+
+            if let Some(red) = self.reduce_head(metalogic, locals_start) {
+                *self = red;
+                reduced = true;
+            } else {
+                return reduced;
+            }
+        }
     }
 
     fn reduce_head(&self, metalogic: &MetaLogic, locals_start: VarIndex) -> Option<Expr> {
@@ -764,7 +819,7 @@ pub trait LambdaHandler {
         domain: Expr,
         prop: Expr,
         kind: DependentTypeCtorKind,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Result<Expr, String>;
 
     fn get_indep_type(
@@ -772,18 +827,18 @@ pub trait LambdaHandler {
         domain: Expr,
         codomain: Expr,
         kind: DependentTypeCtorKind,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Result<Expr, String> {
-        let prop = Expr::const_lambda(domain.clone(), codomain, ctx);
-        self.get_dep_type(domain, prop, kind, ctx)
+        let prop = Expr::const_lambda(domain.clone(), codomain, locals_start);
+        self.get_dep_type(domain, prop, kind, locals_start)
     }
 
-    fn get_prop_type(&self, domain: Expr, ctx: &Context<Param>) -> Result<Expr, String> {
+    fn get_prop_type(&self, domain: Expr, locals_start: VarIndex) -> Result<Expr, String> {
         self.get_indep_type(
             domain,
             self.get_universe_type()?,
             DependentTypeCtorKind::Pi,
-            ctx,
+            locals_start,
         )
     }
 
@@ -791,39 +846,38 @@ pub trait LambdaHandler {
         &self,
         domain: Expr,
         kind: DependentTypeCtorKind,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Result<(Param, Expr), String> {
-        let domain_in_prop_var_ctx = domain.with_shifted_vars(ctx.locals_start(), 0, -1);
+        let domain_in_prop_var_ctx = domain.with_shifted_vars(locals_start, 0, -1);
         let prop_param = Param {
             name: None,
-            type_expr: self.get_prop_type(domain, ctx)?,
+            type_expr: self.get_prop_type(domain, locals_start)?,
         };
-        let prop_var_ctx = ctx.with_local(&prop_param);
         let prop_var = Expr::var(-1);
-        let dep_type = self.get_dep_type(domain_in_prop_var_ctx, prop_var, kind, &prop_var_ctx)?;
+        let dep_type =
+            self.get_dep_type(domain_in_prop_var_ctx, prop_var, kind, locals_start - 1)?;
         Ok((prop_param, dep_type))
     }
 
     fn get_generic_dep_type(
         &self,
         kind: DependentTypeCtorKind,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Result<(Param, Param, Expr), String> {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
         };
-        let domain_var_ctx = ctx.with_local(&domain_param);
         let domain_var = Expr::var(-1);
         let (prop_param, dep_type) =
-            self.get_semi_generic_dep_type(domain_var, kind, &domain_var_ctx)?;
+            self.get_semi_generic_dep_type(domain_var, kind, locals_start - 1)?;
         Ok((domain_param, prop_param, dep_type))
     }
 
     fn get_generic_indep_type(
         &self,
         kind: DependentTypeCtorKind,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Result<(Param, Param, Expr), String> {
         let domain_param = Param {
             name: None,
@@ -833,13 +887,28 @@ pub trait LambdaHandler {
             name: None,
             type_expr: self.get_universe_type()?,
         };
-        let domain_var_ctx = ctx.with_local(&domain_param);
-        let codomain_var_ctx = domain_var_ctx.with_local(&codomain_param);
         let domain_var = Expr::var(-2);
         let codomain_var = Expr::var(-1);
-        let indep_type = self.get_indep_type(domain_var, codomain_var, kind, &codomain_var_ctx)?;
+        let indep_type = self.get_indep_type(domain_var, codomain_var, kind, locals_start - 2)?;
         Ok((domain_param, codomain_param, indep_type))
     }
+
+    fn get_id_cmb(&self, domain: Expr, locals_start: VarIndex) -> Result<Expr, String>;
+
+    fn get_const_cmb(
+        &self,
+        domain: Expr,
+        codomain: Expr,
+        locals_start: VarIndex,
+    ) -> Result<Expr, String>;
+
+    fn get_subst_cmb(
+        &self,
+        domain: Expr,
+        prop1: Expr,
+        prop2: Expr,
+        locals_start: VarIndex,
+    ) -> Result<Expr, String>;
 }
 
 struct ParsingContext<'a, 'b, 'c, 'd: 'c> {
@@ -857,7 +926,7 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
                 expr,
                 codomain,
                 DependentTypeCtorKind::Pi,
-                self.context,
+                self.context.locals_start(),
             )?;
         }
         Ok(expr)
@@ -871,7 +940,7 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
                 expr,
                 right,
                 DependentTypeCtorKind::Sigma,
-                self.context,
+                self.context.locals_start(),
             )?;
         }
         Ok(expr)
@@ -955,7 +1024,7 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
 
     fn parse_dep_type(&mut self, kind: DependentTypeCtorKind) -> Result<Expr, String> {
         let (mut params, body) = self.parse_lambda()?;
-        self.create_multi_dep_type(&mut params, body, kind, self.context)
+        self.create_multi_dep_type(&mut params, body, kind, self.context.locals_start())
     }
 
     fn create_multi_dep_type(
@@ -963,14 +1032,14 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
         params: &mut [Param],
         body: Expr,
         kind: DependentTypeCtorKind,
-        ctx: &Context<Param>,
+        locals_start: VarIndex,
     ) -> Result<Expr, String> {
         if let Some((param, rest_params)) = params.split_first_mut() {
-            let rest_ctx = ctx.with_local(param);
-            let rest = self.create_multi_dep_type(rest_params, body, kind, &rest_ctx)?;
+            let rest = self.create_multi_dep_type(rest_params, body, kind, locals_start - 1)?;
             let domain = param.type_expr.clone();
             let prop = Expr::lambda(std::mem::take(param), rest);
-            self.lambda_handler.get_dep_type(domain, prop, kind, ctx)
+            self.lambda_handler
+                .get_dep_type(domain, prop, kind, locals_start)
         } else {
             Ok(body)
         }
@@ -1069,15 +1138,17 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         parens_for_prefix: bool,
         parens_for_infix: bool,
     ) -> Result<bool, fmt::Error> {
+        let locals_start = self.context.locals_start();
+
         if let Ok((domain_param, codomain_param, generic_indep_type)) = self
             .lambda_handler
-            .get_generic_indep_type(kind, self.context)
+            .get_generic_indep_type(kind, locals_start)
         {
             if let Some(arg_vec) = expr.match_expr(
                 &None,
                 &[domain_param, codomain_param],
                 &generic_indep_type,
-                self.context.locals_start(),
+                locals_start,
             ) {
                 let domain = &arg_vec[0];
                 let codomain = &arg_vec[1];
@@ -1103,13 +1174,13 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         }
 
         if let Ok((domain_param, prop_param, generic_dep_type)) =
-            self.lambda_handler.get_generic_dep_type(kind, self.context)
+            self.lambda_handler.get_generic_dep_type(kind, locals_start)
         {
             if let Some(arg_vec) = expr.match_expr(
                 &None,
                 &[domain_param, prop_param],
                 &generic_dep_type,
-                self.context.locals_start(),
+                locals_start,
             ) {
                 if let Expr::Lambda(lambda) = &arg_vec[1] {
                     if parens_for_prefix {

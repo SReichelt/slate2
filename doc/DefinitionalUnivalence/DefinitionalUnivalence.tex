@@ -180,7 +180,7 @@ essentially the introduction rules for $\Pi$ types, as primitive constants with 
 
   \item $\constFun_{AB} : B \to [A \to B]$ for all types $A$ and $B.$
 
-  \item $\displaystyle \revSubstFun_{PQ} : \left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]$\\[1ex]
+  \item $\displaystyle \revSubstFun_{PQ} : \left[\prod_{a : A}\,\prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)}\,\prod_{a : A} Q(a,f(a))$\\[1ex]
   for $A : \U_l,$ $P : A \to \U_m,$ and $Q : \prod_{a : A} [P(a) \to \U_n].$
 
   $\idFun,$ $\constFun,$ and $\revSubstFun$ define how to interpret function definitions of the form

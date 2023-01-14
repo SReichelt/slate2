@@ -13,9 +13,25 @@ pub fn get_mltt() -> MetaLogic {
             },
             TypeInit {
                 ctor: ("Pi", "Π A : U. ((A → U) → U)"),
-                intro: &[],
+                intro: &[
+                    ("id", "Π A : U. (A → A)"),
+                    ("const", "Π A B : U. (B → (A → B))"),
+                    ("subst", "Π A : U. Π P : A → U. Π Q : (Π a : A. (P a → U)). ((Π a : A. Pi (P a) (Q a)) → Π f : Pi A P. Π a : A. Q a (f a))"),
+                ],
                 elim: &[],
-                red: &[],
+                red: &[
+                    (&[("A", "U"), ("a", "A")], "id A a", "a"),
+                    (
+                        &[("A", "U"), ("B", "U"), ("a", "A"), ("b", "B")],
+                        "const A B b a",
+                        "b",
+                    ),
+                    (
+                        &[("A", "U"), ("P", "A → U"), ("Q", "Π a : A. (P a → U)"), ("g", "Π a : A. Pi (P a) (Q a)"), ("f", "Pi A P"), ("a", "A")],
+                        "subst A P Q g f a",
+                        "g a (f a)",
+                    ),
+                ],
             },
             TypeInit {
                 ctor: ("Sigma", "Π A : U. ((A → U) → U)"),
@@ -79,6 +95,9 @@ struct MLTTLambdaHandler {
     u_idx: VarIndex,
     pi_idx: VarIndex,
     sigma_idx: VarIndex,
+    id_idx: VarIndex,
+    const_idx: VarIndex,
+    subst_idx: VarIndex,
 }
 
 impl MLTTLambdaHandler {
@@ -87,6 +106,9 @@ impl MLTTLambdaHandler {
             u_idx: ctx.get_var_index("U").unwrap(),
             pi_idx: ctx.get_var_index("Pi").unwrap(),
             sigma_idx: ctx.get_var_index("Sigma").unwrap(),
+            id_idx: ctx.get_var_index("id").unwrap(),
+            const_idx: ctx.get_var_index("const").unwrap(),
+            subst_idx: ctx.get_var_index("subst").unwrap(),
         }
     }
 }
@@ -101,13 +123,37 @@ impl LambdaHandler for MLTTLambdaHandler {
         domain: Expr,
         prop: Expr,
         kind: DependentTypeCtorKind,
-        _: &Context<Param>,
+        _: VarIndex,
     ) -> Result<Expr, String> {
         let idx = match kind {
             DependentTypeCtorKind::Pi => self.pi_idx,
             DependentTypeCtorKind::Sigma => self.sigma_idx,
         };
         Ok(Expr::multi_app(Expr::var(idx), smallvec![domain, prop]))
+    }
+
+    fn get_id_cmb(&self, domain: Expr, _: VarIndex) -> Result<Expr, String> {
+        Ok(Expr::app(Expr::var(self.id_idx), domain))
+    }
+
+    fn get_const_cmb(&self, domain: Expr, codomain: Expr, _: VarIndex) -> Result<Expr, String> {
+        Ok(Expr::multi_app(
+            Expr::var(self.const_idx),
+            smallvec![domain, codomain],
+        ))
+    }
+
+    fn get_subst_cmb(
+        &self,
+        domain: Expr,
+        prop1: Expr,
+        prop2: Expr,
+        _: VarIndex,
+    ) -> Result<Expr, String> {
+        Ok(Expr::multi_app(
+            Expr::var(self.subst_idx),
+            smallvec![domain, prop1, prop2],
+        ))
     }
 }
 
@@ -166,6 +212,29 @@ mod tests {
             mltt.print_expr(&pair_fun_type, &root_ctx),
             "Π A : U. Π B : U. (A → B → (A × B))"
         );
+
+        let mut pair_fst_fun = mltt
+            .parse_expr(
+                "λ A B : U. λ a : A. λ b : B. pair_fst A B (pair A B a b)",
+                &root_ctx,
+            )
+            .unwrap();
+        let pair_fst_fun_type = mltt.get_expr_type(&pair_fst_fun, &root_ctx).unwrap();
+        assert_eq!(
+            mltt.print_expr(&pair_fst_fun_type, &root_ctx),
+            "Π A : U. Π B : U. (A → B → A)"
+        );
+        let pair_fst_fun_reduced = mltt.reduce_expr(&mut pair_fst_fun, &root_ctx, false);
+        assert!(pair_fst_fun_reduced);
+        assert_eq!(
+            mltt.print_expr(&pair_fst_fun, &root_ctx),
+            "λ A : U. λ B : U. λ a : A. λ b : B. a"
+        );
+
+        let mut pi_type_red = pi.type_expr.clone();
+        let pi_type_reduced = mltt.reduce_expr(&mut pi_type_red, &root_ctx, true);
+        //assert!(pi_type_reduced);
+        //assert_eq!(mltt.print_expr(&pi_type_red, &root_ctx), "todo");
     }
 
     #[test]
