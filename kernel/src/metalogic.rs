@@ -1004,8 +1004,13 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
             let locals_start = self.context.locals_start();
             let mut shift: VarIndex = 0;
             for param_name in param_names {
+                let name = if param_name == "_" {
+                    None
+                } else {
+                    Some(Rc::new(param_name))
+                };
                 params.push(Param {
-                    name: Some(Rc::new(param_name)),
+                    name,
                     type_expr: param_type.with_shifted_vars(locals_start, 0, shift),
                 });
                 shift -= 1;
