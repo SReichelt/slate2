@@ -8,7 +8,8 @@ pub trait NamedObject {
 
 pub trait VarAccessor<ParamType: NamedObject> {
     fn get_var(&self, idx: VarIndex) -> &ParamType;
-    fn get_var_index(&self, name: &str) -> Option<VarIndex>;
+    fn get_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex>;
+    fn get_name_occurrence(&self, idx: VarIndex, param: &ParamType) -> usize;
 }
 
 impl<ParamType: NamedObject> VarAccessor<ParamType> for [ParamType] {
@@ -16,15 +17,34 @@ impl<ParamType: NamedObject> VarAccessor<ParamType> for [ParamType] {
         &self[idx as usize]
     }
 
-    fn get_var_index(&self, name: &str) -> Option<VarIndex> {
+    fn get_var_index(&self, name: &str, mut occurrence: usize) -> Option<VarIndex> {
         let mut idx: VarIndex = self.len() as VarIndex;
         for param in self.iter().rev() {
             idx -= 1;
             if param.get_name() == Some(name) {
-                return Some(idx);
+                if occurrence == 0 {
+                    return Some(idx);
+                }
+                occurrence -= 1;
             }
         }
         None
+    }
+
+    fn get_name_occurrence(&self, mut idx: VarIndex, idx_param: &ParamType) -> usize {
+        let name = idx_param.get_name();
+        let mut occurrence = 0;
+        idx -= self.len() as VarIndex;
+        for param in self.iter().rev() {
+            idx += 1;
+            if idx == 0 {
+                return occurrence;
+            }
+            if param.get_name() == name {
+                occurrence += 1;
+            }
+        }
+        panic!("invalid DeBruijn level");
     }
 }
 
@@ -33,8 +53,12 @@ impl<ParamType: NamedObject> VarAccessor<ParamType> for Vec<ParamType> {
         self.as_slice().get_var(idx)
     }
 
-    fn get_var_index(&self, name: &str) -> Option<VarIndex> {
-        self.as_slice().get_var_index(name)
+    fn get_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex> {
+        self.as_slice().get_var_index(name, occurrence)
+    }
+
+    fn get_name_occurrence(&self, idx: VarIndex, idx_param: &ParamType) -> usize {
+        self.as_slice().get_name_occurrence(idx, idx_param)
     }
 }
 
@@ -45,8 +69,12 @@ impl<ParamType: NamedObject, const LEN: usize> VarAccessor<ParamType>
         self.as_slice().get_var(idx)
     }
 
-    fn get_var_index(&self, name: &str) -> Option<VarIndex> {
-        self.as_slice().get_var_index(name)
+    fn get_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex> {
+        self.as_slice().get_var_index(name, occurrence)
+    }
+
+    fn get_name_occurrence(&self, idx: VarIndex, idx_param: &ParamType) -> usize {
+        self.as_slice().get_name_occurrence(idx, idx_param)
     }
 }
 
@@ -77,7 +105,7 @@ enum LocalContextStack<'a, 'b, ParamType: NamedObject> {
 pub struct Context<'a, 'b: 'a, 'c, ParamType: NamedObject> {
     globals: &'b dyn VarAccessor<ParamType>,
     locals: LocalContextStack<'a, 'c, ParamType>,
-    locals_count: usize,
+    locals_start: VarIndex,
 }
 
 impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
@@ -85,7 +113,7 @@ impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
         Context {
             globals,
             locals: LocalContextStack::Root,
-            locals_count: 0,
+            locals_start: 0,
         }
     }
 
@@ -100,7 +128,7 @@ impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
                 param,
                 parent: &self.locals,
             },
-            locals_count: self.locals_count + 1,
+            locals_start: self.locals_start - 1,
         }
     }
 
@@ -115,7 +143,7 @@ impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
                 params,
                 parent: &self.locals,
             },
-            locals_count: self.locals_count + params.len(),
+            locals_start: self.locals_start - (params.len() as VarIndex),
         }
     }
 
@@ -148,7 +176,7 @@ impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
         }
     }
 
-    pub fn get_var_index(&self, name: &str) -> Option<VarIndex> {
+    pub fn get_var_index(&self, name: &str, mut occurrence: usize) -> Option<VarIndex> {
         let mut locals = &self.locals;
         let mut idx: VarIndex = 0;
         loop {
@@ -157,7 +185,10 @@ impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
                 LocalContextStack::Param { param, parent } => {
                     idx -= 1;
                     if param.get_name() == Some(name) {
-                        return Some(idx);
+                        if occurrence == 0 {
+                            return Some(idx);
+                        }
+                        occurrence -= 1;
                     }
                     locals = parent;
                 }
@@ -165,18 +196,58 @@ impl<'a, 'b, 'c, ParamType: NamedObject> Context<'a, 'b, 'c, ParamType> {
                     for param in params.iter().rev() {
                         idx -= 1;
                         if param.get_name() == Some(name) {
-                            return Some(idx);
+                            if occurrence == 0 {
+                                return Some(idx);
+                            }
+                            occurrence -= 1;
                         }
                     }
                     locals = parent;
                 }
             }
         }
-        self.globals.get_var_index(name)
+        self.globals.get_var_index(name, occurrence)
+    }
+
+    pub fn get_name_occurrence(&self, mut idx: VarIndex, idx_param: &ParamType) -> usize {
+        if idx < 0 {
+            let name = idx_param.get_name();
+            let mut occurrence = 0;
+            let mut locals = &self.locals;
+            loop {
+                match locals {
+                    LocalContextStack::Root => panic!("invalid De Bruijn index"),
+                    LocalContextStack::Param { param, parent } => {
+                        idx += 1;
+                        if idx == 0 {
+                            return occurrence;
+                        }
+                        if param.get_name() == name {
+                            occurrence += 1;
+                        }
+                        locals = parent;
+                    }
+                    LocalContextStack::Params { params, parent } => {
+                        for param in params.iter().rev() {
+                            idx += 1;
+                            if idx == 0 {
+                                return occurrence;
+                            }
+                            if param.get_name() == name {
+                                occurrence += 1;
+                            }
+                        }
+                        locals = parent;
+                    }
+                }
+            }
+        } else {
+            self.globals.get_name_occurrence(idx, idx_param)
+        }
     }
 
     pub fn locals_start(&self) -> VarIndex {
-        -(self.locals_count as VarIndex)
+        self.locals_start
     }
 
     pub fn shifted_to_context<T: ContextObject>(&self, obj: &T, var_idx: VarIndex) -> T {

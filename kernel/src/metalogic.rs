@@ -78,7 +78,7 @@ impl MetaLogic {
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
         let ctx = self.get_root_context();
-        let var_idx = ctx.get_var_index(name)?;
+        let var_idx = ctx.get_var_index(name, 0)?;
         Some(ctx.get_var(var_idx))
     }
 
@@ -974,8 +974,8 @@ impl<'a, 'b, 'c, 'd> ParsingContext<'a, 'b, 'c, 'd> {
         } else if self.input.try_read_char('Σ') {
             let expr = self.parse_dep_type(DependentTypeCtorKind::Sigma)?;
             Ok(Some(expr))
-        } else if let Some(name) = self.input.try_read_name() {
-            if let Some(var_idx) = self.context.get_var_index(name) {
+        } else if let Some((name, occurrence)) = self.input.try_read_name_with_occurrence() {
+            if let Some(var_idx) = self.context.get_var_index(name, occurrence) {
                 Ok(Some(Expr::var(var_idx)))
             } else {
                 let msg = format!("variable '{name}' not found");
@@ -1084,7 +1084,14 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         }
 
         match expr {
-            Expr::Var(Var(idx)) => self.context.get_var(*idx).print_name(self.output)?,
+            Expr::Var(Var(idx)) => {
+                let param = self.context.get_var(*idx);
+                param.print_name(self.output)?;
+                let occurrence = self.context.get_name_occurrence(*idx, param);
+                if occurrence != 0 {
+                    self.output.write_fmt(format_args!("@{occurrence}"))?;
+                }
+            }
             Expr::App(app) => {
                 if parens_for_app {
                     self.output.write_char('(')?;

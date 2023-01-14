@@ -103,12 +103,12 @@ struct MLTTLambdaHandler {
 impl MLTTLambdaHandler {
     fn new(ctx: &Context<Param>) -> Self {
         MLTTLambdaHandler {
-            u_idx: ctx.get_var_index("U").unwrap(),
-            pi_idx: ctx.get_var_index("Pi").unwrap(),
-            sigma_idx: ctx.get_var_index("Sigma").unwrap(),
-            id_idx: ctx.get_var_index("id").unwrap(),
-            const_idx: ctx.get_var_index("const").unwrap(),
-            subst_idx: ctx.get_var_index("subst").unwrap(),
+            u_idx: ctx.get_var_index("U", 0).unwrap(),
+            pi_idx: ctx.get_var_index("Pi", 0).unwrap(),
+            sigma_idx: ctx.get_var_index("Sigma", 0).unwrap(),
+            id_idx: ctx.get_var_index("id", 0).unwrap(),
+            const_idx: ctx.get_var_index("const", 0).unwrap(),
+            subst_idx: ctx.get_var_index("subst", 0).unwrap(),
         }
     }
 }
@@ -184,6 +184,20 @@ mod tests {
         );
         let const_ctor_type = mltt.get_expr_type(&const_ctor, &root_ctx).unwrap();
         assert_eq!(mltt.print_expr(&const_ctor_type, &root_ctx), "U → U → U");
+
+        let const_ctor_occ = mltt.parse_expr("λ A A : U. A@1", &root_ctx).unwrap();
+        assert_eq!(
+            mltt.print_expr(&const_ctor_occ, &root_ctx),
+            "λ A : U. λ A : U. A@1"
+        );
+        assert_eq!(const_ctor_occ, const_ctor);
+
+        let const_id_ctor_occ = mltt.parse_expr("λ A A : U. A", &root_ctx).unwrap();
+        assert_eq!(
+            mltt.print_expr(&const_id_ctor_occ, &root_ctx),
+            "λ A : U. λ A : U. A"
+        );
+        assert_ne!(const_id_ctor_occ, const_ctor);
 
         let app_u = mltt.parse_expr("λ F : U → U. F U", &root_ctx).unwrap();
         let app_u_type = mltt.get_expr_type(&app_u, &root_ctx).unwrap();

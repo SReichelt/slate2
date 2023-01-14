@@ -44,4 +44,28 @@ impl<'a> ParserInput<'a> {
             Some(&s[..end])
         }
     }
+
+    pub fn try_read_name_with_occurrence(&mut self) -> Option<(&str, usize)> {
+        let s = self.0;
+        let end = s
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(s.len());
+        if end == 0 {
+            None
+        } else {
+            let mut rest = &s[end..];
+            let mut occurrence = 0;
+            if let Some(n) = rest.strip_prefix("@") {
+                let n_end = n.find(|c: char| !c.is_ascii_digit()).unwrap_or(n.len());
+                if n_end == 0 {
+                    return None;
+                } else {
+                    rest = &n[n_end..];
+                    occurrence = usize::from_str_radix(&n[..n_end], 10).unwrap();
+                }
+            }
+            self.0 = rest;
+            Some((&s[..end], occurrence))
+        }
+    }
 }
