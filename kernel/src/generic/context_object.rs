@@ -63,6 +63,16 @@ pub trait ContextObject: Clone {
         }
     }
 
+    fn try_shift_to_supercontext<Ctx: Context>(&mut self, ctx: &Ctx, superctx: &Ctx) -> bool {
+        if self.valid_in_superctx(ctx, superctx) {
+            let shift = superctx.subcontext_shift(ctx);
+            self.shift_impl(ctx.locals_start(), shift, -shift);
+            true
+        } else {
+            false
+        }
+    }
+
     /// For each variable in the range from `start` to `start + ref_counts.len()`, counts how often
     /// it is referenced, by increasing the corresponding item in `ref_counts`.
     fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]);
@@ -71,8 +81,8 @@ pub trait ContextObject: Clone {
     fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool;
 
     /// Checks if any of the topmost `len` local variables are referenced.
-    fn has_refs(&self, len: usize) -> bool {
-        self.has_refs_impl(-(len as VarIndex), 0)
+    fn valid_in_superctx<Ctx: Context>(&mut self, ctx: &Ctx, superctx: &Ctx) -> bool {
+        !self.has_refs_impl(superctx.subcontext_shift(ctx), 0)
     }
 }
 

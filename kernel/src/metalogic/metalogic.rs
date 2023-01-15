@@ -88,7 +88,11 @@ impl MetaLogic {
         expr.print(&self.get_root_context())
     }
 
-    pub fn reduce_expr(&self, expr: &mut Expr, convert_to_combinators: bool) -> bool {
+    pub fn reduce_expr(
+        &self,
+        expr: &mut Expr,
+        convert_to_combinators: bool,
+    ) -> Result<bool, String> {
         expr.reduce(&self.get_root_context(), convert_to_combinators)
     }
 
@@ -128,7 +132,7 @@ impl MetaLogic {
                 let source_type_str = source_type.print(rule_ctx);
                 let target_str = rule.body.target.print(rule_ctx);
                 let target_type_str = target_type.print(rule_ctx);
-                Err(format!("type conflict in reduction rule between {source_str} : {source_type_str} and {target_str} : {target_type_str}"))
+                Err(format!("type conflict in reduction rule between [{source_str} : {source_type_str}] and [{target_str} : {target_type_str}]"))
             }
         })
     }
@@ -170,7 +174,7 @@ impl MetaLogic {
             let type_str = param.type_expr.print(ctx);
             let type_type_str = type_type.print(ctx);
             let cmp_type_type_str = cmp_type_type.print(ctx);
-            Err(format!("parameter type {type_str} : {type_type_str} must have type {cmp_type_type_str} instead"))
+            Err(format!("parameter type [{type_str} : {type_type_str}] must have type [{cmp_type_type_str}] instead"))
         }
     }
 

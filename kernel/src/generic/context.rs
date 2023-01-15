@@ -217,6 +217,9 @@ impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> ParamContext<ParamTy
             },
             locals_start: self.locals_start - 1,
         };
+
+        // Warning: unsafe code in this module depends on passing `local_ctx` as a reference.
+        // If `f` received ownership, it could access `param` after returning.
         f(&local_ctx)
     }
 
@@ -226,6 +229,7 @@ impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> ParamContext<ParamTy
             // A little pedantic, but the unsafe block relies on it.
             panic!("too many params");
         }
+
         let local_ctx = ParamContextImpl {
             globals: self.globals,
             locals: LocalContextStack::Params {
@@ -235,6 +239,9 @@ impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> ParamContext<ParamTy
             },
             locals_start: self.locals_start - (params_len as VarIndex),
         };
+
+        // Warning: unsafe code in this module depends on passing `local_ctx` as a reference.
+        // If `f` received ownership, it could access `params` after returning.
         f(&local_ctx)
     }
 }

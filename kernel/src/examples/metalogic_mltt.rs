@@ -167,103 +167,132 @@ impl LambdaHandler for MLTTLambdaHandler {
 
 #[cfg(test)]
 mod tests {
+    use crate::generic::context_object::ContextObjectWithCmp;
+
     use super::*;
 
     #[test]
-    fn test_basics() {
+    fn test_basics() -> Result<(), String> {
         let mltt = get_mltt();
 
         let pi = mltt.get_constant("Pi").unwrap();
         assert_eq!(mltt.print_expr(&pi.type_expr), "Π A : U. ((A → U) → U)");
 
-        let id_ctor = mltt.parse_expr("λ A : U. A").unwrap();
+        let mut id_ctor = mltt.parse_expr("λ A : U. A")?;
         assert_eq!(mltt.print_expr(&id_ctor), "λ A : U. A");
-        let id_ctor_type = mltt.get_expr_type(&id_ctor).unwrap();
+        let id_ctor_type = mltt.get_expr_type(&id_ctor)?;
         assert_eq!(mltt.print_expr(&id_ctor_type), "U → U");
 
-        let const_ctor = mltt.parse_expr("λ A B : U. A").unwrap();
+        let mut const_ctor = mltt.parse_expr("λ A B : U. A")?;
         assert_eq!(mltt.print_expr(&const_ctor), "λ A : U. λ B : U. A");
-        let const_ctor_type = mltt.get_expr_type(&const_ctor).unwrap();
+        let const_ctor_type = mltt.get_expr_type(&const_ctor)?;
         assert_eq!(mltt.print_expr(&const_ctor_type), "U → U → U");
 
-        let const_ctor_occ = mltt.parse_expr("λ A A : U. A@1").unwrap();
+        let const_ctor_occ = mltt.parse_expr("λ A A : U. A@1")?;
         assert_eq!(mltt.print_expr(&const_ctor_occ), "λ A : U. λ A : U. A@1");
         assert_eq!(const_ctor_occ, const_ctor);
 
-        let const_id_ctor_occ = mltt.parse_expr("λ A A : U. A").unwrap();
+        let const_id_ctor_occ = mltt.parse_expr("λ A A : U. A")?;
         assert_eq!(mltt.print_expr(&const_id_ctor_occ), "λ A : U. λ A : U. A");
         assert_ne!(const_id_ctor_occ, const_ctor);
 
-        let app_u = mltt.parse_expr("λ F : U → U. F U").unwrap();
-        let app_u_type = mltt.get_expr_type(&app_u).unwrap();
+        let mut app_u = mltt.parse_expr("λ F : U → U. F U")?;
+        let app_u_type = mltt.get_expr_type(&app_u)?;
         assert_eq!(mltt.print_expr(&app_u_type), "(U → U) → U");
 
-        let id_fun = mltt.parse_expr("λ A : U. λ a : A. a").unwrap();
-        let id_fun_type = mltt.get_expr_type(&id_fun).unwrap();
+        let mut id_fun = mltt.parse_expr("λ A : U. λ a : A. a")?;
+        let id_fun_type = mltt.get_expr_type(&id_fun)?;
         assert_eq!(mltt.print_expr(&id_fun_type), "Π A : U. (A → A)");
 
-        let inner_const_fun = mltt.parse_expr("λ A : U. λ a b : A. a").unwrap();
+        let inner_const_fun = mltt.parse_expr("λ A : U. λ a b : A. a")?;
         assert_eq!(
             mltt.print_expr(&inner_const_fun),
             "λ A : U. λ a : A. λ b : A. a"
         );
-        let inner_const_fun_type = mltt.get_expr_type(&inner_const_fun).unwrap();
+        let inner_const_fun_type = mltt.get_expr_type(&inner_const_fun)?;
         assert_eq!(
             mltt.print_expr(&inner_const_fun_type),
             "Π A : U. (A → A → A)"
         );
 
-        let pair_fun = mltt
-            .parse_expr("λ A B : U. λ a : A. λ b : B. pair A B a b")
-            .unwrap();
-        let pair_fun_type = mltt.get_expr_type(&pair_fun).unwrap();
+        let pair_fun = mltt.parse_expr("λ A B : U. λ a : A. λ b : B. pair A B a b")?;
+        let pair_fun_type = mltt.get_expr_type(&pair_fun)?;
         assert_eq!(
             mltt.print_expr(&pair_fun_type),
             "Π A : U. Π B : U. (A → B → (A × B))"
         );
 
-        let mut pair_fst_fun = mltt
-            .parse_expr("λ A B : U. λ a : A. λ b : B. pair_fst A B (pair A B a b)")
-            .unwrap();
-        let pair_fst_fun_type = mltt.get_expr_type(&pair_fst_fun).unwrap();
+        let mut pair_fst_fun =
+            mltt.parse_expr("λ A B : U. λ a : A. λ b : B. pair_fst A B (pair A B a b)")?;
+        let pair_fst_fun_type = mltt.get_expr_type(&pair_fst_fun)?;
         assert_eq!(
             mltt.print_expr(&pair_fst_fun_type),
             "Π A : U. Π B : U. (A → B → A)"
         );
-        let pair_fst_fun_reduced = mltt.reduce_expr(&mut pair_fst_fun, false);
+        let pair_fst_fun_reduced = mltt.reduce_expr(&mut pair_fst_fun, false)?;
         assert!(pair_fst_fun_reduced);
         assert_eq!(
             mltt.print_expr(&pair_fst_fun),
             "λ A : U. λ B : U. λ a : A. λ b : B. a"
         );
 
-        let mut pi_type_red = pi.type_expr.clone();
-        let pi_type_reduced = mltt.reduce_expr(&mut pi_type_red, true);
+        let id_ctor_reduced = mltt.reduce_expr(&mut id_ctor, true)?;
+        assert!(id_ctor_reduced);
+        assert_eq!(mltt.print_expr(&id_ctor), "id U");
+
+        let const_ctor_reduced = mltt.reduce_expr(&mut const_ctor, true)?;
+        assert!(const_ctor_reduced);
+        assert_eq!(mltt.print_expr(&const_ctor), "const U U");
+
+        let mut app_u_reduced = mltt.reduce_expr(&mut app_u, true)?;
+        assert!(app_u_reduced);
+        assert_eq!(mltt.print_expr(&app_u), "subst (Pi U (const U U U)) (const (Pi U (const U U U)) U U) (const (Pi U (const U U U)) (Pi U (const U U U)) (const U U U)) (id (Pi U (const U U U))) (const (Pi U (const U U U)) U U)");
+        app_u_reduced = mltt.reduce_expr(&mut app_u, true)?;
+        assert!(!app_u_reduced);
+        let app_u_red_type = mltt.get_expr_type(&app_u)?;
+        assert!(app_u_red_type.compare(&app_u_type, &mltt.get_root_context()));
+
+        let id_fun_reduced = mltt.reduce_expr(&mut id_fun, true)?;
+        assert!(id_fun_reduced);
+        assert_eq!(mltt.print_expr(&id_fun), "id");
+
+        //let mut pi_type = pi.type_expr.clone();
+        //let pi_type_reduced = mltt.reduce_expr(&mut pi_type, true)?;
+        //dbg!(mltt.print_expr(&pi_type));
+        //mltt.reduce_expr(&mut pi_type, true)?;
+        //dbg!(mltt.print_expr(&pi_type));
+        //mltt.reduce_expr(&mut pi_type, true)?;
+        //dbg!(mltt.print_expr(&pi_type));
+
         //assert!(pi_type_reduced);
-        //assert_eq!(mltt.print_expr(&pi_type_red), "todo");
+        //assert_eq!(mltt.print_expr(&pi_type), "todo");
+
+        Ok(())
     }
 
     #[test]
-    fn test_type_errors() {
+    fn test_type_errors() -> Result<(), String> {
         let mltt = get_mltt();
 
-        let non_fun_app = mltt.parse_expr("λ A : U. A A").unwrap();
+        let non_fun_app = mltt.parse_expr("λ A : U. A A")?;
         assert!(mltt.get_expr_type(&non_fun_app).is_err());
 
-        let app_mismatch = mltt.parse_expr("λ F : U → U. F F").unwrap();
+        let app_mismatch = mltt.parse_expr("λ F : U → U. F F")?;
         assert!(mltt.get_expr_type(&app_mismatch).is_err());
+
+        Ok(())
     }
 
     #[test]
-    fn test_type_of_types() {
+    fn test_type_of_types() -> Result<(), Vec<String>> {
         let mltt = get_mltt();
-        mltt.check_type_of_types().unwrap();
+        mltt.check_type_of_types()
     }
 
     #[test]
-    fn test_reduction_rule_types() {
+    fn test_reduction_rule_types() -> Result<(), Vec<String>> {
         let mltt = get_mltt();
-        mltt.check_reduction_rule_types().unwrap();
+        mltt.check_reduction_rule_types()
     }
 
     // TODO: test that all declared types reduce uniquely (are confluent)

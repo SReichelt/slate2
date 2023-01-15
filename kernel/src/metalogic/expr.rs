@@ -19,9 +19,6 @@ pub enum Expr {
     Lambda(Box<LambdaExpr>),
 }
 
-pub type AppExpr = App<Expr, Expr>;
-pub type LambdaExpr = Lambda<Param, Expr>;
-
 impl Expr {
     pub fn var(idx: VarIndex) -> Self {
         Expr::Var(Var(idx))
@@ -41,25 +38,25 @@ impl Expr {
         fun
     }
 
-    pub fn apply(fun: Expr, arg: Expr, ctx: &impl Context) -> Self {
-        if let Expr::Lambda(lambda) = fun {
+    pub fn apply(self, arg: Expr, ctx: &impl Context) -> Self {
+        if let Expr::Lambda(lambda) = self {
             let mut expr = lambda.body;
             expr.substitute(&mut [arg], true, ctx);
             expr
         } else {
-            Self::app(fun, arg)
+            Self::app(self, arg)
         }
     }
 
     pub fn multi_apply(
-        mut fun: Expr,
+        mut self,
         args: SmallVec<[Expr; INLINE_PARAMS]>,
         ctx: &impl Context,
     ) -> Self {
         for arg in args {
-            fun = Self::apply(fun, arg, ctx);
+            self = Self::apply(self, arg, ctx);
         }
-        fun
+        self
     }
 
     pub fn lambda(param: Param, body: Expr) -> Self {
@@ -103,53 +100,69 @@ impl Expr {
         result
     }
 
-    pub fn reduce(&mut self, ctx: &MetaLogicContext, convert_to_combinators: bool) -> bool {
+    pub fn reduce(
+        &mut self,
+        ctx: &MetaLogicContext,
+        convert_to_combinators: bool,
+    ) -> Result<bool, String> {
         let mut reduced = false;
 
         loop {
             match self {
                 Expr::Var(_) => {}
                 Expr::App(app) => {
-                    reduced |= app.param.reduce(ctx, convert_to_combinators);
-                    reduced |= app.body.reduce(ctx, convert_to_combinators);
+                    reduced |= app.reduce(ctx, convert_to_combinators)?;
                 }
                 Expr::Lambda(lambda) => {
-                    reduced |= lambda.param.type_expr.reduce(ctx, convert_to_combinators);
-                    ctx.with_local(&lambda.param, |body_ctx| {
-                        reduced |= lambda.body.reduce(&body_ctx, convert_to_combinators);
-                    });
+                    reduced |= lambda.reduce(ctx, convert_to_combinators)?;
                 }
             }
 
-            if let Some(red) = self.reduce_head(ctx) {
+            if let Some(red) = self.reduce_head(ctx, convert_to_combinators) {
                 *self = red;
                 reduced = true;
             } else {
-                return reduced;
+                return Ok(reduced);
             }
         }
     }
 
-    fn reduce_head(&self, ctx: &MetaLogicContext) -> Option<Expr> {
-        let mut expr = self.reduce_head_once(ctx)?;
-        while let Some(expr_red) = expr.reduce_head_once(ctx) {
+    fn reduce_head(&self, ctx: &MetaLogicContext, convert_to_combinators: bool) -> Option<Expr> {
+        let mut expr = self.reduce_head_once(ctx, convert_to_combinators)?;
+        while let Some(expr_red) = expr.reduce_head_once(ctx, convert_to_combinators) {
             expr = expr_red
         }
         Some(expr)
     }
 
-    fn reduce_head_once(&self, ctx: &MetaLogicContext) -> Option<Expr> {
-        if let Expr::App(app) = self {
-            let mut fun = &app.param;
-            let fun_red_opt = fun.reduce_head(ctx);
-            if let Some(fun_red) = &fun_red_opt {
-                fun = fun_red;
+    fn reduce_head_once(
+        &self,
+        ctx: &MetaLogicContext,
+        convert_to_combinators: bool,
+    ) -> Option<Expr> {
+        match self {
+            Expr::Var(_) => {}
+            Expr::App(app) => {
+                let mut fun = &app.param;
+                let fun_red_opt = fun.reduce_head(ctx, false);
+                if let Some(fun_red) = &fun_red_opt {
+                    fun = fun_red;
+                }
+                if let Expr::Lambda(lambda) = fun {
+                    let mut expr = lambda.body.clone();
+                    let arg = app.body.clone();
+                    expr.substitute(&mut [arg], true, ctx);
+                    return Some(expr);
+                }
             }
-            if let Expr::Lambda(lambda) = fun {
-                let mut expr = lambda.body.clone();
-                let arg = app.body.clone();
-                expr.substitute(&mut [arg], true, ctx);
-                return Some(expr);
+            Expr::Lambda(lambda) => {
+                if convert_to_combinators {
+                    let mut lambda_clone = lambda.clone();
+                    lambda_clone.reduce(ctx, false).unwrap();
+                    if let Ok(expr) = lambda_clone.convert_to_combinator(ctx) {
+                        return Some(expr);
+                    }
+                }
             }
         }
 
@@ -197,35 +210,45 @@ impl Expr {
                 let arg = &app.body;
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.get_type(ctx)?;
-                let (prop_param, cmp_fun_type) =
-                    ctx.globals.lambda_handler.get_semi_generic_dep_type(
-                        arg_type,
-                        DependentTypeCtorKind::Pi,
-                        ctx.as_minimal(),
-                    )?;
-                if let Some(mut prop_vec) = fun_type.match_expr(&[prop_param], &cmp_fun_type, ctx) {
-                    let prop = prop_vec.pop().unwrap();
-                    Ok(Expr::apply(prop, arg.clone(), ctx))
+                if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
+                    Ok(prop.apply(arg.clone(), ctx))
                 } else {
                     let fun_str = fun.print(ctx);
                     let fun_type_str = fun_type.print(ctx);
                     let arg_str = arg.print(ctx);
                     let arg_type = arg.get_type(ctx)?;
                     let arg_type_str = arg_type.print(ctx);
-                    Err(format!("application type mismatch: {fun_str} : {fun_type_str} cannot be applied to {arg_str} : {arg_type_str}"))
+                    Err(format!("application type mismatch: [{fun_str} : {fun_type_str}] cannot be applied to [{arg_str} : {arg_type_str}]"))
                 }
             }
             Expr::Lambda(lambda) => {
                 let body_type =
                     ctx.with_local(&lambda.param, |body_ctx| lambda.body.get_type(body_ctx))?;
-                let body_type_lambda = Expr::lambda(lambda.param.clone(), body_type);
+                let prop = Expr::lambda(lambda.param.clone(), body_type);
                 ctx.globals.lambda_handler.get_dep_type(
                     lambda.param.type_expr.clone(),
-                    body_type_lambda,
+                    prop,
                     DependentTypeCtorKind::Pi,
                     ctx.as_minimal(),
                 )
             }
+        }
+    }
+
+    fn get_prop_from_fun_type(
+        &self,
+        arg_type: Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Option<Expr>, String> {
+        let (prop_param, cmp_fun_type) = ctx.globals.lambda_handler.get_semi_generic_dep_type(
+            arg_type,
+            DependentTypeCtorKind::Pi,
+            ctx.as_minimal(),
+        )?;
+        if let Some(mut prop_vec) = self.match_expr(&[prop_param], &cmp_fun_type, ctx) {
+            Ok(prop_vec.pop())
+        } else {
+            Ok(None)
         }
     }
 
@@ -250,7 +273,7 @@ impl Expr {
         }
     }
 
-    fn substitute_and_compare_impl_no_red<Ctx: ComparisonContext>(
+    fn substitute_and_shift_and_compare_impl_no_red<Ctx: ComparisonContext>(
         &self,
         ctx: &Ctx,
         args: &mut [Expr],
@@ -383,19 +406,39 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
 
         if let Some(metalogic_ctx) = ctx.as_opt_metalogic_context() {
             if let Some(target_metalogic_ctx) = target_subctx.as_opt_metalogic_context() {
-                let self_red_opt = self.reduce_head(metalogic_ctx);
-                let target_red_opt = target.reduce_head(target_metalogic_ctx);
+                dbg!(
+                    "reducing",
+                    self.print(metalogic_ctx),
+                    target.print(target_metalogic_ctx)
+                );
+                let self_red_opt = self.reduce_head(metalogic_ctx, true);
+                let target_red_opt = target.reduce_head(target_metalogic_ctx, true);
                 if self_red_opt.is_some() || target_red_opt.is_some() {
                     let self_red = self_red_opt.as_ref().unwrap_or(self);
                     let target_red = target_red_opt.as_ref().unwrap_or(target);
+                    dbg!(
+                        "reduced",
+                        self_red.print(metalogic_ctx),
+                        target_red.print(target_metalogic_ctx)
+                    );
                     if self_red.shift_and_compare_impl_no_red(
                         ctx,
                         orig_ctx,
                         target_red,
                         target_subctx,
                     ) {
+                        dbg!(
+                            "match",
+                            self_red.print(metalogic_ctx),
+                            target_red.print(target_metalogic_ctx)
+                        );
                         return true;
                     }
+                    dbg!(
+                        "no match",
+                        self_red.print(metalogic_ctx),
+                        target_red.print(target_metalogic_ctx)
+                    );
                 }
             }
         }
@@ -414,7 +457,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
         target: &Self,
         target_subctx: &Ctx,
     ) -> bool {
-        if self.substitute_and_compare_impl_no_red(
+        if self.substitute_and_shift_and_compare_impl_no_red(
             ctx,
             args,
             args_filled,
@@ -427,12 +470,12 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
 
         if let Some(metalogic_ctx) = ctx.as_opt_metalogic_context() {
             if let Some(target_metalogic_ctx) = target_subctx.as_opt_metalogic_context() {
-                let self_red_opt = self.reduce_head(metalogic_ctx);
-                let target_red_opt = target.reduce_head(target_metalogic_ctx);
+                let self_red_opt = self.reduce_head(metalogic_ctx, true);
+                let target_red_opt = target.reduce_head(target_metalogic_ctx, true);
                 if self_red_opt.is_some() || target_red_opt.is_some() {
                     let self_red = self_red_opt.as_ref().unwrap_or(self);
                     let target_red = target_red_opt.as_ref().unwrap_or(target);
-                    if self_red.substitute_and_compare_impl_no_red(
+                    if self_red.substitute_and_shift_and_compare_impl_no_red(
                         ctx,
                         args,
                         args_filled,
@@ -447,6 +490,104 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
         }
 
         false
+    }
+}
+
+pub type AppExpr = App<Expr, Expr>;
+
+impl AppExpr {
+    fn reduce(
+        &mut self,
+        ctx: &MetaLogicContext,
+        convert_to_combinators: bool,
+    ) -> Result<bool, String> {
+        let mut reduced = self.param.reduce(ctx, convert_to_combinators)?;
+        reduced |= self.body.reduce(ctx, convert_to_combinators)?;
+        Ok(reduced)
+    }
+}
+
+pub type LambdaExpr = Lambda<Param, Expr>;
+
+impl LambdaExpr {
+    fn reduce(
+        &mut self,
+        ctx: &MetaLogicContext,
+        convert_to_combinators: bool,
+    ) -> Result<bool, String> {
+        let mut reduced = self.param.type_expr.reduce(ctx, convert_to_combinators)?;
+        reduced |= ctx.with_local(&self.param, |body_ctx| {
+            self.body.reduce(&body_ctx, convert_to_combinators)
+        })?;
+        Ok(reduced)
+    }
+
+    fn convert_to_combinator(self, ctx: &MetaLogicContext) -> Result<Expr, String> {
+        Self::create_combinator(&self.param, self.body, ctx)
+    }
+
+    fn create_combinator(
+        param: &Param,
+        mut body: Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Expr, String> {
+        ctx.with_local(&param, |body_ctx| {
+            if body.try_shift_to_supercontext(body_ctx, ctx) {
+                let mut body_type = body.get_type(ctx)?;
+                body_type.reduce(ctx, true)?;
+                let cmb = ctx.globals.lambda_handler.get_const_cmb(
+                    param.type_expr.clone(),
+                    body_type,
+                    ctx.as_minimal(),
+                )?;
+                return Ok(Expr::app(cmb, body));
+            }
+
+            match body {
+                Expr::Var(Var(idx)) => {
+                    debug_assert_eq!(idx, -1); // Otherwise it was constant.
+                    ctx.globals
+                        .lambda_handler
+                        .get_id_cmb(param.type_expr.clone(), ctx.as_minimal())
+                }
+                Expr::App(app) => {
+                    let mut fun = app.param;
+                    let arg = app.body;
+                    if let Expr::Var(Var(-1)) = arg {
+                        // If the expression can be eta-reduced, do that instead of outputting a
+                        // combinator.
+                        if fun.try_shift_to_supercontext(body_ctx, ctx) {
+                            return Ok(fun);
+                        }
+                    }
+                    let fun_type = fun.get_type(body_ctx)?;
+                    let mut arg_type = arg.get_type(body_ctx)?;
+                    arg_type.reduce(body_ctx, true)?;
+                    if let Some(mut fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
+                        fun_prop.reduce(body_ctx, true)?;
+                        dbg!(arg_type.print(body_ctx));
+                        let prop1 = Self::create_combinator(param, arg_type, ctx)?;
+                        let prop2 = Self::create_combinator(param, fun_prop, ctx)?;
+                        let cmb = ctx.globals.lambda_handler.get_subst_cmb(
+                            param.type_expr.clone(),
+                            prop1,
+                            prop2,
+                            ctx.as_minimal(),
+                        )?;
+                        let fun_lambda = Self::create_combinator(param, fun, ctx)?;
+                        let arg_lambda = Self::create_combinator(param, arg, ctx)?;
+                        Ok(Expr::multi_app(cmb, smallvec![fun_lambda, arg_lambda]))
+                    } else {
+                        let fun_str = fun.print(body_ctx);
+                        let fun_type_str = fun_type.print(body_ctx);
+                        let arg_str = arg.print(body_ctx);
+                        let arg_type_str = arg_type.print(body_ctx);
+                        Err(format!("application type mismatch: [{fun_str} : {fun_type_str}] cannot be applied to [{arg_str} : {arg_type_str}]"))
+                    }
+                }
+                Expr::Lambda(_) => Err(format!("cannot convert lambda in body to combinator")),
+            }
+        })
     }
 }
 
