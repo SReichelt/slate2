@@ -27,7 +27,7 @@ use std::fmt::Debug;
 
 use smallvec::{smallvec, SmallVec};
 
-use crate::generic::{context_object::*, expr::*};
+use crate::generic::{context::*, context_object::*, expr::*};
 
 #[derive(Clone, PartialEq)]
 pub enum InnerExpr {
@@ -76,35 +76,35 @@ impl Debug for InnerExpr {
 }
 
 impl ContextObject for InnerExpr {
-    fn shift_vars(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
         match self {
-            InnerExpr::Lambda(lambda) => lambda.shift_vars(start, end, shift),
-            InnerExpr::VarApp(var_app) => var_app.shift_vars(start, end, shift),
+            InnerExpr::Lambda(lambda) => lambda.shift_impl(start, end, shift),
+            InnerExpr::VarApp(var_app) => var_app.shift_impl(start, end, shift),
         }
     }
 
-    fn with_shifted_vars(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         match self {
             InnerExpr::Lambda(lambda) => {
-                InnerExpr::Lambda(Box::new(lambda.with_shifted_vars(start, end, shift)))
+                InnerExpr::Lambda(Box::new(lambda.shifted_impl(start, end, shift)))
             }
             InnerExpr::VarApp(var_app) => {
-                InnerExpr::VarApp(var_app.with_shifted_vars(start, end, shift))
+                InnerExpr::VarApp(var_app.shifted_impl(start, end, shift))
             }
         }
     }
 
-    fn count_refs(&self, start: VarIndex, ref_counts: &mut [usize]) {
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
         match self {
-            InnerExpr::Lambda(lambda) => lambda.count_refs(start, ref_counts),
-            InnerExpr::VarApp(var_app) => var_app.count_refs(start, ref_counts),
+            InnerExpr::Lambda(lambda) => lambda.count_refs_impl(start, ref_counts),
+            InnerExpr::VarApp(var_app) => var_app.count_refs_impl(start, ref_counts),
         }
     }
 
-    fn has_refs(&self, start: VarIndex, end: VarIndex) -> bool {
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
         match self {
-            InnerExpr::Lambda(lambda) => lambda.has_refs(start, end),
-            InnerExpr::VarApp(var_app) => var_app.has_refs(start, end),
+            InnerExpr::Lambda(lambda) => lambda.has_refs_impl(start, end),
+            InnerExpr::VarApp(var_app) => var_app.has_refs_impl(start, end),
         }
     }
 }
@@ -123,7 +123,7 @@ impl ContextObjectWithSubst<InnerExpr> for InnerExpr {
             }
             InnerExpr::VarApp(var_app) => {
                 if let Some(subst_arg) =
-                    var_app.get_subst_arg(shift_start, args_start, args, ref_counts)
+                    var_app.get_subst_arg_impl(shift_start, args_start, args, ref_counts)
                 {
                     *self = subst_arg;
                 } else {
@@ -167,31 +167,31 @@ impl Debug for VarApp {
 }
 
 impl ContextObject for VarApp {
-    fn shift_vars(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
         match self {
-            VarApp::Var(var) => var.shift_vars(start, end, shift),
-            VarApp::App(app) => app.shift_vars(start, end, shift),
+            VarApp::Var(var) => var.shift_impl(start, end, shift),
+            VarApp::App(app) => app.shift_impl(start, end, shift),
         }
     }
 
-    fn with_shifted_vars(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         match self {
-            VarApp::Var(var) => VarApp::Var(var.with_shifted_vars(start, end, shift)),
-            VarApp::App(app) => VarApp::App(Box::new(app.with_shifted_vars(start, end, shift))),
+            VarApp::Var(var) => VarApp::Var(var.shifted_impl(start, end, shift)),
+            VarApp::App(app) => VarApp::App(Box::new(app.shifted_impl(start, end, shift))),
         }
     }
 
-    fn count_refs(&self, start: VarIndex, ref_counts: &mut [usize]) {
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
         match self {
-            VarApp::Var(var) => var.count_refs(start, ref_counts),
-            VarApp::App(app) => app.count_refs(start, ref_counts),
+            VarApp::Var(var) => var.count_refs_impl(start, ref_counts),
+            VarApp::App(app) => app.count_refs_impl(start, ref_counts),
         }
     }
 
-    fn has_refs(&self, start: VarIndex, end: VarIndex) -> bool {
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
         match self {
-            VarApp::Var(var) => var.has_refs(start, end),
-            VarApp::App(app) => app.has_refs(start, end),
+            VarApp::Var(var) => var.has_refs_impl(start, end),
+            VarApp::App(app) => app.has_refs_impl(start, end),
         }
     }
 }
@@ -205,14 +205,14 @@ impl ContextObjectWithSubst<InnerExpr> for VarApp {
         ref_counts: &mut [usize],
     ) {
         match self {
-            VarApp::Var(var) => var.shift_vars(shift_start, args_start, args.len() as VarIndex),
+            VarApp::Var(var) => var.shift_impl(shift_start, args_start, args.len() as VarIndex),
             VarApp::App(app) => app.substitute_impl(shift_start, args_start, args, ref_counts),
         }
     }
 }
 
 impl SubstInto<InnerExpr, InnerExpr> for VarApp {
-    fn get_subst_arg(
+    fn get_subst_arg_impl(
         &mut self,
         shift_start: VarIndex,
         args_start: VarIndex,
@@ -220,11 +220,11 @@ impl SubstInto<InnerExpr, InnerExpr> for VarApp {
         ref_counts: &mut [usize],
     ) -> Option<InnerExpr> {
         match self {
-            VarApp::Var(var) => var.get_subst_arg(shift_start, args_start, args, ref_counts),
+            VarApp::Var(var) => var.get_subst_arg_impl(shift_start, args_start, args, ref_counts),
             VarApp::App(app) => {
                 let subst_arg =
                     app.body
-                        .get_subst_arg(shift_start, args_start, args, ref_counts)?;
+                        .get_subst_arg_impl(shift_start, args_start, args, ref_counts)?;
                 for app_arg in app.params.iter_mut() {
                     app_arg.substitute_impl(shift_start, args_start, args, ref_counts);
                 }
@@ -239,7 +239,7 @@ impl SubstInto<InnerExpr, InnerExpr> for VarApp {
                         let args_end = args_start + args.len() as VarIndex;
                         let lambda_shift_start = shift_start - args_end;
                         let app_args_start = -(app_args_len as VarIndex);
-                        lambda.body.substitute(
+                        lambda.body.substitute_int(
                             lambda_shift_start + app_args_start,
                             app_args_start,
                             &mut app.params,
@@ -270,10 +270,10 @@ impl OuterExpr {
             let (prev_params, rest) = self.params.split_at_mut(i);
             let param = &mut rest[0];
             let start = -(i as VarIndex);
-            param.substitute(start, start, prev_params, false);
+            param.substitute_int(start, start, prev_params, false);
         }
-        let start = -(len as VarIndex);
-        self.body.substitute(start, start, &mut self.params, true);
+        self.body
+            .substitute(&mut self.params, true, &MinimalContext::new());
         self.body
     }
 }

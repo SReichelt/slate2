@@ -1,34 +1,14 @@
-/// A De Bruijn level if nonnegative, or a bitwise negated De Bruijn index if negative.
-///
-/// We can regard nonnegative indices as referring to "globals" or "free variables", and negative
-/// indices as referring to "locals" or "bound variables". Both have their uses: An expression that
-/// refers to globals but is closed with respect to locals (i.e. does not have any loose bound
-/// variables) can be reused without modification at all places where those globals are in scope.
-///
-/// So when working inside a specific context, we generally want to make sure that the condition
-/// above is satisfied, which means that whenever we "enter" a binder, we need to shift the
-/// variable indices referring to that binder from local to global. We can still work with arbitrary
-/// subexpressions without entering the binders on the way, but then we potentially need to shift
-/// their loose bound variables when substituting.
-///
-/// The encoding is chosen so that array indices become the most convenient. We can think of the
-/// indices as referencing either the bottom or the top of the context stack:
-///
-/// locals  | -1
-///         | -2
-/// /\/\/\/\/\/\
-///         |  1
-/// globals |  0
-///
-/// Interestingly, this is exactly how array indexing works in some programming languages.
-pub type VarIndex = isize;
+use super::context::*;
 
 pub const REF_CHUNK_LEN: usize = 16;
 
+// TODO: We should convert everything to operations that take contexts instead of indices, like
+//       we already did for comparison operations.
+
 /// An object that lives in a specific context, so that variable indices are meaningful.
 pub trait ContextObject: Clone {
-    /// Shifts variable indices between `start` (inclusive) `end` (exclusive) by `shift`, in a way
-    /// that respects the distinction between globals and locals:
+    /// Low-level method that shifts variable indices between `start` (inclusive) `end` (exclusive)
+    /// by `shift`, in a way that respects the distinction between globals and locals:
     /// * If `start` is < 0, i.e. we are shifting locals, then `start` and `end` are decreased upon
     ///   entering a binder, and `shift` is increased if `start + shift >= 0`, i.e. if we are
     ///   converting to globals.
@@ -52,29 +32,56 @@ pub trait ContextObject: Clone {
     /// * `shift` may be positive in two cases: Either it is known that `shift` many bound variables
     ///   are unreferenced (e.g. in eta reduction, when the function must be shifted out of the
     ///   binder), or we are shifting variables from local to global when entering a binder.
-    fn shift_vars(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex);
+    ///
+    /// Do not use this method directly; use a higher-level method instead.
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex);
 
-    /// Combination of `clone` and `shift_vars`. This may be optimized by specific implementations.
-    fn with_shifted_vars(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+    /// Combination of `clone` and `shift_impl`. This may be optimized by specific implementations.
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         let mut result = self.clone();
-        result.shift_vars(start, end, shift);
+        result.shift_impl(start, end, shift);
         result
+    }
+
+    fn shift_to_subcontext<Ctx: Context>(&mut self, ctx: &Ctx, subctx: &Ctx) {
+        self.shift_impl(ctx.locals_start(), 0, ctx.subcontext_shift(subctx));
+    }
+
+    fn shifted_to_subcontext<Ctx: Context>(&self, ctx: &Ctx, subctx: &Ctx) -> Self {
+        self.shifted_impl(ctx.locals_start(), 0, ctx.subcontext_shift(subctx))
+    }
+
+    fn shifted_from_var<Ctx: Context>(&self, subctx: &Ctx, var_idx_in_subctx: VarIndex) -> Self {
+        if var_idx_in_subctx < 0 {
+            self.shifted_impl(
+                subctx.locals_start() - var_idx_in_subctx,
+                0,
+                var_idx_in_subctx,
+            )
+        } else {
+            self.clone()
+        }
     }
 
     /// For each variable in the range from `start` to `start + ref_counts.len()`, counts how often
     /// it is referenced, by increasing the corresponding item in `ref_counts`.
-    fn count_refs(&self, start: VarIndex, ref_counts: &mut [usize]);
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]);
 
-    /// Similar to `count_refs`, but just checks whether any references exist.
-    fn has_refs(&self, start: VarIndex, end: VarIndex) -> bool;
+    /// Similar to `count_refs_impl`, but just checks whether any references exist.
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool;
+
+    /// Checks if any of the topmost `len` local variables are referenced.
+    fn has_refs(&self, len: usize) -> bool {
+        self.has_refs_impl(-(len as VarIndex), 0)
+    }
 }
 
 impl ContextObject for () {
-    fn shift_vars(&mut self, _: VarIndex, _: VarIndex, _: VarIndex) {}
+    fn shift_impl(&mut self, _: VarIndex, _: VarIndex, _: VarIndex) {}
 
-    fn count_refs(&self, _: VarIndex, _: &mut [usize]) {}
+    fn count_refs_impl(&self, _: VarIndex, _: &mut [usize]) {}
 
-    fn has_refs(&self, _: VarIndex, _: VarIndex) -> bool {
+    fn has_refs_impl(&self, _: VarIndex, _: VarIndex) -> bool {
         false
     }
 }
@@ -90,17 +97,17 @@ pub trait ContextObjectWithSubst<SubstArg>: ContextObject {
     /// Substitutes the variables in the range from `args_start` to `args_start + args.len()` with
     /// `args` (more precisely, with data provided by `args`), adjusting indices in arguments as
     /// required. Indices between `shift_start` and `args_start` are shifted up by `args.len()`, and
-    /// if `shift_start` < 0, indices smaller than `shift_start` must not exist, as in `shift_vars`.
+    /// if `shift_start` < 0, indices smaller than `shift_start` must not exist, as in `shift_impl`.
     ///
     /// `ref_counts` should either be empty or have the same length as `args`. In the latter case,
-    /// it should be the result of the corresponding call to `count_refs`. This reduces memory
+    /// it should be the result of the corresponding call to `count_refs_impl`. This reduces memory
     /// allocations by calling `std::mem::take` on each item in `args` when its reference count
     /// reaches 1. Otherwise, the method does not modify `args`.
     ///
     /// If the arguments have loose bound variables, they are considered to live in the target
-    /// context of the substitution, i.e. their local indices are shifted up by `args.len()`, and
-    /// the limit of their loose bound variables is given by
-    /// `shift_start - (args_start + args.len())`.
+    /// context of the substitution, i.e. their local indices are shifted up by
+    /// `args_start + args.len()`, and the limit of their loose bound variables is given by
+    /// `shift_start - args_start`.
     fn substitute_impl(
         &mut self,
         shift_start: VarIndex,
@@ -109,19 +116,7 @@ pub trait ContextObjectWithSubst<SubstArg>: ContextObject {
         ref_counts: &mut [usize],
     );
 
-    /// Substitutes the variables in the range from `args_start` to `args_start + args.len()` with
-    /// `args` (more precisely, with data provided by `args`), adjusting indices in arguments as
-    /// required. Indices between `shift_start` and `args_start` are shifted up by `args.len()`, and
-    /// if `shift_start` < 0, indices smaller than `shift_start` must not exist, as in `shift_vars`.
-    ///
-    /// `may_take_args` may be set to avoid unnecessary memory allocations in case `args` is no
-    /// longer needed afterwards.
-    ///
-    /// If the arguments have loose bound variables, they are considered to live in the target
-    /// context of the substitution, i.e. their local indices are shifted up by `args.len()`, and
-    /// the limit of their loose bound variables is given by
-    /// `shift_start - (args_start + args.len())`.
-    fn substitute(
+    fn substitute_int(
         &mut self,
         mut shift_start: VarIndex,
         mut args_start: VarIndex,
@@ -138,7 +133,7 @@ pub trait ContextObjectWithSubst<SubstArg>: ContextObject {
             let mut ref_counts = [0; REF_CHUNK_LEN];
             let mut len = args.len();
             while len > REF_CHUNK_LEN {
-                self.count_refs(args_start, &mut ref_counts);
+                self.count_refs_impl(args_start, &mut ref_counts);
                 let (cur_args, rest_args) = args.split_at_mut(REF_CHUNK_LEN);
                 self.substitute_impl(shift_start, args_start, cur_args, &mut ref_counts);
                 debug_assert_eq!(ref_counts, [0; REF_CHUNK_LEN]);
@@ -148,12 +143,34 @@ pub trait ContextObjectWithSubst<SubstArg>: ContextObject {
                 args = rest_args;
             }
             let rest_ref_counts = &mut ref_counts[..len];
-            self.count_refs(args_start, rest_ref_counts);
+            self.count_refs_impl(args_start, rest_ref_counts);
             self.substitute_impl(shift_start, args_start, args, rest_ref_counts);
             debug_assert_eq!(ref_counts, [0; REF_CHUNK_LEN]);
         } else {
             self.substitute_impl(shift_start, args_start, args, &mut []);
         }
+    }
+
+    /// Substitutes the topmost `args.len()` local variables with `args` (more precisely, with data
+    /// provided by `args`), adjusting indices in arguments as required, and shifting indices in the
+    /// result up by `args.len()`. The expression is assumed to live in a subcontext of `subst_ctx`
+    /// with `args.len()` additional variables.
+    ///
+    /// `may_take_args` may be set to avoid unnecessary memory allocations in case `args` is no
+    /// longer needed afterwards.
+    ///
+    /// If the arguments have loose bound variables, they are considered to live in the target
+    /// context of the substitution.
+    fn substitute<Ctx: Context>(
+        &mut self,
+        args: &mut [SubstArg],
+        may_take_args: bool,
+        subst_ctx: &Ctx,
+    ) {
+        let args_start = -(args.len() as VarIndex);
+        let shift_start = subst_ctx.locals_start() + args_start;
+
+        self.substitute_int(shift_start, args_start, args, may_take_args);
     }
 }
 
@@ -161,38 +178,68 @@ impl<SubstArg> ContextObjectWithSubst<SubstArg> for () {
     fn substitute_impl(&mut self, _: VarIndex, _: VarIndex, _: &mut [SubstArg], _: &mut [usize]) {}
 }
 
-pub trait ContextObjectWithCmp<CmpData>: ContextObject {
-    /// Checks whether the shifted expression equals `target`.
-    fn shift_and_compare(
+pub trait ContextObjectWithCmp<Ctx: Context>: ContextObject {
+    fn shift_and_compare_impl(
         &self,
-        start: VarIndex,
-        end: VarIndex,
-        shift: VarIndex,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
         target: &Self,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> bool;
 
-    fn compare(&self, locals_start: VarIndex, target: &Self, cmp_data: &CmpData) -> bool {
-        self.shift_and_compare(locals_start, 0, 0, target, cmp_data)
+    /// Checks whether the expression matches `target` when shifted to the subcontext
+    /// `target_subctx`.
+    fn compare_with_subctx(&self, ctx: &Ctx, target: &Self, target_subctx: &Ctx) -> bool {
+        debug_assert!(ctx.subcontext_shift(target_subctx) <= 0);
+        self.shift_and_compare_impl(ctx, ctx, target, target_subctx)
+    }
+
+    /// Checks whether the expression matches `target`.
+    fn compare(&self, target: &Self, ctx: &Ctx) -> bool {
+        self.compare_with_subctx(ctx, target, ctx)
     }
 }
 
-impl<CmpData> ContextObjectWithCmp<CmpData> for () {
-    fn shift_and_compare(
-        &self,
-        _: VarIndex,
-        _: VarIndex,
-        _: VarIndex,
-        _: &Self,
-        _: &CmpData,
-    ) -> bool {
+impl<Ctx: Context> ContextObjectWithCmp<Ctx> for () {
+    fn shift_and_compare_impl(&self, _: &Ctx, _: &Ctx, _: &Self, _: &Ctx) -> bool {
         true
     }
 }
 
-pub trait ContextObjectWithSubstCmp<SubstArg, CmpData>:
-    ContextObjectWithSubst<SubstArg> + ContextObjectWithCmp<CmpData>
+pub trait ContextObjectWithSubstCmp<SubstArg, Ctx: Context>:
+    ContextObjectWithSubst<SubstArg> + ContextObjectWithCmp<Ctx>
 {
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [SubstArg],
+        args_filled: &mut [bool],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool;
+
+    fn substitute_and_shift_and_compare(
+        &self,
+        ctx: &Ctx,
+        args: &mut [SubstArg],
+        args_filled: &mut [bool],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        debug_assert_eq!(subst_ctx.subcontext_shift(ctx), -(args.len() as VarIndex));
+        debug_assert!(subst_ctx.subcontext_shift(target_subctx) <= 0);
+        self.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            args_filled,
+            subst_ctx,
+            target,
+            target_subctx,
+        )
+    }
+
     /// Performs substitution like `substitute`, but compares the result against `target` instead of
     /// mutating. Arguments may optionally be omitted by setting the corresponding item of
     /// `args_filled` to `false`. Whenever such an argument is encountered during comparison, it is
@@ -202,31 +249,32 @@ pub trait ContextObjectWithSubstCmp<SubstArg, CmpData>:
     /// If `args_filled` is shorter than `args`, all remaining arguments are assumed to be filled.
     fn substitute_and_compare(
         &self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [SubstArg],
         args_filled: &mut [bool],
         target: &Self,
-        cmp_data: &CmpData,
-    ) -> bool;
+        subst_ctx: &Ctx,
+    ) -> bool {
+        self.substitute_and_shift_and_compare(ctx, args, args_filled, subst_ctx, target, subst_ctx)
+    }
 }
 
-impl<SubstArg, CmpData> ContextObjectWithSubstCmp<SubstArg, CmpData> for () {
-    fn substitute_and_compare(
+impl<SubstArg, Ctx: Context> ContextObjectWithSubstCmp<SubstArg, Ctx> for () {
+    fn substitute_and_shift_and_compare_impl(
         &self,
-        _: VarIndex,
-        _: VarIndex,
+        _: &Ctx,
         _: &mut [SubstArg],
         _: &mut [bool],
+        _: &Ctx,
         _: &Self,
-        _: &CmpData,
+        _: &Ctx,
     ) -> bool {
         true
     }
 }
 
 pub trait SubstInto<SubstArg, SubstResult> {
-    fn get_subst_arg(
+    fn get_subst_arg_impl(
         &mut self,
         shift_start: VarIndex,
         args_start: VarIndex,
@@ -235,14 +283,14 @@ pub trait SubstInto<SubstArg, SubstResult> {
     ) -> Option<SubstResult>;
 }
 
-pub trait SubstCmpInto<SubstArg, SubstResult, CmpData> {
-    fn compare_subst_arg(
+pub trait SubstCmpInto<SubstArg, SubstResult, Ctx: Context> {
+    fn compare_subst_arg_impl(
         &self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [SubstArg],
         args_filled: &mut [bool],
+        subst_ctx: &Ctx,
         target: &SubstResult,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> Option<bool>;
 }

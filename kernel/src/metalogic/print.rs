@@ -2,14 +2,14 @@ use std::fmt;
 
 use super::{expr::*, metalogic::*};
 
-use crate::generic::expr::*;
+use crate::generic::{context::*, expr::*};
 
-pub struct PrintingContext<'a, 'b, 'c: 'b, W: fmt::Write> {
+pub struct PrintingContext<'a, 'b, W: fmt::Write> {
     pub output: &'a mut W,
-    pub context: &'a MetaLogicContext<'b, 'c, 'a>,
+    pub context: &'a MetaLogicContext<'b>,
 }
 
-impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
+impl<W: fmt::Write> PrintingContext<'_, '_, W> {
     pub fn print_expr(
         &mut self,
         expr: &Expr,
@@ -42,9 +42,9 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
 
         match expr {
             Expr::Var(Var(idx)) => {
-                let param = self.context.context.get_var(*idx);
+                let param = self.context.get_var(*idx);
                 param.print_name(self.output)?;
-                let occurrence = self.context.context.get_name_occurrence(*idx, param);
+                let occurrence = self.context.get_name_occurrence(*idx, param);
                 if occurrence != 0 {
                     self.output.write_fmt(format_args!("@{occurrence}"))?;
                 }
@@ -77,11 +77,13 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
     fn print_lambda(&mut self, lambda: &LambdaExpr) -> fmt::Result {
         self.print_param(&lambda.param)?;
         self.output.write_str(". ")?;
-        let mut body_ctx = PrintingContext {
-            output: self.output,
-            context: &self.context.with_local(&lambda.param),
-        };
-        body_ctx.print_expr(&lambda.body, false, false, true, true)?;
+        self.context.with_local(&lambda.param, |body_ctx| {
+            let mut body_printing_ctx = PrintingContext {
+                output: self.output,
+                context: body_ctx,
+            };
+            body_printing_ctx.print_expr(&lambda.body, false, false, true, true)
+        })?;
         Ok(())
     }
 
@@ -101,19 +103,15 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
         parens_for_prefix: bool,
         parens_for_infix: bool,
     ) -> Result<bool, fmt::Error> {
-        let locals_start = self.context.context.locals_start();
+        let ctx = self.context.as_minimal();
+        let lambda_handler = self.context.globals.lambda_handler.as_ref();
 
-        if let Ok((domain_param, codomain_param, generic_indep_type)) = self
-            .context
-            .lambda_handler
-            .get_generic_indep_type(kind, locals_start)
+        if let Ok((domain_param, codomain_param, generic_indep_type)) =
+            lambda_handler.get_generic_indep_type(kind, ctx)
         {
-            if let Some(arg_vec) = expr.match_expr(
-                &None,
-                &[domain_param, codomain_param],
-                &generic_indep_type,
-                locals_start,
-            ) {
+            if let Some(arg_vec) =
+                expr.match_expr(&[domain_param, codomain_param], &generic_indep_type, &ctx)
+            {
                 let domain = &arg_vec[0];
                 let codomain = &arg_vec[1];
                 if parens_for_infix {
@@ -137,17 +135,12 @@ impl<'a, 'b, 'c, W: fmt::Write> PrintingContext<'a, 'b, 'c, W> {
             }
         }
 
-        if let Ok((domain_param, prop_param, generic_dep_type)) = self
-            .context
-            .lambda_handler
-            .get_generic_dep_type(kind, locals_start)
+        if let Ok((domain_param, prop_param, generic_dep_type)) =
+            lambda_handler.get_generic_dep_type(kind, ctx)
         {
-            if let Some(arg_vec) = expr.match_expr(
-                &None,
-                &[domain_param, prop_param],
-                &generic_dep_type,
-                locals_start,
-            ) {
+            if let Some(arg_vec) =
+                expr.match_expr(&[domain_param, prop_param], &generic_dep_type, &ctx)
+            {
                 if let Expr::Lambda(lambda) = &arg_vec[1] {
                     if parens_for_prefix {
                         self.output.write_char('(')?;

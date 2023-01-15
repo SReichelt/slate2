@@ -1,7 +1,7 @@
 use smallvec::smallvec;
 
 use crate::{
-    generic::{context::*, context_object::*},
+    generic::context::*,
     metalogic::{expr::*, helpers::*, metalogic::*},
 };
 
@@ -104,7 +104,7 @@ struct MLTTLambdaHandler {
 }
 
 impl MLTTLambdaHandler {
-    fn new(ctx: &Context<Param>) -> Self {
+    fn new(ctx: &[Param]) -> Self {
         MLTTLambdaHandler {
             u_idx: ctx.get_var_index("U", 0).unwrap(),
             pi_idx: ctx.get_var_index("Pi", 0).unwrap(),
@@ -126,7 +126,7 @@ impl LambdaHandler for MLTTLambdaHandler {
         domain: Expr,
         prop: Expr,
         kind: DependentTypeCtorKind,
-        _: VarIndex,
+        _: MinimalContext,
     ) -> Result<Expr, String> {
         let idx = match kind {
             DependentTypeCtorKind::Pi => self.pi_idx,
@@ -135,11 +135,16 @@ impl LambdaHandler for MLTTLambdaHandler {
         Ok(Expr::multi_app(Expr::var(idx), smallvec![domain, prop]))
     }
 
-    fn get_id_cmb(&self, domain: Expr, _: VarIndex) -> Result<Expr, String> {
+    fn get_id_cmb(&self, domain: Expr, _: MinimalContext) -> Result<Expr, String> {
         Ok(Expr::app(Expr::var(self.id_idx), domain))
     }
 
-    fn get_const_cmb(&self, domain: Expr, codomain: Expr, _: VarIndex) -> Result<Expr, String> {
+    fn get_const_cmb(
+        &self,
+        domain: Expr,
+        codomain: Expr,
+        _: MinimalContext,
+    ) -> Result<Expr, String> {
         Ok(Expr::multi_app(
             Expr::var(self.const_idx),
             smallvec![domain, codomain],
@@ -151,7 +156,7 @@ impl LambdaHandler for MLTTLambdaHandler {
         domain: Expr,
         prop1: Expr,
         prop2: Expr,
-        _: VarIndex,
+        _: MinimalContext,
     ) -> Result<Expr, String> {
         Ok(Expr::multi_app(
             Expr::var(self.subst_idx),

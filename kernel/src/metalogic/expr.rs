@@ -22,160 +22,6 @@ pub enum Expr {
 pub type AppExpr = App<Expr, Expr>;
 pub type LambdaExpr = Lambda<Param, Expr>;
 
-impl Default for Expr {
-    fn default() -> Self {
-        Expr::Var(Var::default())
-    }
-}
-
-impl Debug for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Var(var) => var.fmt(f),
-            Self::App(app) => app.fmt(f),
-            Self::Lambda(lambda) => lambda.fmt(f),
-        }
-    }
-}
-
-impl ContextObject for Expr {
-    fn shift_vars(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        match self {
-            Expr::Var(var) => var.shift_vars(start, end, shift),
-            Expr::App(app) => app.shift_vars(start, end, shift),
-            Expr::Lambda(lambda) => lambda.shift_vars(start, end, shift),
-        }
-    }
-
-    fn with_shifted_vars(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
-        match self {
-            Expr::Var(var) => Expr::Var(var.with_shifted_vars(start, end, shift)),
-            Expr::App(app) => Expr::App(Box::new(app.with_shifted_vars(start, end, shift))),
-            Expr::Lambda(lambda) => {
-                Expr::Lambda(Box::new(lambda.with_shifted_vars(start, end, shift)))
-            }
-        }
-    }
-
-    fn count_refs(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        match self {
-            Expr::Var(var) => var.count_refs(start, ref_counts),
-            Expr::App(app) => app.count_refs(start, ref_counts),
-            Expr::Lambda(lambda) => lambda.count_refs(start, ref_counts),
-        }
-    }
-
-    fn has_refs(&self, start: VarIndex, end: VarIndex) -> bool {
-        match self {
-            Expr::Var(var) => var.has_refs(start, end),
-            Expr::App(app) => app.has_refs(start, end),
-            Expr::Lambda(lambda) => lambda.has_refs(start, end),
-        }
-    }
-}
-
-impl ContextObjectWithSubst<Expr> for Expr {
-    fn substitute_impl(
-        &mut self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
-        args: &mut [Expr],
-        ref_counts: &mut [usize],
-    ) {
-        match self {
-            Expr::Var(var) => {
-                if let Some(subst_arg) =
-                    var.get_subst_arg(shift_start, args_start, args, ref_counts)
-                {
-                    *self = subst_arg;
-                } else {
-                    var.shift_vars(shift_start, args_start, args.len() as VarIndex);
-                }
-            }
-            Expr::App(app) => app.substitute_impl(shift_start, args_start, args, ref_counts),
-            Expr::Lambda(lambda) => {
-                lambda.substitute_impl(shift_start, args_start, args, ref_counts)
-            }
-        }
-    }
-}
-
-impl ContextObjectWithCmp<Option<&[ReductionRule]>> for Expr {
-    fn shift_and_compare(
-        &self,
-        start: VarIndex,
-        end: VarIndex,
-        shift: VarIndex,
-        target: &Self,
-        cmp_data: &Option<&[ReductionRule]>,
-    ) -> bool {
-        if self.shift_and_compare_impl(start, end, shift, target, cmp_data) {
-            return true;
-        }
-
-        if let Some(reduction_rules) = cmp_data {
-            let self_red_opt = self.reduce_head(reduction_rules, start);
-            let target_start = start - end;
-            let target_red_opt = target.reduce_head(reduction_rules, target_start);
-            if self_red_opt.is_some() || target_red_opt.is_some() {
-                let self_red = self_red_opt.as_ref().unwrap_or(self);
-                let target_red = target_red_opt.as_ref().unwrap_or(target);
-                if self_red.shift_and_compare_impl(start, end, shift, target_red, cmp_data) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-}
-
-impl ContextObjectWithSubstCmp<Expr, Option<&[ReductionRule]>> for Expr {
-    fn substitute_and_compare(
-        &self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
-        args: &mut [Expr],
-        args_filled: &mut [bool],
-        target: &Self,
-        cmp_data: &Option<&[ReductionRule]>,
-    ) -> bool {
-        if self.substitute_and_compare_impl(
-            shift_start,
-            args_start,
-            args,
-            args_filled,
-            target,
-            cmp_data,
-        ) {
-            return true;
-        }
-
-        if let Some(metalogic) = cmp_data {
-            let self_red_opt = self.reduce_head(metalogic, shift_start);
-            let args_end = args_start + args.len() as VarIndex;
-            let target_shift_start = shift_start - args_end;
-            let target_red_opt = target.reduce_head(metalogic, target_shift_start);
-            if self_red_opt.is_some() || target_red_opt.is_some() {
-                let self_red = self_red_opt.as_ref().unwrap_or(self);
-                let target_red = target_red_opt.as_ref().unwrap_or(target);
-                if self_red.substitute_and_compare_impl(
-                    shift_start,
-                    args_start,
-                    args,
-                    args_filled,
-                    target_red,
-                    cmp_data,
-                ) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-}
-
 impl Expr {
     pub fn var(idx: VarIndex) -> Self {
         Expr::Var(Var(idx))
@@ -195,10 +41,10 @@ impl Expr {
         fun
     }
 
-    pub fn apply(fun: Expr, arg: Expr, locals_start: VarIndex) -> Self {
+    pub fn apply(fun: Expr, arg: Expr, ctx: &impl Context) -> Self {
         if let Expr::Lambda(lambda) = fun {
             let mut expr = lambda.body;
-            expr.substitute(locals_start - 1, -1, &mut [arg], true);
+            expr.substitute(&mut [arg], true, ctx);
             expr
         } else {
             Self::app(fun, arg)
@@ -208,10 +54,10 @@ impl Expr {
     pub fn multi_apply(
         mut fun: Expr,
         args: SmallVec<[Expr; INLINE_PARAMS]>,
-        locals_start: VarIndex,
+        ctx: &impl Context,
     ) -> Self {
         for arg in args {
-            fun = Self::apply(fun, arg, locals_start);
+            fun = Self::apply(fun, arg, ctx);
         }
         fun
     }
@@ -227,12 +73,12 @@ impl Expr {
         body
     }
 
-    pub fn const_lambda(domain: Expr, mut body: Expr, locals_start: VarIndex) -> Self {
+    pub fn const_lambda(domain: Expr, mut body: Expr, ctx: &impl ParamContext<Param>) -> Self {
         let param = Param {
             name: None,
             type_expr: domain,
         };
-        body.shift_vars(locals_start, 0, -1);
+        ctx.with_local(&param, |body_ctx| body.shift_to_subcontext(ctx, body_ctx));
         Self::lambda(param, body)
     }
 
@@ -269,12 +115,13 @@ impl Expr {
                 }
                 Expr::Lambda(lambda) => {
                     reduced |= lambda.param.type_expr.reduce(ctx, convert_to_combinators);
-                    let body_ctx = ctx.with_local(&lambda.param);
-                    reduced |= lambda.body.reduce(&body_ctx, convert_to_combinators);
+                    ctx.with_local(&lambda.param, |body_ctx| {
+                        reduced |= lambda.body.reduce(&body_ctx, convert_to_combinators);
+                    });
                 }
             }
 
-            if let Some(red) = self.reduce_head(ctx.reduction_rules, ctx.context.locals_start()) {
+            if let Some(red) = self.reduce_head(ctx) {
                 *self = red;
                 reduced = true;
             } else {
@@ -283,44 +130,34 @@ impl Expr {
         }
     }
 
-    fn reduce_head(
-        &self,
-        reduction_rules: &[ReductionRule],
-        locals_start: VarIndex,
-    ) -> Option<Expr> {
-        let mut expr = self.reduce_head_once(reduction_rules, locals_start)?;
-        while let Some(expr_red) = expr.reduce_head_once(reduction_rules, locals_start) {
+    fn reduce_head(&self, ctx: &MetaLogicContext) -> Option<Expr> {
+        let mut expr = self.reduce_head_once(ctx)?;
+        while let Some(expr_red) = expr.reduce_head_once(ctx) {
             expr = expr_red
         }
         Some(expr)
     }
 
-    fn reduce_head_once(
-        &self,
-        reduction_rules: &[ReductionRule],
-        locals_start: VarIndex,
-    ) -> Option<Expr> {
+    fn reduce_head_once(&self, ctx: &MetaLogicContext) -> Option<Expr> {
         if let Expr::App(app) = self {
             let mut fun = &app.param;
-            let fun_red_opt = fun.reduce_head(reduction_rules, locals_start);
+            let fun_red_opt = fun.reduce_head(ctx);
             if let Some(fun_red) = &fun_red_opt {
                 fun = fun_red;
             }
             if let Expr::Lambda(lambda) = fun {
                 let mut expr = lambda.body.clone();
                 let arg = app.body.clone();
-                expr.substitute(locals_start - 1, -1, &mut [arg], true);
+                expr.substitute(&mut [arg], true, ctx);
                 return Some(expr);
             }
         }
 
-        for rule in reduction_rules {
-            if let Some(mut args) =
-                self.match_expr(&None, &rule.params, &rule.body.source, locals_start)
-            {
+        let red_ctx = ctx.as_minimal();
+        for rule in &ctx.globals.reduction_rules {
+            if let Some(mut args) = self.match_expr(&rule.params, &rule.body.source, &red_ctx) {
                 let mut expr = rule.body.target.clone();
-                let args_start = -(args.len() as VarIndex);
-                expr.substitute(locals_start + args_start, args_start, &mut args, true);
+                expr.substitute(&mut args, true, &red_ctx);
                 return Some(expr);
             }
         }
@@ -328,25 +165,18 @@ impl Expr {
         None
     }
 
-    pub fn match_expr(
+    pub fn match_expr<Ctx: ComparisonContext>(
         &self,
-        cmp_data: &Option<&[ReductionRule]>,
         match_params: &[Param],
         match_expr: &Expr,
-        locals_start: VarIndex,
+        subst_ctx: &Ctx,
     ) -> Option<SmallVec<[Expr; INLINE_PARAMS]>> {
         let params_len = match_params.len();
-        let args_start = -(params_len as VarIndex);
         let mut args: SmallVec<[Expr; INLINE_PARAMS]> = smallvec![Expr::default(); params_len];
         let mut args_filled: SmallVec<[bool; INLINE_PARAMS]> = smallvec![false; params_len];
-        if match_expr.substitute_and_compare(
-            locals_start + args_start,
-            args_start,
-            &mut args,
-            &mut args_filled,
-            self,
-            cmp_data,
-        ) {
+        if subst_ctx.with_locals(match_params, |ctx| {
+            match_expr.substitute_and_compare(ctx, &mut args, &mut args_filled, self, subst_ctx)
+        }) {
             if args_filled.iter().all(|filled| *filled) {
                 return Some(args);
             }
@@ -356,9 +186,7 @@ impl Expr {
 
     pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
         match self {
-            Expr::Var(Var(idx)) => Ok(ctx
-                .context
-                .shifted_to_context(&ctx.context.get_var(*idx).type_expr, *idx)),
+            Expr::Var(Var(idx)) => Ok(ctx.get_var(*idx).type_expr.shifted_from_var(ctx, *idx)),
             Expr::App(app) => {
                 // Finding the result type of an application is surprisingly tricky because the
                 // application itself does not include the type parameters of its function. Instead,
@@ -369,20 +197,15 @@ impl Expr {
                 let arg = &app.body;
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.get_type(ctx)?;
-                let locals_start = ctx.context.locals_start();
-                let (prop_param, cmp_fun_type) = ctx.lambda_handler.get_semi_generic_dep_type(
-                    arg_type,
-                    DependentTypeCtorKind::Pi,
-                    locals_start,
-                )?;
-                if let Some(mut prop_vec) = fun_type.match_expr(
-                    &Some(ctx.reduction_rules),
-                    &[prop_param],
-                    &cmp_fun_type,
-                    locals_start,
-                ) {
+                let (prop_param, cmp_fun_type) =
+                    ctx.globals.lambda_handler.get_semi_generic_dep_type(
+                        arg_type,
+                        DependentTypeCtorKind::Pi,
+                        ctx.as_minimal(),
+                    )?;
+                if let Some(mut prop_vec) = fun_type.match_expr(&[prop_param], &cmp_fun_type, ctx) {
                     let prop = prop_vec.pop().unwrap();
-                    Ok(Expr::apply(prop, arg.clone(), locals_start))
+                    Ok(Expr::apply(prop, arg.clone(), ctx))
                 } else {
                     let fun_str = fun.print(ctx);
                     let fun_type_str = fun_type.print(ctx);
@@ -393,84 +216,237 @@ impl Expr {
                 }
             }
             Expr::Lambda(lambda) => {
-                let body_ctx = ctx.with_local(&lambda.param);
-                let body_type = lambda.body.get_type(&body_ctx)?;
+                let body_type =
+                    ctx.with_local(&lambda.param, |body_ctx| lambda.body.get_type(body_ctx))?;
                 let body_type_lambda = Expr::lambda(lambda.param.clone(), body_type);
-                ctx.lambda_handler.get_dep_type(
+                ctx.globals.lambda_handler.get_dep_type(
                     lambda.param.type_expr.clone(),
                     body_type_lambda,
                     DependentTypeCtorKind::Pi,
-                    ctx.context.locals_start(),
+                    ctx.as_minimal(),
                 )
             }
         }
     }
 
-    fn shift_and_compare_impl(
+    fn shift_and_compare_impl_no_red<Ctx: ComparisonContext>(
         &self,
-        start: VarIndex,
-        end: VarIndex,
-        shift: VarIndex,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
         target: &Self,
-        cmp_data: &Option<&[ReductionRule]>,
+        target_subctx: &Ctx,
     ) -> bool {
         match (self, target) {
             (Expr::Var(var), Expr::Var(target_var)) => {
-                var.shift_and_compare(start, end, shift, target_var, cmp_data)
+                var.shift_and_compare_impl(ctx, orig_ctx, target_var, target_subctx)
             }
             (Expr::App(app), Expr::App(target_app)) => {
-                app.shift_and_compare(start, end, shift, target_app, cmp_data)
+                app.shift_and_compare_impl(ctx, orig_ctx, target_app, target_subctx)
             }
             (Expr::Lambda(lambda), Expr::Lambda(target_lambda)) => {
-                lambda.shift_and_compare(start, end, shift, target_lambda, cmp_data)
+                lambda.shift_and_compare_impl(ctx, orig_ctx, target_lambda, target_subctx)
             }
             _ => false,
         }
     }
 
-    fn substitute_and_compare_impl(
+    fn substitute_and_compare_impl_no_red<Ctx: ComparisonContext>(
         &self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [Expr],
         args_filled: &mut [bool],
+        subst_ctx: &Ctx,
         target: &Self,
-        cmp_data: &Option<&[ReductionRule]>,
+        target_subctx: &Ctx,
     ) -> bool {
         if let Expr::Var(var) = self {
             if let Some(result) =
-                var.compare_subst_arg(shift_start, args_start, args, args_filled, target, cmp_data)
+                var.compare_subst_arg_impl(ctx, args, args_filled, subst_ctx, target, target_subctx)
             {
                 return result;
             }
         }
 
         match (self, target) {
-            (Expr::Var(var), Expr::Var(target_var)) => var.shift_and_compare(
-                shift_start,
-                args_start,
-                args.len() as VarIndex,
-                target_var,
-                cmp_data,
-            ),
-            (Expr::App(app), Expr::App(target_app)) => app.substitute_and_compare(
-                shift_start,
-                args_start,
+            (Expr::Var(var), Expr::Var(target_var)) => {
+                var.shift_and_compare_impl(ctx, subst_ctx, target_var, target_subctx)
+            }
+            (Expr::App(app), Expr::App(target_app)) => app.substitute_and_shift_and_compare_impl(
+                ctx,
                 args,
                 args_filled,
+                subst_ctx,
                 target_app,
-                cmp_data,
+                target_subctx,
             ),
-            (Expr::Lambda(lambda), Expr::Lambda(target_lambda)) => lambda.substitute_and_compare(
-                shift_start,
-                args_start,
-                args,
-                args_filled,
-                target_lambda,
-                cmp_data,
-            ),
+            (Expr::Lambda(lambda), Expr::Lambda(target_lambda)) => lambda
+                .substitute_and_shift_and_compare_impl(
+                    ctx,
+                    args,
+                    args_filled,
+                    subst_ctx,
+                    target_lambda,
+                    target_subctx,
+                ),
             _ => false,
         }
+    }
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::Var(Var::default())
+    }
+}
+
+impl Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Var(var) => var.fmt(f),
+            Self::App(app) => app.fmt(f),
+            Self::Lambda(lambda) => lambda.fmt(f),
+        }
+    }
+}
+
+impl ContextObject for Expr {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+        match self {
+            Expr::Var(var) => var.shift_impl(start, end, shift),
+            Expr::App(app) => app.shift_impl(start, end, shift),
+            Expr::Lambda(lambda) => lambda.shift_impl(start, end, shift),
+        }
+    }
+
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+        match self {
+            Expr::Var(var) => Expr::Var(var.shifted_impl(start, end, shift)),
+            Expr::App(app) => Expr::App(Box::new(app.shifted_impl(start, end, shift))),
+            Expr::Lambda(lambda) => Expr::Lambda(Box::new(lambda.shifted_impl(start, end, shift))),
+        }
+    }
+
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+        match self {
+            Expr::Var(var) => var.count_refs_impl(start, ref_counts),
+            Expr::App(app) => app.count_refs_impl(start, ref_counts),
+            Expr::Lambda(lambda) => lambda.count_refs_impl(start, ref_counts),
+        }
+    }
+
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+        match self {
+            Expr::Var(var) => var.has_refs_impl(start, end),
+            Expr::App(app) => app.has_refs_impl(start, end),
+            Expr::Lambda(lambda) => lambda.has_refs_impl(start, end),
+        }
+    }
+}
+
+impl ContextObjectWithSubst<Expr> for Expr {
+    fn substitute_impl(
+        &mut self,
+        shift_start: VarIndex,
+        args_start: VarIndex,
+        args: &mut [Expr],
+        ref_counts: &mut [usize],
+    ) {
+        match self {
+            Expr::Var(var) => {
+                if let Some(subst_arg) =
+                    var.get_subst_arg_impl(shift_start, args_start, args, ref_counts)
+                {
+                    *self = subst_arg;
+                } else {
+                    var.shift_impl(shift_start, args_start, args.len() as VarIndex);
+                }
+            }
+            Expr::App(app) => app.substitute_impl(shift_start, args_start, args, ref_counts),
+            Expr::Lambda(lambda) => {
+                lambda.substitute_impl(shift_start, args_start, args, ref_counts)
+            }
+        }
+    }
+}
+
+impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        if self.shift_and_compare_impl_no_red(ctx, orig_ctx, target, target_subctx) {
+            return true;
+        }
+
+        if let Some(metalogic_ctx) = ctx.as_opt_metalogic_context() {
+            if let Some(target_metalogic_ctx) = target_subctx.as_opt_metalogic_context() {
+                let self_red_opt = self.reduce_head(metalogic_ctx);
+                let target_red_opt = target.reduce_head(target_metalogic_ctx);
+                if self_red_opt.is_some() || target_red_opt.is_some() {
+                    let self_red = self_red_opt.as_ref().unwrap_or(self);
+                    let target_red = target_red_opt.as_ref().unwrap_or(target);
+                    if self_red.shift_and_compare_impl_no_red(
+                        ctx,
+                        orig_ctx,
+                        target_red,
+                        target_subctx,
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+}
+
+impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [Expr],
+        args_filled: &mut [bool],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        if self.substitute_and_compare_impl_no_red(
+            ctx,
+            args,
+            args_filled,
+            subst_ctx,
+            target,
+            target_subctx,
+        ) {
+            return true;
+        }
+
+        if let Some(metalogic_ctx) = ctx.as_opt_metalogic_context() {
+            if let Some(target_metalogic_ctx) = target_subctx.as_opt_metalogic_context() {
+                let self_red_opt = self.reduce_head(metalogic_ctx);
+                let target_red_opt = target.reduce_head(target_metalogic_ctx);
+                if self_red_opt.is_some() || target_red_opt.is_some() {
+                    let self_red = self_red_opt.as_ref().unwrap_or(self);
+                    let target_red = target_red_opt.as_ref().unwrap_or(target);
+                    if self_red.substitute_and_compare_impl_no_red(
+                        ctx,
+                        args,
+                        args_filled,
+                        subst_ctx,
+                        target_red,
+                        target_subctx,
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 }
 
@@ -478,6 +454,17 @@ impl Expr {
 pub struct Param {
     pub name: Option<Rc<String>>,
     pub type_expr: Expr,
+}
+
+impl Param {
+    pub fn print_name(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        let param_name = if let Some(name) = &self.name {
+            name
+        } else {
+            "_"
+        };
+        f.write_str(param_name)
+    }
 }
 
 impl NamedObject for Param {
@@ -505,23 +492,23 @@ impl Debug for Param {
 }
 
 impl ContextObject for Param {
-    fn shift_vars(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        self.type_expr.shift_vars(start, end, shift);
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+        self.type_expr.shift_impl(start, end, shift);
     }
 
-    fn with_shifted_vars(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         Param {
             name: self.name.clone(),
-            type_expr: self.type_expr.with_shifted_vars(start, end, shift),
+            type_expr: self.type_expr.shifted_impl(start, end, shift),
         }
     }
 
-    fn count_refs(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        self.type_expr.count_refs(start, ref_counts);
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+        self.type_expr.count_refs_impl(start, ref_counts);
     }
 
-    fn has_refs(&self, start: VarIndex, end: VarIndex) -> bool {
-        self.type_expr.has_refs(start, end)
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+        self.type_expr.has_refs_impl(start, end)
     }
 }
 
@@ -538,48 +525,36 @@ impl ContextObjectWithSubst<Expr> for Param {
     }
 }
 
-impl ContextObjectWithCmp<Option<&[ReductionRule]>> for Param {
-    fn shift_and_compare(
+impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Param {
+    fn shift_and_compare_impl(
         &self,
-        start: VarIndex,
-        end: VarIndex,
-        shift: VarIndex,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
         target: &Self,
-        cmp_data: &Option<&[ReductionRule]>,
+        target_subctx: &Ctx,
     ) -> bool {
         self.type_expr
-            .shift_and_compare(start, end, shift, &target.type_expr, cmp_data)
+            .shift_and_compare_impl(ctx, orig_ctx, &target.type_expr, target_subctx)
     }
 }
 
-impl ContextObjectWithSubstCmp<Expr, Option<&[ReductionRule]>> for Param {
-    fn substitute_and_compare(
+impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Param {
+    fn substitute_and_shift_and_compare_impl(
         &self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [Expr],
         args_filled: &mut [bool],
+        subst_ctx: &Ctx,
         target: &Self,
-        cmp_data: &Option<&[ReductionRule]>,
+        target_subctx: &Ctx,
     ) -> bool {
-        self.type_expr.substitute_and_compare(
-            shift_start,
-            args_start,
+        self.type_expr.substitute_and_shift_and_compare_impl(
+            ctx,
             args,
             args_filled,
+            subst_ctx,
             &target.type_expr,
-            cmp_data,
+            target_subctx,
         )
-    }
-}
-
-impl Param {
-    pub fn print_name(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        let param_name = if let Some(name) = &self.name {
-            name
-        } else {
-            "_"
-        };
-        f.write_str(param_name)
     }
 }

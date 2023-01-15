@@ -1,7 +1,5 @@
 use super::{expr::*, metalogic::*};
 
-use crate::generic::context::*;
-
 pub struct TypeInit<'a> {
     pub ctor: ParamInit<'a>,
     pub intro: &'a [ParamInit<'a>],
@@ -21,7 +19,7 @@ impl MetaLogic {
         create_lambda_handler: F,
     ) -> Result<Self, String>
     where
-        F: FnOnce(&Context<Param>) -> Box<dyn LambdaHandler>,
+        F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
     {
         let mut constants_init: Vec<ParamInit> = Vec::new();
         let mut reduction_rules_init: Vec<ReductionRuleInit> = Vec::new();

@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use smallvec::SmallVec;
 
-use super::context_object::*;
+use super::{context::*, context_object::*};
 
 /// A simple variable reference. This is the prototypical context object, but obviously does not
 /// support substitution by itself.
@@ -23,7 +23,7 @@ impl Debug for Var {
 }
 
 impl ContextObject for Var {
-    fn shift_vars(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
         let Var(idx) = self;
         if *idx < start {
             if start < 0 {
@@ -38,7 +38,7 @@ impl ContextObject for Var {
         }
     }
 
-    fn count_refs(&self, start: VarIndex, ref_counts: &mut [usize]) {
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
         let Var(idx) = *self;
         if idx >= start {
             let end = start + ref_counts.len() as VarIndex;
@@ -49,32 +49,31 @@ impl ContextObject for Var {
         }
     }
 
-    fn has_refs(&self, start: VarIndex, end: VarIndex) -> bool {
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
         let Var(idx) = *self;
         idx >= start && idx < end
     }
 }
 
-impl<CmpData> ContextObjectWithCmp<CmpData> for Var {
-    fn shift_and_compare(
+impl<Ctx: Context> ContextObjectWithCmp<Ctx> for Var {
+    fn shift_and_compare_impl(
         &self,
-        start: VarIndex,
-        end: VarIndex,
-        shift: VarIndex,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
         target: &Self,
-        _: &CmpData,
+        target_subctx: &Ctx,
     ) -> bool {
         let Var(mut idx) = *self;
-        if idx < start {
-            if start < 0 {
-                panic!("unexpected loose bound variable with index {idx} (start: {start})");
-            }
-        } else if idx < end {
+        let locals_start = ctx.locals_start();
+        if idx < locals_start {
+            panic!("unexpected loose bound variable with index {idx} (start: {locals_start})");
+        } else if ctx.is_local_in_supercontext(idx, orig_ctx) {
+            let shift = target_subctx.locals_start() - locals_start;
             idx += shift;
-        } else if idx < end + shift && start + shift < 0
-        // implies shift > 0 and start < 0
-        {
-            return false;
+        } else {
+            // This corresponds to the panic in shift_impl. It should be impossible to trigger if
+            // target_subctx is a subcontext of orig_ctx, as we never shift up then.
+            debug_assert!(!target_subctx.is_local_in_supercontext(idx, orig_ctx));
         }
         let Var(target_idx) = *target;
         idx == target_idx
@@ -82,7 +81,7 @@ impl<CmpData> ContextObjectWithCmp<CmpData> for Var {
 }
 
 impl<SubstArg: ContextObject + Default> SubstInto<SubstArg, SubstArg> for Var {
-    fn get_subst_arg(
+    fn get_subst_arg_impl(
         &mut self,
         shift_start: VarIndex,
         args_start: VarIndex,
@@ -95,7 +94,7 @@ impl<SubstArg: ContextObject + Default> SubstInto<SubstArg, SubstArg> for Var {
                 panic!("unexpected loose bound variable with index {idx} (start: {shift_start})");
             }
         } else if idx >= args_start {
-            let args_end = args_start + args.len() as VarIndex;
+            let args_end = args_start + (args.len() as VarIndex);
             if idx < args_end {
                 let array_idx = (idx - args_start) as usize;
                 let arg = &mut args[array_idx];
@@ -104,13 +103,13 @@ impl<SubstArg: ContextObject + Default> SubstInto<SubstArg, SubstArg> for Var {
                     *ref_count -= 1;
                     if *ref_count == 0 {
                         if shift_start < 0 {
-                            arg.shift_vars(shift_start - args_end, 0, args_end);
+                            arg.shift_impl(shift_start - args_start, 0, args_end);
                         }
                         return Some(std::mem::take(arg));
                     }
                 }
                 if shift_start < 0 {
-                    return Some(arg.with_shifted_vars(shift_start - args_end, 0, args_end));
+                    return Some(arg.shifted_impl(shift_start - args_start, 0, args_end));
                 } else {
                     return Some(arg.clone());
                 }
@@ -120,46 +119,46 @@ impl<SubstArg: ContextObject + Default> SubstInto<SubstArg, SubstArg> for Var {
     }
 }
 
-impl<SubstArg: ContextObjectWithCmp<CmpData> + Default, CmpData>
-    SubstCmpInto<SubstArg, SubstArg, CmpData> for Var
+impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
+    SubstCmpInto<SubstArg, SubstArg, Ctx> for Var
 {
-    fn compare_subst_arg(
+    fn compare_subst_arg_impl(
         &self,
-        shift_start: VarIndex,
-        args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [SubstArg],
         args_filled: &mut [bool],
+        subst_ctx: &Ctx,
         target: &SubstArg,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> Option<bool> {
         let Var(idx) = *self;
-        if idx < shift_start {
-            if shift_start < 0 {
-                panic!("unexpected loose bound variable with index {idx} (start: {shift_start})");
-            }
-        } else if idx >= args_start {
-            let args_end = args_start + args.len() as VarIndex;
+        let locals_start = ctx.locals_start();
+        if idx < locals_start {
+            panic!("unexpected loose bound variable with index {idx} (start: {locals_start})");
+        } else if !ctx.is_local_in_supercontext(idx, subst_ctx) {
+            let args_start = subst_ctx.subcontext_shift(ctx);
+            debug_assert!(idx >= args_start);
+            let args_end = args_start + (args.len() as VarIndex);
             if idx < args_end {
                 let array_idx = (idx - args_start) as usize;
                 let arg = &mut args[array_idx];
                 if array_idx < args_filled.len() {
                     let filled = &mut args_filled[array_idx];
                     if !*filled {
-                        if target.has_refs(args_end, 0) {
+                        let arg_shift = subst_ctx.subcontext_shift(target_subctx);
+                        if target.has_refs_impl(arg_shift, 0) {
                             return Some(false);
                         }
                         *filled = true;
-                        *arg = target.with_shifted_vars(shift_start, args_end, -args_end);
+                        *arg = target.shifted_impl(
+                            target_subctx.locals_start(),
+                            arg_shift,
+                            -arg_shift,
+                        );
                         return Some(true);
                     }
                 }
-                return Some(arg.shift_and_compare(
-                    shift_start - args_end,
-                    0,
-                    args_end,
-                    target,
-                    cmp_data,
-                ));
+                return Some(arg.compare_with_subctx(subst_ctx, target, target_subctx));
             }
         }
         None
@@ -223,45 +222,40 @@ pub struct ParameterizedObject<Param, Body, const PARAM_LEN: VarIndex> {
 impl<Param: ContextObject, Body: ContextObject, const PARAM_LEN: VarIndex> ContextObject
     for ParameterizedObject<Param, Body, PARAM_LEN>
 {
-    fn shift_vars(&mut self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) {
+    fn shift_impl(&mut self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) {
         if shift == 0 || start >= end {
             return;
         }
-        self.param.shift_vars(start, end, shift);
+        self.param.shift_impl(start, end, shift);
         enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
-        self.body.shift_vars(start, end, shift);
+        self.body.shift_impl(start, end, shift);
     }
 
-    fn with_shifted_vars(
-        &self,
-        mut start: VarIndex,
-        mut end: VarIndex,
-        mut shift: VarIndex,
-    ) -> Self {
-        let param = self.param.with_shifted_vars(start, end, shift);
+    fn shifted_impl(&self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) -> Self {
+        let param = self.param.shifted_impl(start, end, shift);
         enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
-        let body = self.body.with_shifted_vars(start, end, shift);
+        let body = self.body.shifted_impl(start, end, shift);
         ParameterizedObject { param, body }
     }
 
-    fn count_refs(&self, mut start: VarIndex, ref_counts: &mut [usize]) {
+    fn count_refs_impl(&self, mut start: VarIndex, ref_counts: &mut [usize]) {
         if ref_counts.is_empty() {
             return;
         }
-        self.param.count_refs(start, ref_counts);
+        self.param.count_refs_impl(start, ref_counts);
         enter_binder_for_start::<PARAM_LEN>(&mut start);
-        self.body.count_refs(start, ref_counts);
+        self.body.count_refs_impl(start, ref_counts);
     }
 
-    fn has_refs(&self, mut start: VarIndex, mut end: VarIndex) -> bool {
+    fn has_refs_impl(&self, mut start: VarIndex, mut end: VarIndex) -> bool {
         if start >= end {
             return false;
         }
-        if self.param.has_refs(start, end) {
+        if self.param.has_refs_impl(start, end) {
             return true;
         }
         enter_binder_for_start_and_end::<PARAM_LEN>(&mut start, &mut end);
-        self.body.has_refs(start, end)
+        self.body.has_refs_impl(start, end)
     }
 }
 
@@ -290,74 +284,76 @@ impl<
     }
 }
 
+pub type Lambda<Param, Body> = ParameterizedObject<Param, Body, 1>;
+
 impl<
-        CmpData,
-        Param: ContextObjectWithCmp<CmpData>,
-        Body: ContextObjectWithCmp<CmpData>,
-        const PARAM_LEN: VarIndex,
-    > ContextObjectWithCmp<CmpData> for ParameterizedObject<Param, Body, PARAM_LEN>
+        Ctx: ParamContext<Param>,
+        Param: ContextObjectWithCmp<Ctx>,
+        Body: ContextObjectWithCmp<Ctx>,
+    > ContextObjectWithCmp<Ctx> for Lambda<Param, Body>
 {
-    fn shift_and_compare(
+    fn shift_and_compare_impl(
         &self,
-        mut start: VarIndex,
-        mut end: VarIndex,
-        mut shift: VarIndex,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
         target: &Self,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> bool {
         if !self
             .param
-            .shift_and_compare(start, end, shift, &target.param, cmp_data)
+            .shift_and_compare_impl(ctx, orig_ctx, &target.param, target_subctx)
         {
             return false;
         }
-        enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
-        self.body
-            .shift_and_compare(start, end, shift, &target.body, cmp_data)
+        ctx.with_local(&self.param, |body_ctx| {
+            target_subctx.with_local(&target.param, |target_body_ctx| {
+                self.body
+                    .shift_and_compare_impl(body_ctx, orig_ctx, &target.body, target_body_ctx)
+            })
+        })
     }
 }
 
 impl<
+        Ctx: ParamContext<Param>,
         SubstArg,
-        CmpData,
-        Param: ContextObjectWithSubstCmp<SubstArg, CmpData>,
-        Body: ContextObjectWithSubstCmp<SubstArg, CmpData>,
-        const PARAM_LEN: VarIndex,
-    > ContextObjectWithSubstCmp<SubstArg, CmpData> for ParameterizedObject<Param, Body, PARAM_LEN>
+        Param: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+        Body: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+    > ContextObjectWithSubstCmp<SubstArg, Ctx> for Lambda<Param, Body>
 {
-    fn substitute_and_compare(
+    fn substitute_and_shift_and_compare_impl(
         &self,
-        mut shift_start: VarIndex,
-        mut args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [SubstArg],
         args_filled: &mut [bool],
+        subst_ctx: &Ctx,
         target: &Self,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> bool {
-        if !self.param.substitute_and_compare(
-            shift_start,
-            args_start,
+        if !self.param.substitute_and_shift_and_compare_impl(
+            ctx,
             args,
             args_filled,
+            subst_ctx,
             &target.param,
-            cmp_data,
+            target_subctx,
         ) {
             return false;
         }
-        enter_binder_for_start_and_end::<PARAM_LEN>(&mut shift_start, &mut args_start);
-        self.body.substitute_and_compare(
-            shift_start,
-            args_start,
-            args,
-            args_filled,
-            &target.body,
-            cmp_data,
-        )
+        ctx.with_local(&self.param, |body_ctx| {
+            target_subctx.with_local(&target.param, |target_body_ctx| {
+                self.body.substitute_and_shift_and_compare_impl(
+                    body_ctx,
+                    args,
+                    args_filled,
+                    subst_ctx,
+                    &target.body,
+                    target_body_ctx,
+                )
+            })
+        })
     }
 }
-
-pub type Lambda<Param, Body> = ParameterizedObject<Param, Body, 1>;
-pub type App<Fun, Arg> = ParameterizedObject<Arg, Fun, 0>;
 
 impl<Param: Debug, Body: Debug> Debug for Lambda<Param, Body> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -365,6 +361,66 @@ impl<Param: Debug, Body: Debug> Debug for Lambda<Param, Body> {
         self.param.fmt(f)?;
         f.write_str(".")?;
         self.body.fmt(f)
+    }
+}
+
+pub type App<Fun, Arg> = ParameterizedObject<Arg, Fun, 0>;
+
+impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx>>
+    ContextObjectWithCmp<Ctx> for App<Fun, Arg>
+{
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        if !self
+            .param
+            .shift_and_compare_impl(ctx, orig_ctx, &target.param, target_subctx)
+        {
+            return false;
+        }
+        self.body
+            .shift_and_compare_impl(ctx, orig_ctx, &target.body, target_subctx)
+    }
+}
+
+impl<
+        Ctx: Context,
+        SubstArg,
+        Fun: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+        Arg: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+    > ContextObjectWithSubstCmp<SubstArg, Ctx> for App<Fun, Arg>
+{
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [SubstArg],
+        args_filled: &mut [bool],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        if !self.param.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            args_filled,
+            subst_ctx,
+            &target.param,
+            target_subctx,
+        ) {
+            return false;
+        }
+        self.body.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            args_filled,
+            subst_ctx,
+            &target.body,
+            target_subctx,
+        )
     }
 }
 
@@ -390,54 +446,49 @@ pub struct MultiParameterizedObject<Param, Body, const PARAM_LEN: VarIndex> {
 impl<Param: ContextObject, Body: ContextObject, const PARAM_LEN: VarIndex> ContextObject
     for MultiParameterizedObject<Param, Body, PARAM_LEN>
 {
-    fn shift_vars(&mut self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) {
+    fn shift_impl(&mut self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) {
         if shift == 0 || start >= end {
             return;
         }
         for param in self.params.iter_mut() {
-            param.shift_vars(start, end, shift);
+            param.shift_impl(start, end, shift);
             enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
         }
-        self.body.shift_vars(start, end, shift);
+        self.body.shift_impl(start, end, shift);
     }
 
-    fn with_shifted_vars(
-        &self,
-        mut start: VarIndex,
-        mut end: VarIndex,
-        mut shift: VarIndex,
-    ) -> Self {
+    fn shifted_impl(&self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) -> Self {
         let mut params = SmallVec::with_capacity(self.params.len());
         for param in self.params.iter() {
-            params.push(param.with_shifted_vars(start, end, shift));
+            params.push(param.shifted_impl(start, end, shift));
             enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
         }
-        let body = self.body.with_shifted_vars(start, end, shift);
+        let body = self.body.shifted_impl(start, end, shift);
         MultiParameterizedObject { params, body }
     }
 
-    fn count_refs(&self, mut start: VarIndex, ref_counts: &mut [usize]) {
+    fn count_refs_impl(&self, mut start: VarIndex, ref_counts: &mut [usize]) {
         if ref_counts.is_empty() {
             return;
         }
         for param in self.params.iter() {
-            param.count_refs(start, ref_counts);
+            param.count_refs_impl(start, ref_counts);
             enter_binder_for_start::<PARAM_LEN>(&mut start);
         }
-        self.body.count_refs(start, ref_counts);
+        self.body.count_refs_impl(start, ref_counts);
     }
 
-    fn has_refs(&self, mut start: VarIndex, mut end: VarIndex) -> bool {
+    fn has_refs_impl(&self, mut start: VarIndex, mut end: VarIndex) -> bool {
         if start >= end {
             return false;
         }
         for param in self.params.iter() {
-            if param.has_refs(start, end) {
+            if param.has_refs_impl(start, end) {
                 return true;
             }
             enter_binder_for_start_and_end::<PARAM_LEN>(&mut start, &mut end);
         }
-        self.body.has_refs(start, end)
+        self.body.has_refs_impl(start, end)
     }
 }
 
@@ -467,82 +518,100 @@ impl<
     }
 }
 
+pub type MultiLambda<Param, Body> = MultiParameterizedObject<Param, Body, 1>;
+
 impl<
-        CmpData,
-        Param: ContextObjectWithCmp<CmpData>,
-        Body: ContextObjectWithCmp<CmpData>,
-        const PARAM_LEN: VarIndex,
-    > ContextObjectWithCmp<CmpData> for MultiParameterizedObject<Param, Body, PARAM_LEN>
+        Ctx: ParamContext<Param>,
+        Param: ContextObjectWithCmp<Ctx>,
+        Body: ContextObjectWithCmp<Ctx>,
+    > ContextObjectWithCmp<Ctx> for MultiLambda<Param, Body>
 {
-    fn shift_and_compare(
+    fn shift_and_compare_impl(
         &self,
-        mut start: VarIndex,
-        mut end: VarIndex,
-        mut shift: VarIndex,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
         target: &Self,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> bool {
         if self.params.len() != target.params.len() {
             return false;
         }
+        let mut param_idx = 0;
         for (param, target_param) in self.params.iter().zip(target.params.iter()) {
-            if !param.shift_and_compare(start, end, shift, target_param, cmp_data) {
+            if !ctx.with_locals(&self.params[..param_idx], |param_ctx| {
+                target_subctx.with_locals(&target.params[..param_idx], |target_param_ctx| {
+                    param.shift_and_compare_impl(
+                        param_ctx,
+                        orig_ctx,
+                        target_param,
+                        target_param_ctx,
+                    )
+                })
+            }) {
                 return false;
             }
-            enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
+            param_idx += 1;
         }
-        self.body
-            .shift_and_compare(start, end, shift, &target.body, cmp_data)
+        ctx.with_locals(&self.params, |body_ctx| {
+            target_subctx.with_locals(&target.params, |target_body_ctx| {
+                self.body
+                    .shift_and_compare_impl(body_ctx, orig_ctx, &target.body, target_body_ctx)
+            })
+        })
     }
 }
 
 impl<
+        Ctx: ParamContext<Param>,
         SubstArg,
-        CmpData,
-        Param: ContextObjectWithSubstCmp<SubstArg, CmpData>,
-        Body: ContextObjectWithSubstCmp<SubstArg, CmpData>,
-        const PARAM_LEN: VarIndex,
-    > ContextObjectWithSubstCmp<SubstArg, CmpData>
-    for MultiParameterizedObject<Param, Body, PARAM_LEN>
+        Param: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+        Body: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+    > ContextObjectWithSubstCmp<SubstArg, Ctx> for MultiLambda<Param, Body>
 {
-    fn substitute_and_compare(
+    fn substitute_and_shift_and_compare_impl(
         &self,
-        mut shift_start: VarIndex,
-        mut args_start: VarIndex,
+        ctx: &Ctx,
         args: &mut [SubstArg],
         args_filled: &mut [bool],
+        subst_ctx: &Ctx,
         target: &Self,
-        cmp_data: &CmpData,
+        target_subctx: &Ctx,
     ) -> bool {
         if self.params.len() != target.params.len() {
             return false;
         }
+        let mut param_idx = 0;
         for (param, target_param) in self.params.iter().zip(target.params.iter()) {
-            if !param.substitute_and_compare(
-                shift_start,
-                args_start,
-                args,
-                args_filled,
-                target_param,
-                cmp_data,
-            ) {
+            if !ctx.with_locals(&self.params[..param_idx], |param_ctx| {
+                target_subctx.with_locals(&target.params[..param_idx], |target_param_ctx| {
+                    param.substitute_and_shift_and_compare_impl(
+                        param_ctx,
+                        args,
+                        args_filled,
+                        subst_ctx,
+                        target_param,
+                        target_param_ctx,
+                    )
+                })
+            }) {
                 return false;
             }
-            enter_binder_for_start_and_end::<PARAM_LEN>(&mut shift_start, &mut args_start);
+            param_idx += 1;
         }
-        self.body.substitute_and_compare(
-            shift_start,
-            args_start,
-            args,
-            args_filled,
-            &target.body,
-            cmp_data,
-        )
+        ctx.with_locals(&self.params, |body_ctx| {
+            target_subctx.with_locals(&target.params, |target_body_ctx| {
+                self.body.substitute_and_shift_and_compare_impl(
+                    body_ctx,
+                    args,
+                    args_filled,
+                    subst_ctx,
+                    &target.body,
+                    target_body_ctx,
+                )
+            })
+        })
     }
 }
-
-pub type MultiLambda<Param, Body> = MultiParameterizedObject<Param, Body, 1>;
-pub type MultiApp<Fun, Arg> = MultiParameterizedObject<Arg, Fun, 0>;
 
 impl<Param: Debug, Body: Debug> Debug for MultiLambda<Param, Body> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -563,6 +632,73 @@ impl<Param: Debug, Body: Debug> Debug for MultiLambda<Param, Body> {
         }
         f.write_str(".")?;
         self.body.fmt(f)
+    }
+}
+
+pub type MultiApp<Fun, Arg> = MultiParameterizedObject<Arg, Fun, 0>;
+
+impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx>>
+    ContextObjectWithCmp<Ctx> for MultiApp<Fun, Arg>
+{
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        if self.params.len() != target.params.len() {
+            return false;
+        }
+        for (param, target_param) in self.params.iter().zip(target.params.iter()) {
+            if !param.shift_and_compare_impl(ctx, orig_ctx, target_param, target_subctx) {
+                return false;
+            }
+        }
+        self.body
+            .shift_and_compare_impl(ctx, orig_ctx, &target.body, target_subctx)
+    }
+}
+
+impl<
+        Ctx: Context,
+        SubstArg,
+        Fun: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+        Arg: ContextObjectWithSubstCmp<SubstArg, Ctx>,
+    > ContextObjectWithSubstCmp<SubstArg, Ctx> for MultiApp<Fun, Arg>
+{
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [SubstArg],
+        args_filled: &mut [bool],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> bool {
+        if self.params.len() != target.params.len() {
+            return false;
+        }
+        for (param, target_param) in self.params.iter().zip(target.params.iter()) {
+            if !param.substitute_and_shift_and_compare_impl(
+                ctx,
+                args,
+                args_filled,
+                subst_ctx,
+                target_param,
+                target_subctx,
+            ) {
+                return false;
+            }
+        }
+        self.body.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            args_filled,
+            subst_ctx,
+            &target.body,
+            target_subctx,
+        )
     }
 }
 
