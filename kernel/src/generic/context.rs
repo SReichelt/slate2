@@ -1,5 +1,7 @@
 use smallvec::SmallVec;
 
+use crate::util::ref_stack::RefStack;
+
 /// A De Bruijn level if nonnegative, or a bitwise negated De Bruijn index if negative.
 ///
 /// We can regard nonnegative indices as referring to "globals" or "free variables", and negative
@@ -159,13 +161,10 @@ impl<ParamType, T: VarAccessor<ParamType>> VarAccessor<ParamType> for &T {
     }
 }
 
-enum LocalContextStack<ParamType> {
-    Root,
-    Params {
-        params: *const ParamType,
-        params_len: usize,
-        parent: *const LocalContextStack<ParamType>,
-    },
+#[derive(Clone, Copy)]
+pub struct ParamContextData<GlobalsType> {
+    globals: GlobalsType,
+    locals_start: VarIndex,
 }
 
 /// To get some idea what a context should look like, see the documentation of `VarIndex`.
@@ -178,155 +177,75 @@ enum LocalContextStack<ParamType> {
 /// because creating a subcontext should not invalidate the parent context. So locals are managed
 /// as a series of stack frames living on the Rust call stack, with parent pointers. As a
 /// consequence, we need to iterate over frames when accessing locals by index.
-pub struct ParamContextImpl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> {
-    pub globals: GlobalsType,
-    locals: LocalContextStack<ParamType>,
-    locals_start: VarIndex,
-}
+pub type ParamContextImpl<ParamType, GlobalsType> =
+    RefStack<ParamType, ParamContextData<GlobalsType>>;
 
-impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy>
-    ParamContextImpl<ParamType, GlobalsType>
-{
-    pub fn new(globals: GlobalsType) -> Self {
-        ParamContextImpl {
+impl<ParamType, GlobalsType> ParamContextImpl<ParamType, GlobalsType> {
+    pub fn with_globals(globals: GlobalsType) -> Self {
+        ParamContextImpl::new(ParamContextData {
             globals,
-            locals: LocalContextStack::Root,
             locals_start: 0,
-        }
+        })
+    }
+
+    pub fn with_new_globals<R>(&self, globals: GlobalsType, f: impl FnOnce(&Self) -> R) -> R {
+        let extra_data = ParamContextData {
+            globals,
+            locals_start: self.extra_data().locals_start,
+        };
+        self.with_extra_data(extra_data, f)
+    }
+
+    pub fn globals(&self) -> &GlobalsType {
+        &self.extra_data().globals
     }
 }
 
-impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> Context
-    for ParamContextImpl<ParamType, GlobalsType>
-{
+impl<ParamType, GlobalsType> Context for ParamContextImpl<ParamType, GlobalsType> {
     fn locals_start(&self) -> VarIndex {
-        self.locals_start
+        self.extra_data().locals_start
     }
 }
 
-impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> ParamContext<ParamType>
+impl<ParamType, GlobalsType: Copy> ParamContext<ParamType>
     for ParamContextImpl<ParamType, GlobalsType>
 {
     fn with_local<R>(&self, param: &ParamType, f: impl FnOnce(&Self) -> R) -> R {
-        let local_ctx = ParamContextImpl {
-            globals: self.globals,
-            locals: LocalContextStack::Params {
-                params: param,
-                params_len: 1,
-                parent: &self.locals,
-            },
-            locals_start: self.locals_start - 1,
-        };
-
-        // Warning: unsafe code in this module depends on passing `local_ctx` as a reference.
-        // If `f` received ownership, it could access `param` after returning.
-        f(&local_ctx)
+        let mut extra_data = *self.extra_data();
+        extra_data.locals_start -= 1;
+        self.with_item(param, extra_data, f)
     }
 
     fn with_locals<R>(&self, params: &[ParamType], f: impl FnOnce(&Self) -> R) -> R {
-        let params_len = params.len();
-        if params_len > VarIndex::MAX as usize {
-            // A little pedantic, but the unsafe block relies on it.
-            panic!("too many params");
-        }
-
-        let local_ctx = ParamContextImpl {
-            globals: self.globals,
-            locals: LocalContextStack::Params {
-                params: params.as_ptr(),
-                params_len,
-                parent: &self.locals,
-            },
-            locals_start: self.locals_start - (params_len as VarIndex),
-        };
-
-        // Warning: unsafe code in this module depends on passing `local_ctx` as a reference.
-        // If `f` received ownership, it could access `params` after returning.
-        f(&local_ctx)
+        let mut extra_data = *self.extra_data();
+        extra_data.locals_start -= params.len() as VarIndex;
+        self.with_items(params, extra_data, f)
     }
 }
 
-impl<ParamType, GlobalsType: VarAccessor<ParamType> + Copy> VarAccessor<ParamType>
+impl<ParamType, GlobalsType: VarAccessor<ParamType>> VarAccessor<ParamType>
     for ParamContextImpl<ParamType, GlobalsType>
 {
-    fn get_var(&self, mut idx: VarIndex) -> &ParamType {
+    fn get_var(&self, idx: VarIndex) -> &ParamType {
         if idx < 0 {
-            /* The recursive version is much nicer, but Rust has no tail recursion guarantee. */
-            let mut locals = &self.locals;
-            loop {
-                match locals {
-                    LocalContextStack::Root => panic!("invalid De Bruijn index"),
-                    LocalContextStack::Params {
-                        params,
-                        params_len,
-                        parent,
-                    } => {
-                        idx += *params_len as VarIndex;
-
-                        // Safety:
-                        // * The only way to create a new nonempty context is via `with_local` or
-                        //   `with_locals`, and the only way to access that context is via the
-                        //   closure argument of type `&Self`, which has a temporary lifetime.
-                        //   Therefore, we can rely on being inside the closure, so that the borrows
-                        //   of `with_local`/`with_locals`, where the pointers originated from, are
-                        //   still in scope.
-                        // * The reference returned by `get_var` cannot escape the closure because
-                        //   its lifetime is restricted to the temporary lifetime of the closure
-                        //   argument.
-                        // * `idx` is guaranteed to be < `params_len`, as it was previously < 0.
-                        //
-                        // It would be nice if we could implement everything in safe Rust instead,
-                        // but it seems that the `ParamContext` trait cannot be defined in a way
-                        // that would allow this, except by cloning the argument to `with_local`
-                        // (which would be quite expensive both in time and in stack space). The
-                        // problem is that there does not seem to be an obvious way to parameterize
-                        // the closure argument with the lifetimes of `self` and `param`: its type
-                        // needs to be something similar to `&Self`, but currently there is no such
-                        // thing as "Self but with different lifetimes".
-                        unsafe {
-                            if idx >= 0 {
-                                return &*params.offset(idx);
-                            }
-                            locals = &**parent;
-                        }
-                    }
-                }
-            }
+            let mut iter = self.iter();
+            iter.nth((!idx) as usize).unwrap()
         } else {
-            self.globals.get_var(idx)
+            self.globals().get_var(idx)
         }
     }
 
     fn for_each_var<R>(&self, mut f: impl FnMut(VarIndex, &ParamType) -> Option<R>) -> Option<R> {
-        let mut locals = &self.locals;
         let mut idx: VarIndex = 0;
-        loop {
-            match locals {
-                LocalContextStack::Root => break,
-                LocalContextStack::Params {
-                    params,
-                    params_len,
-                    parent,
-                } => {
-                    // Safety: see above.
-                    unsafe {
-                        let mut param_idx = *params_len;
-                        while param_idx > 0 {
-                            idx -= 1;
-                            param_idx -= 1;
-                            let param = &*params.add(param_idx);
-                            let result = f(idx, param);
-                            if result.is_some() {
-                                return result;
-                            }
-                        }
-                        locals = &**parent;
-                    }
-                }
+        for param in self {
+            idx -= 1;
+            let result = f(idx, param);
+            if result.is_some() {
+                return result;
             }
         }
 
-        self.globals.for_each_var(f)
+        self.globals().for_each_var(f)
     }
 }
 

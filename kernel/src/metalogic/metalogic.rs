@@ -72,7 +72,11 @@ impl MetaLogic {
     }
 
     pub fn get_root_context(&self) -> MetaLogicContext {
-        MetaLogicContext::new(self)
+        let globals = MetaLogicGlobals {
+            metalogic: self,
+            inhibit_reduction: false,
+        };
+        MetaLogicContext::with_globals(globals)
     }
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
@@ -226,33 +230,92 @@ impl MetaLogic {
     }
 }
 
-impl VarAccessor<Param> for MetaLogic {
+#[derive(Clone, Copy)]
+pub struct MetaLogicGlobals<'a> {
+    pub metalogic: &'a MetaLogic,
+    pub inhibit_reduction: bool,
+}
+
+impl VarAccessor<Param> for MetaLogicGlobals<'_> {
     fn get_var(&self, idx: VarIndex) -> &Param {
-        self.constants.get_var(idx)
+        self.metalogic.constants.get_var(idx)
     }
 
     fn for_each_var<R>(&self, f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
-        self.constants.for_each_var(f)
+        self.metalogic.constants.for_each_var(f)
     }
 }
 
-pub type MetaLogicContext<'a> = ParamContextImpl<Param, &'a MetaLogic>;
+pub type MetaLogicContext<'a> = ParamContextImpl<Param, MetaLogicGlobals<'a>>;
+
+impl MetaLogicContext<'_> {
+    pub fn reduction_rules(&self) -> &[ReductionRule] {
+        &self.globals().metalogic.reduction_rules
+    }
+
+    pub fn lambda_handler(&self) -> &dyn LambdaHandler {
+        self.globals().metalogic.lambda_handler.as_ref()
+    }
+
+    pub fn with_inner_reduction_only<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
+        let new_globals = MetaLogicGlobals {
+            inhibit_reduction: true,
+            ..*self.globals()
+        };
+        self.with_new_globals(new_globals, f)
+    }
+}
 
 /// We distinguish between comparisons with or without reductions by passing either
 /// `MetaLogicContext` or `MinimalContext`.
 pub trait ComparisonContext: ParamContext<Param> {
-    fn as_opt_metalogic_context(&self) -> Option<&MetaLogicContext>;
+    fn with_reduction_options(
+        &self,
+        f: impl FnMut(ReductionOptionParam<Self>) -> bool,
+        prefer_red: bool,
+    ) -> bool;
+}
+
+// We need this so that with_reduction_options can take a single closure instead of two, which is
+// necessary because we would need to mutate the same variable in both closures.
+pub enum ReductionOptionParam<'a, 'b, Ctx: ComparisonContext> {
+    NoRed(&'a Ctx),
+    Red(&'a MetaLogicContext<'b>),
 }
 
 impl ComparisonContext for MinimalContext {
-    fn as_opt_metalogic_context(&self) -> Option<&MetaLogicContext> {
-        None
+    fn with_reduction_options(
+        &self,
+        mut f: impl FnMut(ReductionOptionParam<Self>) -> bool,
+        _: bool,
+    ) -> bool {
+        f(ReductionOptionParam::NoRed(self))
     }
 }
 
 impl ComparisonContext for MetaLogicContext<'_> {
-    fn as_opt_metalogic_context(&self) -> Option<&MetaLogicContext> {
-        Some(self)
+    fn with_reduction_options(
+        &self,
+        mut f: impl FnMut(ReductionOptionParam<Self>) -> bool,
+        prefer_red: bool,
+    ) -> bool {
+        let globals = self.globals();
+        if globals.inhibit_reduction {
+            // inhibit_reduction should affect exactly one call to with_reduction_options, so we
+            // need to pass a new context to no_red where inhibit_reduction is set to false again.
+            let new_globals = MetaLogicGlobals {
+                inhibit_reduction: false,
+                ..*globals
+            };
+            self.with_new_globals(new_globals, |new_ctx| {
+                f(ReductionOptionParam::NoRed(new_ctx))
+            })
+        } else {
+            if !prefer_red && f(ReductionOptionParam::NoRed(self)) {
+                return true;
+            }
+            f(ReductionOptionParam::Red(self))
+        }
     }
 }
 
@@ -272,24 +335,13 @@ pub enum DependentTypeCtorKind {
 pub trait LambdaHandler {
     fn get_universe_type(&self) -> Result<Expr, String>;
 
-    fn get_dep_type(
-        &self,
-        domain: Expr,
-        prop: Expr,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
-
     fn get_indep_type(
         &self,
         domain: Expr,
         codomain: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<Expr, String> {
-        let prop = Expr::const_lambda(domain.clone(), codomain, &ctx);
-        self.get_dep_type(domain, prop, kind, ctx)
-    }
+    ) -> Result<Expr, String>;
 
     fn get_prop_type(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr, String> {
         self.get_indep_type(
@@ -298,6 +350,32 @@ pub trait LambdaHandler {
             DependentTypeCtorKind::Pi,
             ctx,
         )
+    }
+
+    fn get_dep_type(
+        &self,
+        domain: Expr,
+        prop: Expr,
+        kind: DependentTypeCtorKind,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_semi_generic_indep_type(
+        &self,
+        mut domain: Expr,
+        kind: DependentTypeCtorKind,
+        ctx: MinimalContext,
+    ) -> Result<(Param, Expr), String> {
+        let codomain_param = Param {
+            name: None,
+            type_expr: self.get_universe_type()?,
+        };
+        let indep_type = ctx.with_local(&codomain_param, |subctx| {
+            domain.shift_to_subcontext(&ctx, subctx);
+            let codomain_var = Expr::var(-1);
+            self.get_indep_type(domain, codomain_var, kind, *subctx)
+        })?;
+        Ok((codomain_param, indep_type))
     }
 
     fn get_semi_generic_dep_type(
@@ -318,6 +396,22 @@ pub trait LambdaHandler {
         Ok((prop_param, dep_type))
     }
 
+    fn get_generic_indep_type(
+        &self,
+        kind: DependentTypeCtorKind,
+        ctx: MinimalContext,
+    ) -> Result<(Param, Param, Expr), String> {
+        let domain_param = Param {
+            name: None,
+            type_expr: self.get_universe_type()?,
+        };
+        let (codomain_param, indep_type) = ctx.with_local(&domain_param, |subctx| {
+            let domain_var = Expr::var(-1);
+            self.get_semi_generic_indep_type(domain_var, kind, *subctx)
+        })?;
+        Ok((domain_param, codomain_param, indep_type))
+    }
+
     fn get_generic_dep_type(
         &self,
         kind: DependentTypeCtorKind,
@@ -332,33 +426,6 @@ pub trait LambdaHandler {
             self.get_semi_generic_dep_type(domain_var, kind, *subctx)
         })?;
         Ok((domain_param, prop_param, dep_type))
-    }
-
-    fn get_generic_indep_type(
-        &self,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr), String> {
-        let mut params = [
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-            },
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-            },
-        ];
-        let indep_type = ctx.with_locals(&params, |subctx| {
-            let domain_var = Expr::var(-2);
-            let codomain_var = Expr::var(-1);
-            self.get_indep_type(domain_var, codomain_var, kind, *subctx)
-        })?;
-        Ok((
-            std::mem::take(&mut params[0]),
-            std::mem::take(&mut params[1]),
-            indep_type,
-        ))
     }
 
     fn get_id_cmb(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr, String>;

@@ -104,7 +104,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         parens_for_infix: bool,
     ) -> Result<bool, fmt::Error> {
         let ctx = self.context.as_minimal();
-        let lambda_handler = self.context.globals.lambda_handler.as_ref();
+        let lambda_handler = self.context.lambda_handler();
 
         if let Ok((domain_param, codomain_param, generic_indep_type)) =
             lambda_handler.get_generic_indep_type(kind, ctx)

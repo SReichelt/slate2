@@ -166,16 +166,16 @@ impl Expr {
             }
         }
 
-        let red_ctx = ctx.as_minimal();
-        for rule in &ctx.globals.reduction_rules {
-            if let Some(mut args) = self.match_expr(&rule.params, &rule.body.source, &red_ctx) {
-                let mut expr = rule.body.target.clone();
-                expr.substitute(&mut args, true, &red_ctx);
-                return Some(expr);
+        ctx.with_inner_reduction_only(|red_ctx| {
+            for rule in red_ctx.reduction_rules() {
+                if let Some(mut args) = self.match_expr(&rule.params, &rule.body.source, red_ctx) {
+                    let mut expr = rule.body.target.clone();
+                    expr.substitute(&mut args, true, red_ctx);
+                    return Some(expr);
+                }
             }
-        }
-
-        None
+            None
+        })
     }
 
     pub fn match_expr<Ctx: ComparisonContext>(
@@ -210,7 +210,11 @@ impl Expr {
                 let arg = &app.body;
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.get_type(ctx)?;
-                if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
+                if let Some(codomain) =
+                    fun_type.get_codomain_from_fun_type(arg_type.clone(), ctx)?
+                {
+                    Ok(codomain)
+                } else if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
                     Ok(prop.apply(arg.clone(), ctx))
                 } else {
                     let fun_str = fun.print(ctx);
@@ -225,7 +229,7 @@ impl Expr {
                 let body_type =
                     ctx.with_local(&lambda.param, |body_ctx| lambda.body.get_type(body_ctx))?;
                 let prop = Expr::lambda(lambda.param.clone(), body_type);
-                ctx.globals.lambda_handler.get_dep_type(
+                ctx.lambda_handler().get_dep_type(
                     lambda.param.type_expr.clone(),
                     prop,
                     DependentTypeCtorKind::Pi,
@@ -235,12 +239,29 @@ impl Expr {
         }
     }
 
+    fn get_codomain_from_fun_type(
+        &self,
+        arg_type: Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Option<Expr>, String> {
+        let (codomain_param, cmp_fun_type) = ctx.lambda_handler().get_semi_generic_indep_type(
+            arg_type,
+            DependentTypeCtorKind::Pi,
+            ctx.as_minimal(),
+        )?;
+        if let Some(mut codomain_vec) = self.match_expr(&[codomain_param], &cmp_fun_type, ctx) {
+            Ok(codomain_vec.pop())
+        } else {
+            Ok(None)
+        }
+    }
+
     fn get_prop_from_fun_type(
         &self,
         arg_type: Expr,
         ctx: &MetaLogicContext,
     ) -> Result<Option<Expr>, String> {
-        let (prop_param, cmp_fun_type) = ctx.globals.lambda_handler.get_semi_generic_dep_type(
+        let (prop_param, cmp_fun_type) = ctx.lambda_handler().get_semi_generic_dep_type(
             arg_type,
             DependentTypeCtorKind::Pi,
             ctx.as_minimal(),
@@ -313,6 +334,30 @@ impl Expr {
                 ),
             _ => false,
         }
+    }
+
+    fn try_with_reduction<Ctx: ComparisonContext>(
+        &self,
+        ctx: &Ctx,
+        mut f: impl FnMut(&Self, &Ctx, bool) -> bool,
+        prefer_red: bool,
+    ) -> bool {
+        ctx.with_reduction_options(
+            |param| match param {
+                ReductionOptionParam::NoRed(new_ctx) => f(self, new_ctx, false),
+                ReductionOptionParam::Red(metalogic_ctx) => {
+                    if let Some(self_red) = self.reduce_head(metalogic_ctx, true) {
+                        f(&self_red, ctx, true)
+                    } else if prefer_red {
+                        f(self, ctx, true)
+                    } else {
+                        // Already tried without reduction.
+                        false
+                    }
+                }
+            },
+            prefer_red,
+        )
     }
 }
 
@@ -400,50 +445,24 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
         target: &Self,
         target_subctx: &Ctx,
     ) -> bool {
-        if self.shift_and_compare_impl_no_red(ctx, orig_ctx, target, target_subctx) {
-            return true;
-        }
-
-        if let Some(metalogic_ctx) = ctx.as_opt_metalogic_context() {
-            if let Some(target_metalogic_ctx) = target_subctx.as_opt_metalogic_context() {
-                dbg!(
-                    "reducing",
-                    self.print(metalogic_ctx),
-                    target.print(target_metalogic_ctx)
-                );
-                let self_red_opt = self.reduce_head(metalogic_ctx, true);
-                let target_red_opt = target.reduce_head(target_metalogic_ctx, true);
-                if self_red_opt.is_some() || target_red_opt.is_some() {
-                    let self_red = self_red_opt.as_ref().unwrap_or(self);
-                    let target_red = target_red_opt.as_ref().unwrap_or(target);
-                    dbg!(
-                        "reduced",
-                        self_red.print(metalogic_ctx),
-                        target_red.print(target_metalogic_ctx)
-                    );
-                    if self_red.shift_and_compare_impl_no_red(
-                        ctx,
-                        orig_ctx,
-                        target_red,
-                        target_subctx,
-                    ) {
-                        dbg!(
-                            "match",
-                            self_red.print(metalogic_ctx),
-                            target_red.print(target_metalogic_ctx)
-                        );
-                        return true;
-                    }
-                    dbg!(
-                        "no match",
-                        self_red.print(metalogic_ctx),
-                        target_red.print(target_metalogic_ctx)
-                    );
-                }
-            }
-        }
-
-        false
+        self.try_with_reduction(
+            ctx,
+            |self_red, new_ctx, self_is_red| {
+                target.try_with_reduction(
+                    target_subctx,
+                    |target_red, new_target_subctx, _| {
+                        self_red.shift_and_compare_impl_no_red(
+                            new_ctx,
+                            orig_ctx,
+                            target_red,
+                            new_target_subctx,
+                        )
+                    },
+                    self_is_red,
+                )
+            },
+            false,
+        )
     }
 }
 
@@ -457,39 +476,26 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
         target: &Self,
         target_subctx: &Ctx,
     ) -> bool {
-        if self.substitute_and_shift_and_compare_impl_no_red(
+        self.try_with_reduction(
             ctx,
-            args,
-            args_filled,
-            subst_ctx,
-            target,
-            target_subctx,
-        ) {
-            return true;
-        }
-
-        if let Some(metalogic_ctx) = ctx.as_opt_metalogic_context() {
-            if let Some(target_metalogic_ctx) = target_subctx.as_opt_metalogic_context() {
-                let self_red_opt = self.reduce_head(metalogic_ctx, true);
-                let target_red_opt = target.reduce_head(target_metalogic_ctx, true);
-                if self_red_opt.is_some() || target_red_opt.is_some() {
-                    let self_red = self_red_opt.as_ref().unwrap_or(self);
-                    let target_red = target_red_opt.as_ref().unwrap_or(target);
-                    if self_red.substitute_and_shift_and_compare_impl_no_red(
-                        ctx,
-                        args,
-                        args_filled,
-                        subst_ctx,
-                        target_red,
-                        target_subctx,
-                    ) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
+            |self_red, new_ctx, self_is_red| {
+                target.try_with_reduction(
+                    target_subctx,
+                    |target_red, new_target_subctx, _| {
+                        self_red.substitute_and_shift_and_compare_impl_no_red(
+                            new_ctx,
+                            args,
+                            args_filled,
+                            subst_ctx,
+                            target_red,
+                            new_target_subctx,
+                        )
+                    },
+                    self_is_red,
+                )
+            },
+            false,
+        )
     }
 }
 
@@ -535,7 +541,7 @@ impl LambdaExpr {
             if body.try_shift_to_supercontext(body_ctx, ctx) {
                 let mut body_type = body.get_type(ctx)?;
                 body_type.reduce(ctx, true)?;
-                let cmb = ctx.globals.lambda_handler.get_const_cmb(
+                let cmb = ctx.lambda_handler().get_const_cmb(
                     param.type_expr.clone(),
                     body_type,
                     ctx.as_minimal(),
@@ -546,9 +552,7 @@ impl LambdaExpr {
             match body {
                 Expr::Var(Var(idx)) => {
                     debug_assert_eq!(idx, -1); // Otherwise it was constant.
-                    ctx.globals
-                        .lambda_handler
-                        .get_id_cmb(param.type_expr.clone(), ctx.as_minimal())
+                    ctx.lambda_handler().get_id_cmb(param.type_expr.clone(), ctx.as_minimal())
                 }
                 Expr::App(app) => {
                     let mut fun = app.param;
@@ -563,12 +567,13 @@ impl LambdaExpr {
                     let fun_type = fun.get_type(body_ctx)?;
                     let mut arg_type = arg.get_type(body_ctx)?;
                     arg_type.reduce(body_ctx, true)?;
+                    // TODO: create independent substitution combinator if possible
                     if let Some(mut fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
                         fun_prop.reduce(body_ctx, true)?;
                         dbg!(arg_type.print(body_ctx));
                         let prop1 = Self::create_combinator(param, arg_type, ctx)?;
                         let prop2 = Self::create_combinator(param, fun_prop, ctx)?;
-                        let cmb = ctx.globals.lambda_handler.get_subst_cmb(
+                        let cmb = ctx.lambda_handler().get_subst_cmb(
                             param.type_expr.clone(),
                             prop1,
                             prop2,

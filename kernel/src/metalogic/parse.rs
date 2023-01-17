@@ -19,7 +19,7 @@ impl ParsingContext<'_, '_, '_> {
         let mut expr = self.parse_prod()?;
         if self.input.try_read_char('→') {
             let codomain = self.parse_expr()?;
-            expr = self.context.globals.lambda_handler.get_indep_type(
+            expr = self.context.lambda_handler().get_indep_type(
                 expr,
                 codomain,
                 DependentTypeCtorKind::Pi,
@@ -33,7 +33,7 @@ impl ParsingContext<'_, '_, '_> {
         let mut expr = self.parse_app()?;
         if self.input.try_read_char('×') {
             let right = self.parse_app()?;
-            expr = self.context.globals.lambda_handler.get_indep_type(
+            expr = self.context.lambda_handler().get_indep_type(
                 expr,
                 right,
                 DependentTypeCtorKind::Sigma,
@@ -144,8 +144,7 @@ impl ParsingContext<'_, '_, '_> {
             let domain = param.type_expr.clone();
             let prop = Expr::lambda(std::mem::take(param), rest);
             self.context
-                .globals
-                .lambda_handler
+                .lambda_handler()
                 .get_dep_type(domain, prop, kind, ctx)
         } else {
             Ok(body)
