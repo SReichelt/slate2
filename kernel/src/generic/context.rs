@@ -39,14 +39,18 @@ pub trait Context {
 
     /// Returns the required shift value in order to transfer an expression from this context to
     /// the given subcontext.
-    fn subcontext_shift(&self, subctx: &Self) -> VarIndex {
+    fn subcontext_shift<SubCtx: Context>(&self, subctx: &SubCtx) -> VarIndex {
         subctx.locals_start() - self.locals_start()
     }
 
     /// Checks whether the given variable index refers to a local variable in the given
     /// supercontext.
-    fn is_local_in_supercontext(&self, idx: VarIndex, superctx: &Self) -> bool {
-        idx < superctx.subcontext_shift(self)
+    fn is_local_in_supercontext<SuperCtx: Context>(
+        &self,
+        idx: VarIndex,
+        superctx: &SuperCtx,
+    ) -> bool {
+        self.locals_start() - idx > superctx.locals_start()
     }
 
     fn as_minimal(&self) -> MinimalContext {
@@ -60,11 +64,11 @@ pub trait Context {
 pub trait ParamContext<ParamType>: Context {
     /// Temporarily creates a new context with `param` added on top, and calls `f` with this
     /// context.
-    fn with_local<R>(&self, param: &ParamType, f: impl FnOnce(&Self) -> R) -> R;
+    fn with_local<'a, R>(&'a self, param: &'a ParamType, f: impl FnOnce(&Self) -> R) -> R;
 
     /// Temporarily creates a new context with `params` added on top, and calls `f` with this
     /// context.
-    fn with_locals<R>(&self, params: &[ParamType], f: impl FnOnce(&Self) -> R) -> R;
+    fn with_locals<'a, R>(&'a self, params: &'a [ParamType], f: impl FnOnce(&Self) -> R) -> R;
 }
 
 #[derive(Clone, Copy, Debug)]

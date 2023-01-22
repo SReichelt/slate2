@@ -438,12 +438,12 @@ the reader.
   where
   \begin{align*}
     R : \U_{\max(l,m,n+1)} &\to     \U_{\max(l,m,n)+1}\\
-        Q                  &\mapsto \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right]
+        Q                  &\mapsto \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)}\,\prod_{a : A} Q(a,f(a))\right]
   \end{align*}
   so that
   \begin{align*}
     \ap_R : \left[\prod_{a : A} \prod_{b : P(a)} [Q(a,b) \equiv Q'(a,b)]\right] &\to\\
-            \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right] &\to\\
+            \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)}\,\prod_{a : A} Q(a,f(a))\right] &\to\\
             \left[\prod_{a : A} \prod_{b : P(a)} Q'(a,b)\right] \to \Pi(P) \to A &\to     Q'(a,f(a))\\
             (e_Q,h,g',f,a)                                                       &\mapsto e_Q(a,f(a),h(e_Q^{-1}(g'),f,a))
   \end{align*}
@@ -460,7 +460,7 @@ the reader.
   where
   \begin{align*}
     R : \U_{\max(l,m+1)} &\to     \U_{\max(l,m,n)+1}\\
-        P                &\mapsto \prod_{Q : \prod_{a : A} [P(a) \to \U_n]} \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right],
+        P                &\mapsto \prod_{Q : \prod_{a : A} [P(a) \to \U_n]} \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)}\,\prod_{a : A} Q(a,f(a))\right],
   \end{align*}
   is defined by
   \begin{align*}
@@ -475,7 +475,7 @@ the reader.
   where
   \begin{align*}
     R : \U_l &\to     \U_{\max(l,m,n)+1}\\
-        A    &\mapsto \prod_{P : A \to \U_m}\,\prod_{Q : \prod_{a : A} [P(a) \to \U_n]} \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)} [A \to Q(a,f(a))]\right],
+        A    &\mapsto \prod_{P : A \to \U_m}\,\prod_{Q : \prod_{a : A} [P(a) \to \U_n]} \left[\left[\prod_{a : A} \prod_{b : P(a)} Q(a,b)\right] \to \prod_{f : \Pi(P)}\,\prod_{a : A} Q(a,f(a))\right],
   \end{align*}
   is defined by
   \begin{align*}
@@ -501,23 +501,23 @@ $\ap.$ Two exceptions are currently known:
 
 \subsection{Elimination}
 
-For $A : \U_m,$ $a : A,$ $P : \prod_{b : A} [a = b \to \U_n],$ $b,b' : A,$ and $e_b : b = b',$ we
+For $A : \U_m,$ $a,a' : A,$ $P : \prod_{b : A} [a = b \to \U_n],$ and $e_a : a = a',$ we
 have
-\[\ap_P(e_b) : P(b) \pathOver{\ap_S(e_b)} P(b'),\]
+\[\ap_P(e_a) : P(a) \pathOver{\ap_Q(e_b)} P(a'),\]
 where
 \begin{align*}
-  S : A &\to     \U_{\max(m,n+1)}\\
+  Q : A &\to     \U_{\max(m,n+1)}\\
       b &\mapsto [a = b \to \U_n].
 \end{align*}
 Due to the behavior of $\ap$ with respect to equality, we have
 \begin{align*}
-  \ap_S : b = b' \to [a = b \to \U_n] \to a = b' &\to     \U_n\\
-          (e_b,P,f)                              &\mapsto P(e_b^{-1} \circ f),
+  \ap_Q : A \to A \to b = b' \to [a = b \to \U_n] \to a = b' &\to     \U_n\\
+          (b,b',e_b,P,f)                                     &\mapsto P(e_b^{-1} \circ f),
 \end{align*}
 and therefore
-\[\ap_P(e_b) : \prod_{f : b = b'} [P(b,e_b^{-1} \circ f) \equiv P(b',f)]\]
+\[\ap_P(e_a) : \prod_{f : a = a'} [P(a,e_a^{-1} \circ f) \equiv P(a',f)]\]
 and in particular an instance of
-\[P(b,\refl_b) \equiv P(b',e_b),\]
+\[P(a,\refl_a) \equiv P(a',e_a),\]
 corresponding to based path induction.
 
 \section{Conclusion}

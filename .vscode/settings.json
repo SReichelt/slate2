@@ -1,8 +1,7 @@
 {
-    "rust-analyzer.diagnostics.warningsAsInfo": [
-        "unused_imports",
-        "unused_variables"
+    "editor.formatOnSave": true,
+    "editor.rulers": [
+        100
     ],
-    "rust-analyzer.imports.granularity.enforce": true,
-    "editor.formatOnSave": true
+    "rust-analyzer.imports.granularity.enforce": true
 }

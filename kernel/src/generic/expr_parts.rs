@@ -158,7 +158,7 @@ impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
                         return Some(true);
                     }
                 }
-                return Some(arg.compare_with_subctx(subst_ctx, target, target_subctx));
+                return Some(arg.shift_and_compare(subst_ctx, target, target_subctx));
             }
         }
         None
@@ -315,8 +315,8 @@ impl<
 }
 
 impl<
-        Ctx: ParamContext<Param>,
         SubstArg,
+        Ctx: ParamContext<Param>,
         Param: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Body: ContextObjectWithSubstCmp<SubstArg, Ctx>,
     > ContextObjectWithSubstCmp<SubstArg, Ctx> for Lambda<Param, Body>
@@ -388,8 +388,8 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
 }
 
 impl<
-        Ctx: Context,
         SubstArg,
+        Ctx: Context,
         Fun: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Arg: ContextObjectWithSubstCmp<SubstArg, Ctx>,
     > ContextObjectWithSubstCmp<SubstArg, Ctx> for App<Fun, Arg>
@@ -562,8 +562,8 @@ impl<
 }
 
 impl<
-        Ctx: ParamContext<Param>,
         SubstArg,
+        Ctx: ParamContext<Param>,
         Param: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Body: ContextObjectWithSubstCmp<SubstArg, Ctx>,
     > ContextObjectWithSubstCmp<SubstArg, Ctx> for MultiLambda<Param, Body>
@@ -661,8 +661,8 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
 }
 
 impl<
-        Ctx: Context,
         SubstArg,
+        Ctx: Context,
         Fun: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Arg: ContextObjectWithSubstCmp<SubstArg, Ctx>,
     > ContextObjectWithSubstCmp<SubstArg, Ctx> for MultiApp<Fun, Arg>

@@ -2,9 +2,6 @@ use super::{expr::*, metalogic::*};
 
 pub struct TypeInit<'a> {
     pub ctor: DefInit<'a>,
-    pub intro: &'a [ParamInit<'a>],
-    pub elim: &'a [ParamInit<'a>],
-    pub red: &'a [ReductionRuleInit<'a>],
     pub defs: &'a [DefInit<'a>],
 }
 
@@ -49,9 +46,6 @@ impl MetaLogic {
         reduction_rules_init: &mut Vec<ReductionRuleInit<'a>>,
     ) {
         Self::add_def(&type_init.ctor, constants_init, reduction_rules_init);
-        Self::add_constants(type_init.intro, constants_init);
-        Self::add_constants(type_init.elim, constants_init);
-        Self::add_reduction_rules(type_init.red, reduction_rules_init);
         Self::add_defs(type_init.defs, constants_init, reduction_rules_init);
     }
 
@@ -72,12 +66,6 @@ impl MetaLogic {
     ) {
         constants_init.push(def_init.sym);
         Self::add_reduction_rules(def_init.red, reduction_rules_init);
-    }
-
-    fn add_constants<'a>(params_init: &[ParamInit<'a>], constants_init: &mut Vec<ParamInit<'a>>) {
-        for param_init in params_init {
-            constants_init.push(*param_init);
-        }
     }
 
     fn add_reduction_rules<'a>(

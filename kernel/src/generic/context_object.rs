@@ -51,6 +51,20 @@ pub trait ContextObject: Clone {
         self.shifted_impl(ctx.locals_start(), 0, ctx.subcontext_shift(subctx))
     }
 
+    fn shift_to_supercontext<Ctx: Context>(&mut self, ctx: &Ctx, superctx: &Ctx) {
+        let shift = superctx.subcontext_shift(ctx);
+        self.shift_impl(ctx.locals_start(), shift, -shift);
+    }
+
+    fn shifted_to_supercontext<Ctx: Context>(&self, ctx: &Ctx, superctx: &Ctx) -> Option<Self> {
+        if self.valid_in_superctx(ctx, superctx) {
+            let shift = superctx.subcontext_shift(ctx);
+            Some(self.shifted_impl(ctx.locals_start(), shift, -shift))
+        } else {
+            None
+        }
+    }
+
     fn shifted_from_var<Ctx: Context>(&self, subctx: &Ctx, var_idx_in_subctx: VarIndex) -> Self {
         if var_idx_in_subctx < 0 {
             self.shifted_impl(
@@ -63,16 +77,6 @@ pub trait ContextObject: Clone {
         }
     }
 
-    fn try_shift_to_supercontext<Ctx: Context>(&mut self, ctx: &Ctx, superctx: &Ctx) -> bool {
-        if self.valid_in_superctx(ctx, superctx) {
-            let shift = superctx.subcontext_shift(ctx);
-            self.shift_impl(ctx.locals_start(), shift, -shift);
-            true
-        } else {
-            false
-        }
-    }
-
     /// For each variable in the range from `start` to `start + ref_counts.len()`, counts how often
     /// it is referenced, by increasing the corresponding item in `ref_counts`.
     fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]);
@@ -81,7 +85,7 @@ pub trait ContextObject: Clone {
     fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool;
 
     /// Checks if any of the topmost `len` local variables are referenced.
-    fn valid_in_superctx<Ctx: Context>(&mut self, ctx: &Ctx, superctx: &Ctx) -> bool {
+    fn valid_in_superctx<Ctx: Context>(&self, ctx: &Ctx, superctx: &Ctx) -> bool {
         !self.has_refs_impl(superctx.subcontext_shift(ctx), 0)
     }
 }
@@ -199,14 +203,14 @@ pub trait ContextObjectWithCmp<Ctx: Context>: ContextObject {
 
     /// Checks whether the expression matches `target` when shifted to the subcontext
     /// `target_subctx`.
-    fn compare_with_subctx(&self, ctx: &Ctx, target: &Self, target_subctx: &Ctx) -> bool {
+    fn shift_and_compare(&self, ctx: &Ctx, target: &Self, target_subctx: &Ctx) -> bool {
         debug_assert!(ctx.subcontext_shift(target_subctx) <= 0);
         self.shift_and_compare_impl(ctx, ctx, target, target_subctx)
     }
 
     /// Checks whether the expression matches `target`.
     fn compare(&self, target: &Self, ctx: &Ctx) -> bool {
-        self.compare_with_subctx(ctx, target, ctx)
+        self.shift_and_compare(ctx, target, ctx)
     }
 }
 

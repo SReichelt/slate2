@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::{expr::*, metalogic::*};
 
-use crate::generic::{context::*, expr::*};
+use crate::generic::{context::*, expr_parts::*};
 
 pub struct PrintingContext<'a, 'b, W: fmt::Write> {
     pub output: &'a mut W,
@@ -110,7 +110,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             lambda_handler.get_generic_indep_type(kind, ctx)
         {
             if let Some(arg_vec) =
-                expr.match_expr(&[domain_param, codomain_param], &generic_indep_type, &ctx)
+                expr.match_expr(&ctx, &[domain_param, codomain_param], &generic_indep_type)
             {
                 let domain = &arg_vec[0];
                 let codomain = &arg_vec[1];
@@ -139,7 +139,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             lambda_handler.get_generic_dep_type(kind, ctx)
         {
             if let Some(arg_vec) =
-                expr.match_expr(&[domain_param, prop_param], &generic_dep_type, &ctx)
+                expr.match_expr(&ctx, &[domain_param, prop_param], &generic_dep_type)
             {
                 if let Expr::Lambda(lambda) = &arg_vec[1] {
                     if parens_for_prefix {

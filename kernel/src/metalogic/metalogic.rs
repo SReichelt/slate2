@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 
 use super::expr::*;
 
-use crate::generic::{context::*, context_object::*, expr::*};
+use crate::generic::{context::*, context_object::*, expr_parts::*};
 
 pub struct MetaLogic {
     pub constants: Vec<Param>,
@@ -72,11 +72,7 @@ impl MetaLogic {
     }
 
     pub fn get_root_context(&self) -> MetaLogicContext {
-        let globals = MetaLogicGlobals {
-            metalogic: self,
-            inhibit_reduction: false,
-        };
-        MetaLogicContext::with_globals(globals)
+        MetaLogicContext::with_globals(self)
     }
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
@@ -92,12 +88,16 @@ impl MetaLogic {
         expr.print(&self.get_root_context())
     }
 
-    pub fn reduce_expr(
+    pub fn reduce_expr(&self, expr: &mut Expr, max_depth: i32) -> Result<bool, String> {
+        expr.reduce(&self.get_root_context(), max_depth)
+    }
+
+    pub fn convert_expr_to_combinators(
         &self,
         expr: &mut Expr,
-        convert_to_combinators: bool,
-    ) -> Result<bool, String> {
-        expr.reduce(&self.get_root_context(), convert_to_combinators)
+        max_depth: i32,
+    ) -> Result<(), String> {
+        expr.convert_to_combinators(&self.get_root_context(), max_depth)
     }
 
     pub fn get_expr_type(&self, expr: &Expr) -> Result<Expr, String> {
@@ -127,9 +127,12 @@ impl MetaLogic {
         ctx: &MetaLogicContext,
     ) -> Result<(), String> {
         ctx.with_locals(&rule.params, |rule_ctx| {
+            //let mut clone = rule.body.source.clone();
+            //clone.convert_to_combinators(rule_ctx, -1)?;
+            //dbg!(clone.print(rule_ctx));
             let source_type = rule.body.source.get_type(rule_ctx)?;
             let target_type = rule.body.target.get_type(rule_ctx)?;
-            if source_type.compare(&target_type, rule_ctx) {
+            if source_type.is_defeq(&target_type, rule_ctx)? {
                 Ok(())
             } else {
                 let source_str = rule.body.source.print(rule_ctx);
@@ -172,7 +175,7 @@ impl MetaLogic {
         self.check_type_of_types_in_expr(&param.type_expr, ctx)?;
         let type_type = param.type_expr.get_type(ctx)?;
         let cmp_type_type = self.lambda_handler.get_universe_type()?;
-        if type_type.compare(&cmp_type_type, ctx) {
+        if type_type.is_defeq(&cmp_type_type, ctx)? {
             Ok(())
         } else {
             let type_str = param.type_expr.print(ctx);
@@ -230,50 +233,32 @@ impl MetaLogic {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct MetaLogicGlobals<'a> {
-    pub metalogic: &'a MetaLogic,
-    pub inhibit_reduction: bool,
-}
-
-impl VarAccessor<Param> for MetaLogicGlobals<'_> {
+impl VarAccessor<Param> for MetaLogic {
     fn get_var(&self, idx: VarIndex) -> &Param {
-        self.metalogic.constants.get_var(idx)
+        self.constants.get_var(idx)
     }
 
     fn for_each_var<R>(&self, f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
-        self.metalogic.constants.for_each_var(f)
+        self.constants.for_each_var(f)
     }
 }
 
-pub type MetaLogicContext<'a> = ParamContextImpl<Param, MetaLogicGlobals<'a>>;
+pub type MetaLogicContext<'a> = ParamContextImpl<Param, &'a MetaLogic>;
 
 impl MetaLogicContext<'_> {
     pub fn reduction_rules(&self) -> &[ReductionRule] {
-        &self.globals().metalogic.reduction_rules
+        &self.globals().reduction_rules
     }
 
     pub fn lambda_handler(&self) -> &dyn LambdaHandler {
-        self.globals().metalogic.lambda_handler.as_ref()
-    }
-
-    pub fn with_inner_reduction_only<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
-        let new_globals = MetaLogicGlobals {
-            inhibit_reduction: true,
-            ..*self.globals()
-        };
-        self.with_new_globals(new_globals, f)
+        self.globals().lambda_handler.as_ref()
     }
 }
 
 /// We distinguish between comparisons with or without reductions by passing either
 /// `MetaLogicContext` or `MinimalContext`.
 pub trait ComparisonContext: ParamContext<Param> {
-    fn with_reduction_options(
-        &self,
-        f: impl FnMut(ReductionOptionParam<Self>) -> bool,
-        prefer_red: bool,
-    ) -> bool;
+    fn as_metalogic_context(&self) -> Option<&MetaLogicContext>;
 }
 
 // We need this so that with_reduction_options can take a single closure instead of two, which is
@@ -284,38 +269,14 @@ pub enum ReductionOptionParam<'a, 'b, Ctx: ComparisonContext> {
 }
 
 impl ComparisonContext for MinimalContext {
-    fn with_reduction_options(
-        &self,
-        mut f: impl FnMut(ReductionOptionParam<Self>) -> bool,
-        _: bool,
-    ) -> bool {
-        f(ReductionOptionParam::NoRed(self))
+    fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
+        None
     }
 }
 
 impl ComparisonContext for MetaLogicContext<'_> {
-    fn with_reduction_options(
-        &self,
-        mut f: impl FnMut(ReductionOptionParam<Self>) -> bool,
-        prefer_red: bool,
-    ) -> bool {
-        let globals = self.globals();
-        if globals.inhibit_reduction {
-            // inhibit_reduction should affect exactly one call to with_reduction_options, so we
-            // need to pass a new context to no_red where inhibit_reduction is set to false again.
-            let new_globals = MetaLogicGlobals {
-                inhibit_reduction: false,
-                ..*globals
-            };
-            self.with_new_globals(new_globals, |new_ctx| {
-                f(ReductionOptionParam::NoRed(new_ctx))
-            })
-        } else {
-            if !prefer_red && f(ReductionOptionParam::NoRed(self)) {
-                return true;
-            }
-            f(ReductionOptionParam::Red(self))
-        }
+    fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
+        Some(self)
     }
 }
 
@@ -437,11 +398,51 @@ pub trait LambdaHandler {
         ctx: MinimalContext,
     ) -> Result<Expr, String>;
 
-    fn get_subst_cmb(
+    fn get_indep_subst_cmb(
+        &self,
+        domain: Expr,
+        codomain1: Expr,
+        codomain2: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_dep01_subst_cmb(
+        &self,
+        domain: Expr,
+        codomain1: Expr,
+        prop2: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_dep02_subst_cmb(
+        &self,
+        domain: Expr,
+        codomain1: Expr,
+        rel2: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_dep10_subst_cmb(
+        &self,
+        domain: Expr,
+        prop1: Expr,
+        codomain2: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_dep11_subst_cmb(
         &self,
         domain: Expr,
         prop1: Expr,
         prop2: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_dep12_subst_cmb(
+        &self,
+        domain: Expr,
+        prop1: Expr,
+        rel2: Expr,
         ctx: MinimalContext,
     ) -> Result<Expr, String>;
 }

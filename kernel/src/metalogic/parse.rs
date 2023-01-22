@@ -5,7 +5,7 @@ use smallvec::{smallvec, SmallVec};
 use super::{expr::*, metalogic::*};
 
 use crate::{
-    generic::{context::*, context_object::*, expr::*},
+    generic::{context::*, context_object::*, expr_parts::*},
     util::parser::*,
 };
 
