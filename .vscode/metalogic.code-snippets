@@ -1,4 +1,11 @@
 {
+	"Def": {
+		"scope": "rust",
+		"prefix": "\\def",
+		"body": [
+			":≡"
+		]
+	},
 	"Lambda": {
 		"scope": "rust",
 		"prefix": "\\lambda",

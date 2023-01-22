@@ -1,10 +1,11 @@
 use std::{fmt::Debug, rc::Rc};
 
-use smallvec::SmallVec;
+use super::{expr::*, parse::*};
 
-use super::expr::*;
-
-use crate::generic::{context::*, context_object::*, expr_parts::*};
+use crate::{
+    generic::{context::*, context_object::*, expr_parts::*},
+    util::parser::*,
+};
 
 pub struct MetaLogic {
     pub constants: Vec<Param>,
@@ -12,25 +13,27 @@ pub struct MetaLogic {
     pub lambda_handler: Box<dyn LambdaHandler>,
 }
 
-pub type ParamInit<'a> = (&'a str, &'a str);
-pub type ReductionRuleInit<'a> = (&'a [ParamInit<'a>], &'a str, &'a str);
-
 impl MetaLogic {
     pub fn construct<F>(
-        constants_init: &[ParamInit],
-        reduction_rules_init: &[ReductionRuleInit],
+        constants_init: &[&str],
+        reduction_rules_init: &[&str],
         create_lambda_handler: F,
     ) -> Result<Self, String>
     where
         F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
     {
-        let constants: Vec<Param> = constants_init
-            .iter()
-            .map(|(name, _)| Param {
-                name: Some(Rc::new((*name).into())),
-                type_expr: Expr::default(),
-            })
-            .collect();
+        let mut constants = Vec::with_capacity(constants_init.len());
+        for constant_init in constants_init {
+            let mut parser_input = ParserInput(constant_init);
+            if let Some(name) = parser_input.try_read_name() {
+                constants.push(Param {
+                    name: Some(Rc::new(name.into())),
+                    type_expr: Expr::default(),
+                });
+            } else {
+                return parser_input.expected("identifier");
+            }
+        }
 
         let lambda_handler = create_lambda_handler(&constants);
 
@@ -41,30 +44,22 @@ impl MetaLogic {
         };
 
         let mut idx = 0;
-        for (_, type_str) in constants_init {
-            let type_expr = Expr::parse(type_str, &metalogic.get_root_context())?;
-            metalogic.constants[idx].type_expr = type_expr;
+        for constant_init in constants_init {
+            let param = ParsingContext::parse(
+                constant_init,
+                &metalogic.get_root_context(),
+                |parsing_context| parsing_context.parse_param(),
+            )?;
+            metalogic.constants[idx].type_expr = param.type_expr;
             idx += 1;
         }
 
-        for (params_init, source_init, target_init) in reduction_rules_init {
-            let root_ctx = metalogic.get_root_context();
-            let mut params = SmallVec::with_capacity(params_init.len());
-            for (name, type_str) in params_init.iter() {
-                let param = root_ctx.with_locals(&params, |ctx| -> Result<Param, String> {
-                    Ok(Param {
-                        name: Some(Rc::new((*name).into())),
-                        type_expr: Expr::parse(type_str, ctx)?,
-                    })
-                })?;
-                params.push(param);
-            }
-            let body = root_ctx.with_locals(&params, |ctx| -> Result<ReductionBody, String> {
-                let source = Expr::parse(source_init, ctx)?;
-                let target = Expr::parse(target_init, ctx)?;
-                Ok(ReductionBody { source, target })
-            })?;
-            let rule = ReductionRule { params, body };
+        for rule_init in reduction_rules_init {
+            let rule = ParsingContext::parse(
+                rule_init,
+                &metalogic.get_root_context(),
+                |parsing_context| parsing_context.parse_reduction_rule(),
+            )?;
             metalogic.reduction_rules.push(rule);
         }
 

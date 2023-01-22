@@ -5,11 +5,23 @@ use super::{expr::*, metalogic::*};
 use crate::generic::{context::*, expr_parts::*};
 
 pub struct PrintingContext<'a, 'b, W: fmt::Write> {
-    pub output: &'a mut W,
-    pub context: &'a MetaLogicContext<'b>,
+    output: &'a mut W,
+    context: &'a MetaLogicContext<'b>,
 }
 
 impl<W: fmt::Write> PrintingContext<'_, '_, W> {
+    pub fn print(
+        result: &mut W,
+        ctx: &MetaLogicContext,
+        f: impl FnOnce(&mut PrintingContext<W>) -> fmt::Result,
+    ) -> fmt::Result {
+        let mut printing_context = PrintingContext {
+            output: result,
+            context: ctx,
+        };
+        f(&mut printing_context)
+    }
+
     pub fn print_expr(&mut self, expr: &Expr) -> fmt::Result {
         self.print_expr_with_parens(expr, false, false, false, false, false)
     }

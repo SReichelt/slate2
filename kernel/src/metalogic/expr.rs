@@ -7,10 +7,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{metalogic::*, parse::*, print::*};
 
-use crate::{
-    generic::{context::*, context_object::*, expr_parts::*},
-    util::parser::*,
-};
+use crate::generic::{context::*, context_object::*, expr_parts::*};
 
 #[derive(Clone, PartialEq)]
 pub enum Expr {
@@ -63,21 +60,15 @@ impl Expr {
     }
 
     pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self, String> {
-        let mut parser_input = ParserInput(s);
-        let mut parsing_context = ParsingContext {
-            input: &mut parser_input,
-            context: ctx,
-        };
-        parsing_context.parse_expr()
+        ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
     }
 
     pub fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
-        let mut printing_context = PrintingContext {
-            output: &mut result,
-            context: ctx,
-        };
-        printing_context.print_expr(&self).unwrap();
+        PrintingContext::print(&mut result, ctx, |printing_context| {
+            printing_context.print_expr(&self)
+        })
+        .unwrap();
         result
     }
 

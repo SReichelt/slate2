@@ -10,6 +10,14 @@ impl<'a> ParserInput<'a> {
         self.error(format!("expected {expected} instead of: {rest}"))
     }
 
+    pub fn expect_end(&self) -> Result<(), String> {
+        if self.0.is_empty() {
+            Ok(())
+        } else {
+            self.expected("end")
+        }
+    }
+
     pub fn skip_whitespace(&mut self) {
         self.0 = self.0.trim_start();
     }
@@ -29,6 +37,24 @@ impl<'a> ParserInput<'a> {
             Ok(())
         } else {
             self.expected(&format!("'{c}'"))
+        }
+    }
+
+    pub fn try_read_char_seq(&mut self, cs: &str) -> bool {
+        if let Some(s) = self.0.strip_prefix(cs) {
+            self.0 = s;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn read_char_seq(&mut self, cs: &str) -> Result<(), String> {
+        self.skip_whitespace();
+        if self.try_read_char_seq(cs) {
+            Ok(())
+        } else {
+            self.expected(&format!("'{cs}'"))
         }
     }
 
