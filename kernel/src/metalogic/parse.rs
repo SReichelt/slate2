@@ -25,9 +25,9 @@ impl ParsingContext<'_, '_, '_> {
             input: &mut parser_input,
             context: ctx,
         };
-        let result = f(&mut parsing_context);
+        let result = f(&mut parsing_context)?;
         parser_input.expect_end()?;
-        result
+        Ok(result)
     }
 
     pub fn parse_expr(&mut self) -> Result<Expr, String> {

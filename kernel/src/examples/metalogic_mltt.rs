@@ -77,11 +77,15 @@ pub fn get_mltt() -> MetaLogic {
                     ],
                 },
                 defs: &[
-                    // TODO: implement these for different equalities
                     DefInit {
                         sym: "refl : Π A : U. Π a : A. a = a",
-                        red: &[],
+                        red: &[
+                            "Π A : U. refl U A :≡ pair_intro (A → A) (A → A) (λ a : A. a) (λ a : A. a)",
+                            "Π A : U. Π P : A → U. Π f : Pi A P. refl (Pi A P) f :≡ λ a : A. refl (P a) (f a)",
+                            "Π A : U. Π P : A → U. Π p : Sigma A P. refl (Sigma A P) p :≡ Sigma_intro (Sigma_fst A P p ={A} Sigma_fst A P p) (λ e_fst : Sigma_fst A P p ={A} Sigma_fst A P p. Sigma_snd A P p ={P (Sigma_fst A P p)}[ap A U P (Sigma_fst A P p) (Sigma_fst A P p) e_fst]{P (Sigma_fst A P p)} Sigma_snd A P p) (refl A (Sigma_fst A P p)) (refl (P (Sigma_fst A P p)) (Sigma_snd A P p))",
+                        ],
                     },
+                    // TODO: implement these for different equalities
                     DefInit {
                         sym: "trans : Π A : U. Π a b c : A. (b = c → a = b → a = c)",
                         red: &[
@@ -104,10 +108,7 @@ pub fn get_mltt() -> MetaLogic {
             TypeInit {
                 ctor: DefInit {
                     sym: "DepEq : Π A B : U. ((A = B) → A → B → U)",
-                    red: &[
-                        // TODO (also remove this)
-                        "Π A : U. DepEq A A (refl U A) :≡ Eq A",
-                    ],
+                    red: &["Π A B : U. Π e : A = B. Π a : A. Π b : B. a =[e] b :≡ to A B e a = b"],
                 },
                 defs: &[],
             },
