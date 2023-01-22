@@ -302,7 +302,14 @@ pub trait LambdaHandler {
         codomain: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<Expr, String>;
+    ) -> Result<Expr, String> {
+        self.get_dep_type(
+            domain.clone(),
+            Expr::const_lambda(domain, codomain, &ctx),
+            kind,
+            ctx,
+        )
+    }
 
     fn get_prop_type(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr, String> {
         self.get_indep_type(
@@ -398,47 +405,7 @@ pub trait LambdaHandler {
         ctx: MinimalContext,
     ) -> Result<Expr, String>;
 
-    fn get_indep_subst_cmb(
-        &self,
-        domain: Expr,
-        codomain1: Expr,
-        codomain2: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
-
-    fn get_dep01_subst_cmb(
-        &self,
-        domain: Expr,
-        codomain1: Expr,
-        prop2: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
-
-    fn get_dep02_subst_cmb(
-        &self,
-        domain: Expr,
-        codomain1: Expr,
-        rel2: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
-
-    fn get_dep10_subst_cmb(
-        &self,
-        domain: Expr,
-        prop1: Expr,
-        codomain2: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
-
-    fn get_dep11_subst_cmb(
-        &self,
-        domain: Expr,
-        prop1: Expr,
-        prop2: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
-
-    fn get_dep12_subst_cmb(
+    fn get_subst_cmb(
         &self,
         domain: Expr,
         prop1: Expr,

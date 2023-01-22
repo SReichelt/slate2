@@ -225,11 +225,7 @@ impl Expr {
                 let arg = &app.body;
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.get_type(ctx)?;
-                if let Some(codomain) =
-                    fun_type.get_codomain_from_fun_type(arg_type.clone(), ctx)?
-                {
-                    Ok(codomain)
-                } else if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
+                if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
                     let mut result = Expr::app(prop, arg.clone());
                     result.reduce(ctx, -1)?;
                     Ok(result)
@@ -261,23 +257,6 @@ impl Expr {
                     )
                 }
             }),
-        }
-    }
-
-    fn get_codomain_from_fun_type(
-        &self,
-        arg_type: Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Option<Expr>, String> {
-        let (codomain_param, cmp_fun_type) = ctx.lambda_handler().get_semi_generic_indep_type(
-            arg_type,
-            DependentTypeCtorKind::Pi,
-            ctx.as_minimal(),
-        )?;
-        if let Some(mut codomain_vec) = self.match_expr(ctx, &[codomain_param], &cmp_fun_type) {
-            Ok(codomain_vec.pop())
-        } else {
-            Ok(None)
         }
     }
 
@@ -538,7 +517,7 @@ impl LambdaExpr {
                             return Ok(shifted_fun);
                         }
                     }
-                    let cmb = Self::create_subst_combinator(param, ctx, fun, arg, body_ctx)?;
+                    let cmb = Self::get_subst_cmb(param, ctx, fun, arg, body_ctx)?;
                     let fun_lambda = Expr::lambda(param.clone(), fun.clone());
                     let arg_lambda = Expr::lambda(param.clone(), arg.clone());
                     Ok(Expr::multi_app(cmb, smallvec![fun_lambda, arg_lambda]))
@@ -552,7 +531,7 @@ impl LambdaExpr {
         })
     }
 
-    fn create_subst_combinator(
+    fn get_subst_cmb(
         param: &Param,
         ctx: &MetaLogicContext,
         fun: &Expr,
@@ -561,80 +540,22 @@ impl LambdaExpr {
     ) -> Result<Expr, String> {
         let fun_type = fun.get_type(body_ctx)?;
         let arg_type = arg.get_type(body_ctx)?;
-        if let Some(shifted_arg_type) = arg_type.shifted_to_supercontext(body_ctx, ctx) {
-            if let Some(fun_codomain) =
-                fun_type.get_codomain_from_fun_type(arg_type.clone(), body_ctx)?
-            {
-                if let Some(shifted_fun_codomain) =
-                    fun_codomain.shifted_to_supercontext(body_ctx, ctx)
-                {
-                    return ctx.lambda_handler().get_indep_subst_cmb(
-                        param.type_expr.clone(),
-                        shifted_arg_type,
-                        shifted_fun_codomain,
-                        ctx.as_minimal(),
-                    );
-                } else {
-                    let prop2 = Expr::lambda(param.clone(), fun_codomain);
-                    return ctx.lambda_handler().get_dep01_subst_cmb(
-                        param.type_expr.clone(),
-                        shifted_arg_type,
-                        prop2,
-                        ctx.as_minimal(),
-                    );
-                }
-            } else if let Some(fun_prop) =
-                fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)?
-            {
-                let rel2 = Expr::lambda(param.clone(), fun_prop);
-                return ctx.lambda_handler().get_dep02_subst_cmb(
-                    param.type_expr.clone(),
-                    shifted_arg_type,
-                    rel2,
-                    ctx.as_minimal(),
-                );
-            }
+        if let Some(fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
+            let prop1 = Expr::lambda(param.clone(), arg_type);
+            let rel2 = Expr::lambda(param.clone(), fun_prop);
+            ctx.lambda_handler().get_subst_cmb(
+                param.type_expr.clone(),
+                prop1,
+                rel2,
+                ctx.as_minimal(),
+            )
         } else {
-            if let Some(fun_codomain) =
-                fun_type.get_codomain_from_fun_type(arg_type.clone(), body_ctx)?
-            {
-                let prop1 = Expr::lambda(param.clone(), arg_type);
-                if let Some(shifted_fun_codomain) =
-                    fun_codomain.shifted_to_supercontext(body_ctx, ctx)
-                {
-                    return ctx.lambda_handler().get_dep10_subst_cmb(
-                        param.type_expr.clone(),
-                        prop1,
-                        shifted_fun_codomain,
-                        ctx.as_minimal(),
-                    );
-                } else {
-                    let prop2 = Expr::lambda(param.clone(), fun_codomain);
-                    return ctx.lambda_handler().get_dep11_subst_cmb(
-                        param.type_expr.clone(),
-                        prop1,
-                        prop2,
-                        ctx.as_minimal(),
-                    );
-                }
-            } else if let Some(fun_prop) =
-                fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)?
-            {
-                let prop1 = Expr::lambda(param.clone(), arg_type);
-                let rel2 = Expr::lambda(param.clone(), fun_prop);
-                return ctx.lambda_handler().get_dep12_subst_cmb(
-                    param.type_expr.clone(),
-                    prop1,
-                    rel2,
-                    ctx.as_minimal(),
-                );
-            }
+            let fun_str = fun.print(body_ctx);
+            let fun_type_str = fun_type.print(body_ctx);
+            let arg_str = arg.print(body_ctx);
+            let arg_type_str = arg_type.print(body_ctx);
+            Err(format!("application type mismatch when converting to combinator: [{fun_str} : {fun_type_str}] cannot be applied to [{arg_str} : {arg_type_str}]"))
         }
-        let fun_str = fun.print(body_ctx);
-        let fun_type_str = fun_type.print(body_ctx);
-        let arg_str = arg.print(body_ctx);
-        let arg_type_str = arg_type.print(body_ctx);
-        Err(format!("application type mismatch when converting to combinator: [{fun_str} : {fun_type_str}] cannot be applied to [{arg_str} : {arg_type_str}]"))
     }
 }
 
