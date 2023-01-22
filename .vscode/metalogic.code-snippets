@@ -1,0 +1,37 @@
+{
+	"Lambda": {
+		"scope": "rust",
+		"prefix": "\\lambda",
+		"body": [
+			"λ $1 : $2. $3"
+		]
+	},
+	"Pi": {
+		"scope": "rust",
+		"prefix": "\\Pi",
+		"body": [
+			"Π $1 : $2. $3"
+		]
+	},
+	"Sigma": {
+		"scope": "rust",
+		"prefix": "\\Sigma",
+		"body": [
+			"Σ $1 : $2. $3"
+		]
+	},
+	"Function": {
+		"scope": "rust",
+		"prefix": "\\to",
+		"body": [
+			"→"
+		]
+	},
+	"Product": {
+		"scope": "rust",
+		"prefix": "\\times",
+		"body": [
+			"×"
+		]
+	}
+}

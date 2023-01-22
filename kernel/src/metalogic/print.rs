@@ -10,15 +10,20 @@ pub struct PrintingContext<'a, 'b, W: fmt::Write> {
 }
 
 impl<W: fmt::Write> PrintingContext<'_, '_, W> {
-    pub fn print_expr(
+    pub fn print_expr(&mut self, expr: &Expr) -> fmt::Result {
+        self.print_expr_with_parens(expr, false, false, false, false, false)
+    }
+
+    pub fn print_expr_with_parens(
         &mut self,
         expr: &Expr,
         parens_for_app: bool,
         parens_for_lambda: bool,
         parens_for_fun: bool,
         parens_for_prod: bool,
+        parens_for_eq: bool,
     ) -> fmt::Result {
-        if self.try_print_special(
+        if self.try_print_std_type_ctor(
             expr,
             DependentTypeCtorKind::Pi,
             'Π',
@@ -29,7 +34,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             return Ok(());
         }
 
-        if self.try_print_special(
+        if self.try_print_std_type_ctor(
             expr,
             DependentTypeCtorKind::Sigma,
             'Σ',
@@ -37,6 +42,10 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             parens_for_lambda,
             parens_for_prod,
         )? {
+            return Ok(());
+        }
+
+        if self.try_print_eq_ctor(expr, parens_for_eq)? {
             return Ok(());
         }
 
@@ -53,9 +62,9 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 if parens_for_app {
                     self.output.write_char('(')?;
                 }
-                self.print_expr(&app.param, false, true, true, true)?;
+                self.print_expr_with_parens(&app.param, false, true, true, true, true)?;
                 self.output.write_char(' ')?;
-                self.print_expr(&app.body, true, true, true, true)?;
+                self.print_expr_with_parens(&app.body, true, true, true, true, true)?;
                 if parens_for_app {
                     self.output.write_char(')')?;
                 }
@@ -82,7 +91,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 output: self.output,
                 context: body_ctx,
             };
-            body_printing_ctx.print_expr(&lambda.body, false, false, true, true)
+            body_printing_ctx.print_expr_with_parens(&lambda.body, false, false, true, true, false)
         })?;
         Ok(())
     }
@@ -90,11 +99,11 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
     fn print_param(&mut self, param: &Param) -> fmt::Result {
         param.print_name(self.output)?;
         self.output.write_str(" : ")?;
-        self.print_expr(&param.type_expr, false, true, false, false)?;
+        self.print_expr_with_parens(&param.type_expr, false, true, false, false, false)?;
         Ok(())
     }
 
-    fn try_print_special(
+    fn try_print_std_type_ctor(
         &mut self,
         expr: &Expr,
         kind: DependentTypeCtorKind,
@@ -112,26 +121,27 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             if let Some(arg_vec) =
                 expr.match_expr(&ctx, &[domain_param, codomain_param], &generic_indep_type)
             {
-                let domain = &arg_vec[0];
-                let codomain = &arg_vec[1];
-                if parens_for_infix {
-                    self.output.write_char('(')?;
+                if let [domain, codomain] = arg_vec.as_slice() {
+                    if parens_for_infix {
+                        self.output.write_char('(')?;
+                    }
+                    self.print_expr_with_parens(domain, false, true, true, true, false)?;
+                    self.output.write_char(' ')?;
+                    self.output.write_char(infix)?;
+                    self.output.write_char(' ')?;
+                    self.print_expr_with_parens(
+                        codomain,
+                        false,
+                        true,
+                        kind != DependentTypeCtorKind::Pi,
+                        true,
+                        false,
+                    )?;
+                    if parens_for_infix {
+                        self.output.write_char(')')?;
+                    }
+                    return Ok(true);
                 }
-                self.print_expr(&domain, false, true, true, true)?;
-                self.output.write_char(' ')?;
-                self.output.write_char(infix)?;
-                self.output.write_char(' ')?;
-                self.print_expr(
-                    &codomain,
-                    false,
-                    true,
-                    kind != DependentTypeCtorKind::Pi,
-                    true,
-                )?;
-                if parens_for_infix {
-                    self.output.write_char(')')?;
-                }
-                return Ok(true);
             }
         }
 
@@ -141,14 +151,103 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             if let Some(arg_vec) =
                 expr.match_expr(&ctx, &[domain_param, prop_param], &generic_dep_type)
             {
-                if let Expr::Lambda(lambda) = &arg_vec[1] {
-                    if parens_for_prefix {
+                if let [_domain, prop] = arg_vec.as_slice() {
+                    if let Expr::Lambda(lambda) = prop {
+                        if parens_for_prefix {
+                            self.output.write_char('(')?;
+                        }
+                        self.output.write_char(prefix)?;
+                        self.output.write_char(' ')?;
+                        self.print_lambda(lambda)?;
+                        if parens_for_prefix {
+                            self.output.write_char(')')?;
+                        }
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn try_print_eq_ctor(&mut self, expr: &Expr, parens: bool) -> Result<bool, fmt::Error> {
+        let ctx = self.context.as_minimal();
+        let lambda_handler = self.context.lambda_handler();
+
+        if let Ok((domain_param, left_param, right_param, generic_indep_eq_type)) =
+            lambda_handler.get_generic_indep_eq_type(ctx)
+        {
+            if let Some(arg_vec) = expr.match_expr(
+                &ctx,
+                &[domain_param, left_param, right_param],
+                &generic_indep_eq_type,
+            ) {
+                if let [domain, left, right] = arg_vec.as_slice() {
+                    if parens {
                         self.output.write_char('(')?;
                     }
-                    self.output.write_char(prefix)?;
+                    self.print_expr_with_parens(left, false, true, true, true, true)?;
                     self.output.write_char(' ')?;
-                    self.print_lambda(lambda)?;
-                    if parens_for_prefix {
+                    self.output.write_char('=')?;
+                    if !(left.is_var() || right.is_var()) {
+                        self.output.write_char('{')?;
+                        self.print_expr(domain)?;
+                        self.output.write_char('}')?;
+                    }
+                    self.output.write_char(' ')?;
+                    self.print_expr_with_parens(right, false, true, true, true, true)?;
+                    if parens {
+                        self.output.write_char(')')?;
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+
+        if let Ok((
+            left_domain_param,
+            right_domain_param,
+            domain_eq_param,
+            left_param,
+            right_param,
+            generic_dep_eq_type,
+        )) = lambda_handler.get_generic_dep_eq_type(ctx)
+        {
+            if let Some(arg_vec) = expr.match_expr(
+                &ctx,
+                &[
+                    left_domain_param,
+                    right_domain_param,
+                    domain_eq_param,
+                    left_param,
+                    right_param,
+                ],
+                &generic_dep_eq_type,
+            ) {
+                if let [left_domain, right_domain, domain_eq, left, right] = arg_vec.as_slice() {
+                    if parens {
+                        self.output.write_char('(')?;
+                    }
+                    self.print_expr_with_parens(left, false, true, true, true, true)?;
+                    self.output.write_char(' ')?;
+                    self.output.write_char('=')?;
+                    if !(left.is_var()) {
+                        self.output.write_char('{')?;
+                        self.print_expr(left_domain)?;
+                        self.output.write_char('}')?;
+                    }
+                    self.output.write_char('[')?;
+                    self.print_expr(domain_eq)?;
+                    self.output.write_char(']')?;
+                    if !(right.is_var()) {
+                        self.output.write_char('{')?;
+                        self.print_expr(right_domain)?;
+                        self.output.write_char('}')?;
+                    }
+                    self.output.write_char(' ')?;
+                    self.print_expr_with_parens(right, false, true, true, true, true)?;
+                    if parens {
                         self.output.write_char(')')?;
                     }
                     return Ok(true);

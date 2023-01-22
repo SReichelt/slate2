@@ -13,6 +13,7 @@ pub struct DefInit<'a> {
 impl MetaLogic {
     pub fn construct_semantically<F>(
         types_init: &[TypeInit],
+        defs_init: &[DefInit],
         create_lambda_handler: F,
     ) -> Result<Self, String>
     where
@@ -22,6 +23,7 @@ impl MetaLogic {
         let mut reduction_rules_init: Vec<ReductionRuleInit> = Vec::new();
 
         Self::add_types(types_init, &mut constants_init, &mut reduction_rules_init);
+        Self::add_defs(defs_init, &mut constants_init, &mut reduction_rules_init);
 
         Self::construct(
             &constants_init,

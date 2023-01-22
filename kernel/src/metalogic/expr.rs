@@ -24,6 +24,10 @@ impl Expr {
         Expr::Var(Var(idx))
     }
 
+    pub fn is_var(&self) -> bool {
+        matches!(self, Expr::Var(_))
+    }
+
     pub fn app(fun: Expr, arg: Expr) -> Self {
         Expr::App(Box::new(App {
             param: fun,
@@ -73,9 +77,7 @@ impl Expr {
             output: &mut result,
             context: ctx,
         };
-        printing_context
-            .print_expr(&self, false, false, false, false)
-            .unwrap();
+        printing_context.print_expr(&self).unwrap();
         result
     }
 
@@ -213,8 +215,14 @@ impl Expr {
     }
 
     pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
+        let mut result = self.get_unreduced_type(ctx)?;
+        result.reduce(ctx, -1)?;
+        Ok(result)
+    }
+
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
         match self {
-            Expr::Var(Var(idx)) => Ok(ctx.get_var(*idx).type_expr.shifted_from_var(ctx, *idx)),
+            Expr::Var(var) => Ok(var.get_type(ctx)),
             Expr::App(app) => {
                 // Finding the result type of an application is surprisingly tricky because the
                 // application itself does not include the type parameters of its function. Instead,
@@ -226,9 +234,7 @@ impl Expr {
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.get_type(ctx)?;
                 if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
-                    let mut result = Expr::app(prop, arg.clone());
-                    result.reduce(ctx, -1)?;
-                    Ok(result)
+                    Ok(Expr::app(prop, arg.clone()))
                 } else {
                     let fun_str = fun.print(ctx);
                     let fun_type_str = fun_type.print(ctx);
@@ -240,22 +246,13 @@ impl Expr {
             }
             Expr::Lambda(lambda) => ctx.with_local(&lambda.param, |body_ctx| {
                 let body_type = lambda.body.get_type(body_ctx)?;
-                if let Some(shifted_body_type) = body_type.shifted_to_supercontext(body_ctx, ctx) {
-                    ctx.lambda_handler().get_indep_type(
-                        lambda.param.type_expr.clone(),
-                        shifted_body_type,
-                        DependentTypeCtorKind::Pi,
-                        ctx.as_minimal(),
-                    )
-                } else {
-                    let prop = Expr::lambda(lambda.param.clone(), body_type);
-                    ctx.lambda_handler().get_dep_type(
-                        lambda.param.type_expr.clone(),
-                        prop,
-                        DependentTypeCtorKind::Pi,
-                        ctx.as_minimal(),
-                    )
-                }
+                let prop = Expr::lambda(lambda.param.clone(), body_type);
+                ctx.lambda_handler().get_dep_type(
+                    lambda.param.type_expr.clone(),
+                    prop,
+                    DependentTypeCtorKind::Pi,
+                    ctx.as_minimal(),
+                )
             }),
         }
     }
@@ -460,6 +457,13 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
             }
             _ => false,
         }
+    }
+}
+
+impl Var {
+    pub fn get_type(&self, ctx: &MetaLogicContext) -> Expr {
+        let Var(idx) = self;
+        ctx.get_var(*idx).type_expr.shifted_from_var(ctx, *idx)
     }
 }
 

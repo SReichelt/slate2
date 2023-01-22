@@ -30,15 +30,79 @@ impl ParsingContext<'_, '_, '_> {
     }
 
     fn parse_prod(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_app()?;
+        let mut expr = self.parse_eq()?;
         if self.input.try_read_char('×') {
-            let right = self.parse_app()?;
+            let right = self.parse_eq()?;
             expr = self.context.lambda_handler().get_indep_type(
                 expr,
                 right,
                 DependentTypeCtorKind::Sigma,
                 self.context.as_minimal(),
             )?;
+        }
+        Ok(expr)
+    }
+
+    fn parse_eq(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_app()?;
+        if self.input.try_read_char('=') {
+            let mut domain = None;
+            if self.input.try_read_char('{') {
+                domain = Some(self.parse_expr()?);
+                self.input.read_char('}')?;
+            }
+            if self.input.try_read_char('[') {
+                let domain_eq = self.parse_expr()?;
+                self.input.read_char(']')?;
+                let mut right_domain = None;
+                if self.input.try_read_char('{') {
+                    right_domain = Some(self.parse_expr()?);
+                    self.input.read_char('}')?;
+                }
+                let right = self.parse_app()?;
+                if domain.is_none() {
+                    if let Expr::Var(left_var) = &expr {
+                        domain = Some(left_var.get_type(self.context));
+                    } else {
+                        let msg = format!("need to specify left type of dependent equality");
+                        return self.input.error(msg);
+                    }
+                }
+                if right_domain.is_none() {
+                    if let Expr::Var(right_var) = &right {
+                        right_domain = Some(right_var.get_type(self.context));
+                    } else {
+                        let msg = format!("need to specify right type of dependent equality");
+                        return self.input.error(msg);
+                    }
+                }
+                expr = self.context.lambda_handler().get_dep_eq_type(
+                    domain.unwrap(),
+                    right_domain.unwrap(),
+                    domain_eq,
+                    expr,
+                    right,
+                    self.context.as_minimal(),
+                )?;
+            } else {
+                let right = self.parse_app()?;
+                if domain.is_none() {
+                    if let Expr::Var(left_var) = &expr {
+                        domain = Some(left_var.get_type(self.context));
+                    } else if let Expr::Var(right_var) = &right {
+                        domain = Some(right_var.get_type(self.context));
+                    } else {
+                        let msg = format!("need to specify type of equality");
+                        return self.input.error(msg);
+                    }
+                }
+                expr = self.context.lambda_handler().get_indep_eq_type(
+                    domain.unwrap(),
+                    expr,
+                    right,
+                    self.context.as_minimal(),
+                )?;
+            }
         }
         Ok(expr)
     }

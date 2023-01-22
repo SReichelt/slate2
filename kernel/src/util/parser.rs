@@ -32,11 +32,13 @@ impl<'a> ParserInput<'a> {
         }
     }
 
+    fn is_name_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_' || c == '\''
+    }
+
     pub fn try_read_name(&mut self) -> Option<&str> {
         let s = self.0;
-        let end = s
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(s.len());
+        let end = s.find(|c: char| !Self::is_name_char(c)).unwrap_or(s.len());
         if end == 0 {
             None
         } else {
@@ -47,9 +49,7 @@ impl<'a> ParserInput<'a> {
 
     pub fn try_read_name_with_occurrence(&mut self) -> Option<(&str, usize)> {
         let s = self.0;
-        let end = s
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(s.len());
+        let end = s.find(|c: char| !Self::is_name_char(c)).unwrap_or(s.len());
         if end == 0 {
             None
         } else {

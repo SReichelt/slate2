@@ -74,44 +74,130 @@ pub fn get_mltt() -> MetaLogic {
                         )],
                     },
                     DefInit {
-                        sym: ("Prod_intro", "Π A B : U. (A → B → (A × B))"),
+                        sym: ("pair_intro", "Π A B : U. (A → B → (A × B))"),
                         red: &[(
                             &[("A", "U"), ("B", "U")],
-                            "Prod_intro A B",
-                            "Sigma_intro A (const A U B)",
+                            "pair_intro A B",
+                            "Sigma_intro A (λ _ : A. B)",
                         )],
                     },
                     DefInit {
-                        sym: ("Prod_fst", "Π A B : U. ((A × B) → A)"),
+                        sym: ("pair_fst", "Π A B : U. ((A × B) → A)"),
+                        red: &[(
+                            &[("A", "U"), ("B", "U")],
+                            "pair_fst A B",
+                            "Sigma_fst A (λ _ : A. B)",
+                        )],
+                    },
+                    DefInit {
+                        sym: ("pair_snd", "Π A B : U. ((A × B) → B))"),
+                        red: &[(
+                            &[("A", "U"), ("B", "U")],
+                            "pair_snd A B",
+                            "Sigma_snd A (λ _ : A. B)",
+                        )],
+                    },
+                ],
+            },
+            TypeInit {
+                ctor: DefInit {
+                    sym: ("Eq", "Π A : U. (A → A → U)"),
+                    red: &[
+                        (
+                            &[("A", "U"), ("B", "U")],
+                            "A = B",
+                            "(A → B) × (B → A)", // TODO: not the real thing yet
+                        ),
+                        (
+                            &[("A", "U"), ("P", "A → U"), ("f", "Pi A P"), ("g", "Pi A P")],
+                            "f = g",
+                            "Π a : A. f a ={P a} g a",
+                        ),
+                        (
+                            &[("A", "U"), ("P", "A → U"), ("p", "Sigma A P"), ("q", "Sigma A P")],
+                            "p = q",
+                            "Σ e_fst : Sigma_fst A P p ={A} Sigma_fst A P q. Sigma_snd A P p ={P (Sigma_fst A P p)}[ap A U P (Sigma_fst A P p) (Sigma_fst A P q) e_fst]{P (Sigma_fst A P q)} Sigma_snd A P q",
+                        ),
+                    ],
+                },
+                defs: &[
+                    // TODO: implement these for different equalities
+                    DefInit {
+                        sym: ("refl", "Π A : U. Π a : A. a = a"),
+                        red: &[],
+                    },
+                    DefInit {
+                        sym: ("trans", "Π A : U. Π a b c : A. (b = c → a = b → a = c)"),
                         red: &[
-                            (
-                                &[("A", "U"), ("B", "U"), ("a", "A"), ("b", "B")],
-                                "Prod_fst A B (Prod_intro A B a b)",
-                                "a",
-                            ),
-                            (
-                                &[("A", "U"), ("B", "U")],
-                                "Prod_fst A B",
-                                "Sigma_fst A (const A U B)",
-                            ),
+                            // TODO trans_refl
                         ],
                     },
                     DefInit {
-                        sym: ("Prod_snd", "Π A B : U. ((A × B) → B))"),
+                        sym: ("symm", "Π A : U. Π a b : A. (a = b → b = a)"),
                         red: &[
-                            (
-                                &[("A", "U"), ("B", "U"), ("a", "A"), ("b", "B")],
-                                "Prod_snd A B (Prod_intro A B a b)",
-                                "b",
-                            ),
-                            (
-                                &[("A", "U"), ("B", "U")],
-                                "Prod_snd A B",
-                                "Sigma_snd A (const A U B)",
-                            ),
+                            // TODO symm_refl
                         ],
                     },
+                    // TODO groupoid laws
+                    DefInit {
+                        sym: ("to", "Π A B : U. ((A = B) → A → B)"),
+                        red: &[(
+                            &[("A", "U"), ("B", "U")],
+                            "to A B",
+                            "pair_fst (A → B) (B → A)",
+                        )],
+                    },
                 ],
+            },
+            TypeInit {
+                ctor: DefInit {
+                    sym: ("DepEq", "Π A B : U. ((A = B) → A → B → U)"),
+                    red: &[
+                        (
+                            &[("A", "U")],
+                            "DepEq A A (refl U A)",
+                            "Eq A",
+                        ),
+                        // TODO
+                    ],
+                },
+                defs: &[],
+            },
+        ],
+        &[
+            DefInit {
+                sym: ("apd", "Π A : U. Π P : A → U. Π f : Pi A P. Π a a' : A. Π e : a = a'. f a ={P a}[ap A U P a a' e]{P a'} f a'"),
+                red: &[
+                    (
+                        &[("A", "U"), ("P", "A → U"), ("f", "Pi A P"), ("a", "A")],
+                        "apd A P f a a (refl A a)",
+                        "refl (P a) (f a)",
+                    ),
+                    (
+                        &[("A", "U"), ("a", "A"), ("a'", "A"), ("e", "a = a'")],
+                        "apd A (const A U A) (id A) a a' e",
+                        "e",
+                    ),
+                    (
+                        &[("A", "U"), ("B", "U"), ("b", "B"), ("a", "A"), ("a'", "A"), ("e", "a = a'")],
+                        "apd A (const A U B) (const A B b) a a' e",
+                        "refl B b",
+                    ),
+                    (
+                        &[("A", "U"), ("B", "U"), ("b", "B"), ("b'", "B"), ("e", "b = b'")],
+                        "apd B (const B U (A → B)) (const A B) b b' e",
+                        "λ a : A. e",
+                    ),
+                    // TODO
+                ],
+            },
+            DefInit {
+                sym: ("ap", "Π A B : U. Π f : A → B. Π a a' : A. (a = a' → f a ={B} f a')"),
+                red: &[(
+                    &[("A", "U"), ("B", "U")],
+                    "ap A B",
+                    "apd A (λ _ : A. B)",
+                )],
             },
         ],
         |ctx| Box::new(MLTTLambdaHandler::new(ctx)),
@@ -126,6 +212,8 @@ struct MLTTLambdaHandler {
     id_idx: VarIndex,
     const_idx: VarIndex,
     subst_idx: VarIndex,
+    eq_idx: VarIndex,
+    dep_eq_idx: VarIndex,
 }
 
 impl MLTTLambdaHandler {
@@ -137,6 +225,8 @@ impl MLTTLambdaHandler {
             id_idx: ctx.get_var_index("id", 0).unwrap(),
             const_idx: ctx.get_var_index("const", 0).unwrap(),
             subst_idx: ctx.get_var_index("subst", 0).unwrap(),
+            eq_idx: ctx.get_var_index("Eq", 0).unwrap(),
+            dep_eq_idx: ctx.get_var_index("DepEq", 0).unwrap(),
         }
     }
 }
@@ -186,6 +276,34 @@ impl LambdaHandler for MLTTLambdaHandler {
         Ok(Expr::multi_app(
             Expr::var(self.subst_idx),
             smallvec![domain, prop1, rel2],
+        ))
+    }
+
+    fn get_indep_eq_type(
+        &self,
+        domain: Expr,
+        left: Expr,
+        right: Expr,
+        _: MinimalContext,
+    ) -> Result<Expr, String> {
+        Ok(Expr::multi_app(
+            Expr::var(self.eq_idx),
+            smallvec![domain, left, right],
+        ))
+    }
+
+    fn get_dep_eq_type(
+        &self,
+        left_domain: Expr,
+        right_domain: Expr,
+        domain_eq: Expr,
+        left: Expr,
+        right: Expr,
+        _: MinimalContext,
+    ) -> Result<Expr, String> {
+        Ok(Expr::multi_app(
+            Expr::var(self.dep_eq_idx),
+            smallvec![left_domain, right_domain, domain_eq, left, right],
         ))
     }
 }
@@ -255,7 +373,7 @@ mod tests {
             "Π A : U. (A → A → A)"
         );
 
-        let pair_fun = mltt.parse_expr("λ A B : U. λ a : A. λ b : B. Prod_intro A B a b")?;
+        let pair_fun = mltt.parse_expr("λ A B : U. λ a : A. λ b : B. pair_intro A B a b")?;
         let pair_fun_type = mltt.get_expr_type(&pair_fun)?;
         assert_eq!(
             mltt.print_expr(&pair_fun_type),
@@ -263,7 +381,7 @@ mod tests {
         );
 
         let mut pair_fst_fun =
-            mltt.parse_expr("λ A B : U. λ a : A. λ b : B. Prod_fst A B (Prod_intro A B a b)")?;
+            mltt.parse_expr("λ A B : U. λ a : A. λ b : B. pair_fst A B (pair_intro A B a b)")?;
         let pair_fst_fun_type = mltt.get_expr_type(&pair_fst_fun)?;
         assert_eq!(
             mltt.print_expr(&pair_fst_fun_type),

@@ -412,4 +412,143 @@ pub trait LambdaHandler {
         rel2: Expr,
         ctx: MinimalContext,
     ) -> Result<Expr, String>;
+
+    fn get_indep_eq_type(
+        &self,
+        domain: Expr,
+        left: Expr,
+        right: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_dep_eq_type(
+        &self,
+        left_domain: Expr,
+        right_domain: Expr,
+        domain_eq: Expr,
+        left: Expr,
+        right: Expr,
+        ctx: MinimalContext,
+    ) -> Result<Expr, String>;
+
+    fn get_semi_generic_indep_eq_type(
+        &self,
+        mut domain: Expr,
+        ctx: MinimalContext,
+    ) -> Result<(Param, Param, Expr), String> {
+        let params = [
+            Param {
+                name: None,
+                type_expr: domain.clone(),
+            },
+            Param {
+                name: None,
+                type_expr: domain.shifted_impl(ctx.locals_start(), 0, -1),
+            },
+        ];
+        let eq_type = ctx.with_locals(&params, |subctx| {
+            domain.shift_to_subcontext(&ctx, subctx);
+            let left_var = Expr::var(-2);
+            let right_var = Expr::var(-1);
+            self.get_indep_eq_type(domain, left_var, right_var, *subctx)
+        })?;
+        let [left_param, right_param] = params;
+        Ok((left_param, right_param, eq_type))
+    }
+
+    fn get_generic_indep_eq_type(
+        &self,
+        ctx: MinimalContext,
+    ) -> Result<(Param, Param, Param, Expr), String> {
+        let domain_param = Param {
+            name: None,
+            type_expr: self.get_universe_type()?,
+        };
+        let (left_param, right_param, eq_type) = ctx.with_local(&domain_param, |subctx| {
+            let domain_var = Expr::var(-1);
+            self.get_semi_generic_indep_eq_type(domain_var, *subctx)
+        })?;
+        Ok((domain_param, left_param, right_param, eq_type))
+    }
+
+    fn get_semi_generic_dep_eq_type(
+        &self,
+        mut left_domain: Expr,
+        mut right_domain: Expr,
+        mut domain_eq: Expr,
+        ctx: MinimalContext,
+    ) -> Result<(Param, Param, Expr), String> {
+        let params = [
+            Param {
+                name: None,
+                type_expr: left_domain.clone(),
+            },
+            Param {
+                name: None,
+                type_expr: right_domain.shifted_impl(ctx.locals_start(), 0, -1),
+            },
+        ];
+        let eq_type = ctx.with_locals(&params, |subctx| {
+            left_domain.shift_to_subcontext(&ctx, subctx);
+            right_domain.shift_to_subcontext(&ctx, subctx);
+            domain_eq.shift_to_subcontext(&ctx, subctx);
+            let left_var = Expr::var(-2);
+            let right_var = Expr::var(-1);
+            self.get_dep_eq_type(
+                left_domain,
+                right_domain,
+                domain_eq,
+                left_var,
+                right_var,
+                *subctx,
+            )
+        })?;
+        let [left_param, right_param] = params;
+        Ok((left_param, right_param, eq_type))
+    }
+
+    fn get_generic_dep_eq_type(
+        &self,
+        ctx: MinimalContext,
+    ) -> Result<(Param, Param, Param, Param, Param, Expr), String> {
+        let params = [
+            Param {
+                name: None,
+                type_expr: self.get_universe_type()?,
+            },
+            Param {
+                name: None,
+                type_expr: self.get_universe_type()?,
+            },
+            Param {
+                name: None,
+                type_expr: self.get_indep_eq_type(
+                    self.get_universe_type()?,
+                    Expr::var(-2),
+                    Expr::var(-1),
+                    ctx,
+                )?,
+            },
+        ];
+        let (left_param, right_param, eq_type) = ctx.with_locals(&params, |subctx| {
+            let left_domain_var = Expr::var(-3);
+            let right_domain_var = Expr::var(-2);
+            let domain_eq_var = Expr::var(-1);
+            self.get_semi_generic_dep_eq_type(
+                left_domain_var,
+                right_domain_var,
+                domain_eq_var,
+                *subctx,
+            )
+        })?;
+        let [left_domain_param, right_domain_param, domain_eq_param] = params;
+        Ok((
+            left_domain_param,
+            right_domain_param,
+            domain_eq_param,
+            left_param,
+            right_param,
+            eq_type,
+        ))
+    }
 }
