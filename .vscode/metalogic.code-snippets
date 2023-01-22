@@ -1,4 +1,11 @@
 {
+	"ForAll": {
+		"scope": "rust",
+		"prefix": "\\forall",
+		"body": [
+			"∀"
+		]
+	},
 	"Def": {
 		"scope": "rust",
 		"prefix": "\\def",

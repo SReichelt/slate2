@@ -257,7 +257,7 @@ impl ParsingContext<'_, '_, '_> {
     pub fn parse_reduction_rule(&mut self) -> Result<ReductionRule, String> {
         let mut params = SmallVec::new();
         self.input.skip_whitespace();
-        while self.input.try_read_char('Π') {
+        while self.input.try_read_char('∀') {
             let mut new_params = self.context.with_locals(&params, |new_params_ctx| {
                 let mut new_params_parsing_ctx = ParsingContext {
                     input: self.input,
