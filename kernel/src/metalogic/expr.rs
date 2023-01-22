@@ -59,6 +59,16 @@ impl Expr {
         Self::lambda(param, body)
     }
 
+    fn get_app_len(&self) -> usize {
+        let mut result = 0;
+        let mut expr = self;
+        while let Expr::App(app) = expr {
+            result += 1;
+            expr = &app.param;
+        }
+        result
+    }
+
     pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self, String> {
         ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
     }
@@ -97,12 +107,6 @@ impl Expr {
                         reduced = true;
                         continue;
                     }
-
-                    // For better performance, we require reduction rule sources to be applications.
-                    if self.apply_reduction_rule(ctx) {
-                        reduced = true;
-                        continue;
-                    }
                 }
                 Expr::Lambda(lambda) => {
                     reduced |= lambda.param.type_expr.reduce(ctx, max_depth)?;
@@ -112,8 +116,37 @@ impl Expr {
                 }
             }
 
-            return Ok(reduced);
+            if self.apply_reduction_rule(ctx) {
+                reduced = true;
+            } else {
+                return Ok(reduced);
+            }
         }
+    }
+
+    fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> bool {
+        if let Expr::Lambda(_) = self {
+            // Applying reduction rules to lambda expressions is not allowed. We need to exit early
+            // here because otherwise the expression will be converted to a combinator over and over
+            // again. And by their nature, combinators should not be reducible anyway.
+            return false;
+        }
+
+        let app_len = self.get_app_len();
+
+        for rule in ctx.reduction_rules() {
+            if app_len < rule.body.source.get_app_len() {
+                // Performance optimization for impossible match.
+                continue;
+            }
+            if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source) {
+                let mut expr = rule.body.target.clone();
+                expr.substitute(&mut args, true, ctx);
+                *self = expr;
+                return true;
+            }
+        }
+        false
     }
 
     pub fn convert_to_combinators(
@@ -155,18 +188,6 @@ impl Expr {
 
             return Ok(());
         }
-    }
-
-    fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> bool {
-        for rule in ctx.reduction_rules() {
-            if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source) {
-                let mut expr = rule.body.target.clone();
-                expr.substitute(&mut args, true, ctx);
-                *self = expr;
-                return true;
-            }
-        }
-        false
     }
 
     pub fn match_expr<Ctx: ComparisonContext>(

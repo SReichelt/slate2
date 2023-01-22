@@ -10,21 +10,21 @@
 		"scope": "rust",
 		"prefix": "\\lambda",
 		"body": [
-			"λ $1 : $2. $3"
+			"λ"
 		]
 	},
 	"Pi": {
 		"scope": "rust",
 		"prefix": "\\Pi",
 		"body": [
-			"Π $1 : $2. $3"
+			"Π"
 		]
 	},
 	"Sigma": {
 		"scope": "rust",
 		"prefix": "\\Sigma",
 		"body": [
-			"Σ $1 : $2. $3"
+			"Σ"
 		]
 	},
 	"Function": {
