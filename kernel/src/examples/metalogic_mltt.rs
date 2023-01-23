@@ -18,21 +18,21 @@ pub fn get_mltt() -> MetaLogic {
             },
             TypeInit {
                 ctor: DefInit {
-                    sym: "Pi : Π A : U. ((A → U) → U)",
+                    sym: "Pi : Π A : U. (A → U) → U",
                     red: &[],
                 },
                 defs: &[
                     DefInit {
-                        sym: "id : Π A : U. (A → A)",
+                        sym: "id : Π A : U. A → A",
                         red: &["∀ A : U. ∀ a : A. id A a :≡ a"],
                     },
                     DefInit {
-                        sym: "const : Π A B : U. (B → (A → B))",
+                        sym: "const : Π A B : U. B → (A → B)",
                         red: &["∀ A B : U. ∀ a : A. ∀ b : B. const A B b a :≡ b"],
                     },
                     DefInit {
-                        sym: "subst : Π A : U. Π P : A → U. Π Q : (Π a : A. (P a → U)). ((Π a : A. Pi (P a) (Q a)) → (Π f : Pi A P. Π a : A. Q a (f a)))",
-                        red: &["∀ A : U. ∀ P : A → U. ∀ Q : (Π a : A. (P a → U)). ∀ g : (Π a : A. Pi (P a) (Q a)). ∀ f : Pi A P. ∀ a : A. subst A P Q g f a :≡ g a (f a)"],
+                        sym: "subst : Π A : U. Π P : A → U. Π Q : (Π a : A. P a → U). (Π a : A. Pi (P a) (Q a)) → (Π f : Pi A P. Π a : A. Q a (f a))",
+                        red: &["∀ A : U. ∀ P : A → U. ∀ Q : (Π a : A. P a → U). ∀ g : (Π a : A. Pi (P a) (Q a)). ∀ f : Pi A P. ∀ a : A. subst A P Q g f a :≡ g a (f a)"],
                     },
                 ],
             },
@@ -43,11 +43,11 @@ pub fn get_mltt() -> MetaLogic {
                 },
                 defs: &[
                     DefInit {
-                        sym: "Sigma_intro : Π A : U. Π P : A → U. Π a : A. (P a → Sigma A P)",
+                        sym: "Sigma_intro : Π A : U. Π P : A → U. Π a : A. P a → Sigma A P",
                         red: &[],
                     },
                     DefInit {
-                        sym: "Sigma_fst : Π A : U. Π P : A → U. (Sigma A P → A)",
+                        sym: "Sigma_fst : Π A : U. Π P : A → U. Sigma A P → A",
                         red: &["∀ A : U. ∀ P : A → U. ∀ a : A. ∀ b : P a. Sigma_fst A P (Sigma_intro A P a b) :≡ a"],
                     },
                     DefInit {
@@ -55,15 +55,15 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["∀ A : U. ∀ P : A → U. ∀ a : A. ∀ b : P a. Sigma_snd A P (Sigma_intro A P a b) :≡ b"],
                     },
                     DefInit {
-                        sym: "pair_intro : Π A B : U. (A → B → (A × B))",
+                        sym: "pair_intro : Π A B : U. A → B → (A × B)",
                         red: &["pair_intro :≡ λ A B : U. Sigma_intro A (λ _ : A. B)"],
                     },
                     DefInit {
-                        sym: "pair_fst : Π A B : U. ((A × B) → A)",
+                        sym: "pair_fst : Π A B : U. (A × B) → A",
                         red: &["pair_fst :≡ λ A B : U. Sigma_fst A (λ _ : A. B)"],
                     },
                     DefInit {
-                        sym: "pair_snd : Π A B : U. ((A × B) → B)",
+                        sym: "pair_snd : Π A B : U. (A × B) → B",
                         red: &["pair_snd :≡ λ A B : U. Sigma_snd A (λ _ : A. B)"],
                     },
                 ],
@@ -98,7 +98,7 @@ pub fn get_mltt() -> MetaLogic {
                         ],
                     },
                     DefInit {
-                        sym: "trans : Π A : U. Π a b c : A. (a = b → b = c → a = c)",
+                        sym: "trans : Π A : U. Π a b c : A. a = b → b = c → a = c",
                         red: &[
                             "∀ A : U. ∀ a b : A. ∀ e : a = b. trans A a a b (refl A a) e :≡ e",
                             "∀ A : U. ∀ a b : A. ∀ e : a = b. trans A a b b e (refl A b) :≡ e",
@@ -109,18 +109,18 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     // TODO groupoid laws
                     DefInit {
-                        sym: "to : Π A B : U. ((A = B) → A → B)",
+                        sym: "to : Π A B : U. (A = B) → A → B",
                         red: &["to :≡ λ A B : U. pair_fst (A → B) (B → A)"],
                     },
                     DefInit {
-                        sym: "inv : Π A B : U. ((A = B) → B → A)",
+                        sym: "inv : Π A B : U. (A = B) → B → A",
                         red: &["inv :≡ λ A B : U. pair_snd (A → B) (B → A)"],
                     },
                 ],
             },
             TypeInit {
                 ctor: DefInit {
-                    sym: "DepEq : Π A B : U. ((A = B) → A → B → U)",
+                    sym: "DepEq : Π A B : U. (A = B) → A → B → U",
                     red: &["DepEq :≡ λ A B : U. λ e : A = B. λ a : A. λ b : B. to A B e a = b"],
                 },
                 defs: &[
@@ -262,21 +262,21 @@ mod tests {
         let univ = mltt.parse_expr("U")?;
 
         let pi = mltt.get_constant("Pi").unwrap();
-        assert_eq!(mltt.print_expr(&pi.type_expr), "Π A : U. ((A → U) → U)");
+        assert_eq!(mltt.print_expr(&pi.type_expr), "Π A : U. (A → U) → U");
 
         let id_cmb = mltt.get_constant("id").unwrap();
-        assert_eq!(mltt.print_expr(&id_cmb.type_expr), "Π A : U. (A → A)");
+        assert_eq!(mltt.print_expr(&id_cmb.type_expr), "Π A : U. A → A");
 
         let const_cmb = mltt.get_constant("const").unwrap();
         assert_eq!(
             mltt.print_expr(&const_cmb.type_expr),
-            "Π A : U. Π B : U. (B → A → B)"
+            "Π A : U. Π B : U. B → A → B"
         );
 
         let subst_cmb = mltt.get_constant("subst").unwrap();
         assert_eq!(
             mltt.print_expr(&subst_cmb.type_expr),
-            "Π A : U. Π P : A → U. Π Q : (Π a : A. (P a → U)). ((Π a : A. Pi (P a) (Q a)) → (Π f : Pi A P. Π a : A. Q a (f a)))"
+            "Π A : U. Π P : A → U. Π Q : (Π a : A. P a → U). (Π a : A. Pi (P a) (Q a)) → (Π f : Pi A P. Π a : A. Q a (f a))"
         );
 
         let mut id_ctor = mltt.parse_expr("λ A : U. A")?;
@@ -303,7 +303,7 @@ mod tests {
 
         let mut id_fun = mltt.parse_expr("λ A : U. λ a : A. a")?;
         let id_fun_type = mltt.get_expr_type(&id_fun)?;
-        assert_eq!(mltt.print_expr(&id_fun_type), "Π A : U. (A → A)");
+        assert_eq!(mltt.print_expr(&id_fun_type), "Π A : U. A → A");
 
         let inner_const_fun = mltt.parse_expr("λ A : U. λ a b : A. a")?;
         assert_eq!(
@@ -311,16 +311,13 @@ mod tests {
             "λ A : U. λ a : A. λ b : A. a"
         );
         let inner_const_fun_type = mltt.get_expr_type(&inner_const_fun)?;
-        assert_eq!(
-            mltt.print_expr(&inner_const_fun_type),
-            "Π A : U. (A → A → A)"
-        );
+        assert_eq!(mltt.print_expr(&inner_const_fun_type), "Π A : U. A → A → A");
 
         let pair_fun = mltt.parse_expr("λ A B : U. λ a : A. λ b : B. pair_intro A B a b")?;
         let pair_fun_type = mltt.get_expr_type(&pair_fun)?;
         assert_eq!(
             mltt.print_expr(&pair_fun_type),
-            "Π A : U. Π B : U. (A → B → (A × B))"
+            "Π A : U. Π B : U. A → B → (A × B)"
         );
 
         let mut pair_fst_fun =
@@ -328,7 +325,7 @@ mod tests {
         let pair_fst_fun_type = mltt.get_expr_type(&pair_fst_fun)?;
         assert_eq!(
             mltt.print_expr(&pair_fst_fun_type),
-            "Π A : U. Π B : U. (A → B → A)"
+            "Π A : U. Π B : U. A → B → A"
         );
         let pair_fst_fun_reduced = mltt.reduce_expr(&mut pair_fst_fun, -1)?;
         assert!(pair_fst_fun_reduced);
@@ -358,14 +355,14 @@ mod tests {
         mltt.convert_expr_to_combinators(&mut pi_type, 2)?;
         assert_eq!(
             mltt.print_expr(&pi_type),
-            "Pi U (subst U (λ A : U. ((A → U) → U)) (λ A : U. λ _ : (A → U) → U. U) (λ A : U. Pi (A → U)) (λ A : U. λ _ : A → U. U))"
+            "Pi U (subst U (λ A : U. (A → U) → U) (λ A : U. λ _ : (A → U) → U. U) (λ A : U. Pi (A → U)) (λ A : U. λ _ : A → U. U))"
         );
 
         let mut id_cmb_type = id_cmb.type_expr.clone();
         mltt.convert_expr_to_combinators(&mut id_cmb_type, 2)?;
         assert_eq!(
             mltt.print_expr(&id_cmb_type),
-            "Pi U (subst U (λ A : U. (A → U)) (λ A : U. λ _ : A → U. U) (λ A : U. Pi A) (λ A : U. λ _ : A. A))"
+            "Pi U (subst U (λ A : U. A → U) (λ A : U. λ _ : A → U. U) (λ A : U. Pi A) (λ A : U. λ _ : A. A))"
         );
         assert_eq!(mltt.get_expr_type(&id_cmb_type)?, univ);
 
@@ -373,7 +370,7 @@ mod tests {
         mltt.convert_expr_to_combinators(&mut const_cmb_type, 2)?;
         assert_eq!(
             mltt.print_expr(&const_cmb_type),
-            "Pi U (subst U (λ A : U. (U → U)) (λ A : U. λ _ : U → U. U) (λ A : U. Pi U) (λ A : U. λ B : U. (B → A → B)))"
+            "Pi U (subst U (λ A : U. U → U) (λ A : U. λ _ : U → U. U) (λ A : U. Pi U) (λ A : U. λ B : U. B → A → B))"
         );
         assert_eq!(mltt.get_expr_type(&const_cmb_type)?, univ);
 
@@ -381,7 +378,7 @@ mod tests {
         mltt.convert_expr_to_combinators(&mut subst_cmb_type, 2)?;
         assert_eq!(
             mltt.print_expr(&subst_cmb_type),
-            "Pi U (subst U (λ A : U. ((A → U) → U)) (λ A : U. λ _ : (A → U) → U. U) (λ A : U. Pi (A → U)) (λ A : U. λ P : A → U. Π Q : (Π a : A. (P a → U)). ((Π a : A. Pi (P a) (Q a)) → (Π f : Pi A P. Π a : A. Q a (f a)))))"
+            "Pi U (subst U (λ A : U. (A → U) → U) (λ A : U. λ _ : (A → U) → U. U) (λ A : U. Pi (A → U)) (λ A : U. λ P : A → U. Π Q : (Π a : A. P a → U). (Π a : A. Pi (P a) (Q a)) → (Π f : Pi A P. Π a : A. Q a (f a))))"
         );
         assert_eq!(mltt.get_expr_type(&subst_cmb_type)?, univ);
 

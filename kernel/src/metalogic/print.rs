@@ -104,7 +104,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 output: self.output,
                 context: body_ctx,
             };
-            body_printing_ctx.print_expr_with_parens(&lambda.body, false, false, true, true, false)
+            body_printing_ctx.print_expr_with_parens(&lambda.body, false, false, false, true, false)
         })
     }
 
