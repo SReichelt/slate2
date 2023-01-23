@@ -23,7 +23,7 @@
 //! combinators S, K, and I can be defined as let-bindings. (Of course, being equivalent really just
 //! means it is Turing-complete.)
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
 use smallvec::{smallvec, SmallVec};
 
@@ -67,7 +67,7 @@ impl Default for InnerExpr {
 }
 
 impl Debug for InnerExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Lambda(lambda) => lambda.fmt(f),
             Self::VarApp(var_app) => var_app.fmt(f),
@@ -158,7 +158,7 @@ impl Default for VarApp {
 }
 
 impl Debug for VarApp {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Var(var) => var.fmt(f),
             Self::App(app) => app.fmt(f),

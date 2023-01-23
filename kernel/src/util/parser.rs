@@ -1,16 +1,18 @@
+use anyhow::{anyhow, Error, Result};
+
 pub struct ParserInput<'a>(pub &'a str);
 
 impl<'a> ParserInput<'a> {
-    pub fn error<T>(&self, msg: String) -> Result<T, String> {
-        Err(msg)
+    pub fn error<T>(&self, err: Error) -> Result<T> {
+        Err(err)
     }
 
-    pub fn expected<T>(&self, expected: &str) -> Result<T, String> {
+    pub fn expected<T>(&self, expected: &str) -> Result<T> {
         let rest = self.0;
-        self.error(format!("expected {expected} instead of: {rest}"))
+        self.error(anyhow!("expected {expected} instead of: {rest}"))
     }
 
-    pub fn expect_end(&self) -> Result<(), String> {
+    pub fn expect_end(&self) -> Result<()> {
         if self.0.is_empty() {
             Ok(())
         } else {
@@ -31,7 +33,7 @@ impl<'a> ParserInput<'a> {
         }
     }
 
-    pub fn read_char(&mut self, c: char) -> Result<(), String> {
+    pub fn read_char(&mut self, c: char) -> Result<()> {
         self.skip_whitespace();
         if self.try_read_char(c) {
             Ok(())
@@ -49,7 +51,7 @@ impl<'a> ParserInput<'a> {
         }
     }
 
-    pub fn read_char_seq(&mut self, cs: &str) -> Result<(), String> {
+    pub fn read_char_seq(&mut self, cs: &str) -> Result<()> {
         self.skip_whitespace();
         if self.try_read_char_seq(cs) {
             Ok(())

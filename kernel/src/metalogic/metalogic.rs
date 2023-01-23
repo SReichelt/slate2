@@ -1,10 +1,12 @@
 use std::{fmt::Debug, rc::Rc};
 
-use super::{expr::*, parse::*};
+use anyhow::{anyhow, Error, Result};
+
+use super::{expr::*, parse::*, print::*};
 
 use crate::{
     generic::{context::*, context_object::*, expr_parts::*},
-    util::parser::*,
+    util::{anyhow::*, parser::*},
 };
 
 pub struct MetaLogic {
@@ -18,7 +20,7 @@ impl MetaLogic {
         constants_init: &[&str],
         reduction_rules_init: &[&str],
         create_lambda_handler: F,
-    ) -> Result<Self, String>
+    ) -> Result<Self>
     where
         F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
     {
@@ -75,7 +77,7 @@ impl MetaLogic {
         Some(self.constants.get_var(var_idx))
     }
 
-    pub fn parse_expr(&self, s: &str) -> Result<Expr, String> {
+    pub fn parse_expr(&self, s: &str) -> Result<Expr> {
         Expr::parse(s, &self.get_root_context())
     }
 
@@ -83,28 +85,30 @@ impl MetaLogic {
         expr.print(&self.get_root_context())
     }
 
-    pub fn reduce_expr(&self, expr: &mut Expr, max_depth: i32) -> Result<bool, String> {
+    pub fn reduce_expr(&self, expr: &mut Expr, max_depth: i32) -> Result<bool> {
         expr.reduce(&self.get_root_context(), max_depth)
     }
 
-    pub fn convert_expr_to_combinators(
-        &self,
-        expr: &mut Expr,
-        max_depth: i32,
-    ) -> Result<(), String> {
+    pub fn convert_expr_to_combinators(&self, expr: &mut Expr, max_depth: i32) -> Result<()> {
         expr.convert_to_combinators(&self.get_root_context(), max_depth)
     }
 
-    pub fn get_expr_type(&self, expr: &Expr) -> Result<Expr, String> {
+    pub fn get_expr_type(&self, expr: &Expr) -> Result<Expr> {
         expr.get_type(&self.get_root_context())
     }
 
-    pub fn check_reduction_rule_types(&self) -> Result<(), Vec<String>> {
+    pub fn check_reduction_rule_types(&self) -> Result<(), Vec<Error>> {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
         for rule in &self.reduction_rules {
-            if let Err(error) = self.check_reduction_rule_type(rule, &root_ctx) {
+            if let Err(error) = self
+                .check_reduction_rule_type(rule, &root_ctx)
+                .with_prefix(|| {
+                    let rule_str = rule.print(&root_ctx);
+                    format!("error in reduction rule «{rule_str}»")
+                })
+            {
                 errors.push(error);
             }
         }
@@ -120,37 +124,49 @@ impl MetaLogic {
         &self,
         rule: &ReductionRule,
         ctx: &MetaLogicContext,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         ctx.with_locals(&rule.params, |rule_ctx| {
             //let mut clone = rule.body.source.clone();
             //clone.convert_to_combinators(rule_ctx, -1)?;
             //dbg!(clone.print(rule_ctx));
             let source_type = rule.body.source.get_type(rule_ctx)?;
             let target_type = rule.body.target.get_type(rule_ctx)?;
-            if source_type.is_defeq(&target_type, rule_ctx)? {
+            if source_type.compare(&target_type, rule_ctx)? {
                 Ok(())
             } else {
                 let source_str = rule.body.source.print(rule_ctx);
                 let source_type_str = source_type.print(rule_ctx);
                 let target_str = rule.body.target.print(rule_ctx);
                 let target_type_str = target_type.print(rule_ctx);
-                Err(format!("type conflict in reduction rule between [{source_str} : {source_type_str}] and [{target_str} : {target_type_str}]"))
+                Err(anyhow!("type conflict between «{source_str} : {source_type_str}» and «{target_str} : {target_type_str}»"))
             }
         })
     }
 
-    pub fn check_type_of_types(&self) -> Result<(), Vec<String>> {
+    pub fn check_type_of_types(&self) -> Result<(), Vec<Error>> {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
         for constant in &self.constants {
-            if let Err(error) = self.check_type_of_types_in_param(constant, &root_ctx) {
+            if let Err(error) = self
+                .check_type_of_types_in_param(constant, &root_ctx)
+                .with_prefix(|| {
+                    let name = constant.get_name_or_placeholder();
+                    format!("type of constant «{name}» is invalid")
+                })
+            {
                 errors.push(error);
             }
         }
 
         for rule in &self.reduction_rules {
-            if let Err(error) = self.check_type_of_types_in_reduction_rule(rule, &root_ctx) {
+            if let Err(error) = self
+                .check_type_of_types_in_reduction_rule(rule, &root_ctx)
+                .with_prefix(|| {
+                    let rule_str = rule.print(&root_ctx);
+                    format!("types within reduction rule «{rule_str}» are invalid")
+                })
+            {
                 errors.push(error);
             }
         }
@@ -162,21 +178,17 @@ impl MetaLogic {
         }
     }
 
-    fn check_type_of_types_in_param(
-        &self,
-        param: &Param,
-        ctx: &MetaLogicContext,
-    ) -> Result<(), String> {
+    fn check_type_of_types_in_param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
         self.check_type_of_types_in_expr(&param.type_expr, ctx)?;
         let type_type = param.type_expr.get_type(ctx)?;
         let cmp_type_type = self.lambda_handler.get_universe_type()?;
-        if type_type.is_defeq(&cmp_type_type, ctx)? {
+        if type_type.compare(&cmp_type_type, ctx)? {
             Ok(())
         } else {
             let type_str = param.type_expr.print(ctx);
             let type_type_str = type_type.print(ctx);
             let cmp_type_type_str = cmp_type_type.print(ctx);
-            Err(format!("parameter type [{type_str} : {type_type_str}] must have type [{cmp_type_type_str}] instead"))
+            Err(anyhow!("parameter type «{type_str} : {type_type_str}» must have type «{cmp_type_type_str}» instead"))
         }
     }
 
@@ -184,7 +196,7 @@ impl MetaLogic {
         &self,
         params: &[Param],
         ctx: &MetaLogicContext,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         for param_idx in 0..params.len() {
             let param = &params[param_idx];
             ctx.with_locals(&params[0..param_idx], |param_ctx| {
@@ -194,11 +206,7 @@ impl MetaLogic {
         Ok(())
     }
 
-    fn check_type_of_types_in_expr(
-        &self,
-        expr: &Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<(), String> {
+    fn check_type_of_types_in_expr(&self, expr: &Expr, ctx: &MetaLogicContext) -> Result<()> {
         match expr {
             Expr::Var(_) => {}
             Expr::App(app) => {
@@ -219,7 +227,7 @@ impl MetaLogic {
         &self,
         rule: &ReductionRule,
         ctx: &MetaLogicContext,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         self.check_type_of_types_in_params(&rule.params, ctx)?;
         ctx.with_locals(&rule.params, |rule_ctx| {
             self.check_type_of_types_in_expr(&rule.body.source, rule_ctx)?;
@@ -277,6 +285,17 @@ impl ComparisonContext for MetaLogicContext<'_> {
 
 pub type ReductionRule = MultiLambda<Param, ReductionBody>;
 
+impl ReductionRule {
+    pub fn print(&self, ctx: &MetaLogicContext) -> String {
+        let mut result = String::new();
+        PrintingContext::print(&mut result, ctx, |printing_context| {
+            printing_context.print_reduction_rule(&self)
+        })
+        .unwrap();
+        result
+    }
+}
+
 pub struct ReductionBody {
     pub source: Expr,
     pub target: Expr,
@@ -289,7 +308,7 @@ pub enum DependentTypeCtorKind {
 }
 
 pub trait LambdaHandler {
-    fn get_universe_type(&self) -> Result<Expr, String>;
+    fn get_universe_type(&self) -> Result<Expr>;
 
     fn get_indep_type(
         &self,
@@ -297,7 +316,7 @@ pub trait LambdaHandler {
         codomain: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         self.get_dep_type(
             domain.clone(),
             Expr::const_lambda(domain, codomain, &ctx),
@@ -306,7 +325,7 @@ pub trait LambdaHandler {
         )
     }
 
-    fn get_prop_type(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr, String> {
+    fn get_prop_type(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr> {
         self.get_indep_type(
             domain,
             self.get_universe_type()?,
@@ -321,14 +340,14 @@ pub trait LambdaHandler {
         prop: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<Expr, String>;
+    ) -> Result<Expr>;
 
     fn get_semi_generic_indep_type(
         &self,
         mut domain: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<(Param, Expr), String> {
+    ) -> Result<(Param, Expr)> {
         let codomain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
@@ -346,7 +365,7 @@ pub trait LambdaHandler {
         mut domain: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<(Param, Expr), String> {
+    ) -> Result<(Param, Expr)> {
         let prop_param = Param {
             name: None,
             type_expr: self.get_prop_type(domain.clone(), ctx)?,
@@ -363,7 +382,7 @@ pub trait LambdaHandler {
         &self,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr), String> {
+    ) -> Result<(Param, Param, Expr)> {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
@@ -379,7 +398,7 @@ pub trait LambdaHandler {
         &self,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr), String> {
+    ) -> Result<(Param, Param, Expr)> {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
@@ -391,14 +410,9 @@ pub trait LambdaHandler {
         Ok((domain_param, prop_param, dep_type))
     }
 
-    fn get_id_cmb(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr, String>;
+    fn get_id_cmb(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr>;
 
-    fn get_const_cmb(
-        &self,
-        domain: Expr,
-        codomain: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr, String>;
+    fn get_const_cmb(&self, domain: Expr, codomain: Expr, ctx: MinimalContext) -> Result<Expr>;
 
     fn get_subst_cmb(
         &self,
@@ -406,7 +420,7 @@ pub trait LambdaHandler {
         prop1: Expr,
         rel2: Expr,
         ctx: MinimalContext,
-    ) -> Result<Expr, String>;
+    ) -> Result<Expr>;
 
     fn get_indep_eq_type(
         &self,
@@ -414,7 +428,7 @@ pub trait LambdaHandler {
         left: Expr,
         right: Expr,
         ctx: MinimalContext,
-    ) -> Result<Expr, String>;
+    ) -> Result<Expr>;
 
     fn get_dep_eq_type(
         &self,
@@ -424,13 +438,13 @@ pub trait LambdaHandler {
         left: Expr,
         right: Expr,
         ctx: MinimalContext,
-    ) -> Result<Expr, String>;
+    ) -> Result<Expr>;
 
     fn get_semi_generic_indep_eq_type(
         &self,
         mut domain: Expr,
         ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr), String> {
+    ) -> Result<(Param, Param, Expr)> {
         let params = [
             Param {
                 name: None,
@@ -454,7 +468,7 @@ pub trait LambdaHandler {
     fn get_generic_indep_eq_type(
         &self,
         ctx: MinimalContext,
-    ) -> Result<(Param, Param, Param, Expr), String> {
+    ) -> Result<(Param, Param, Param, Expr)> {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
@@ -472,7 +486,7 @@ pub trait LambdaHandler {
         mut right_domain: Expr,
         mut domain_eq: Expr,
         ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr), String> {
+    ) -> Result<(Param, Param, Expr)> {
         let params = [
             Param {
                 name: None,
@@ -505,7 +519,7 @@ pub trait LambdaHandler {
     fn get_generic_dep_eq_type(
         &self,
         ctx: MinimalContext,
-    ) -> Result<(Param, Param, Param, Param, Param, Expr), String> {
+    ) -> Result<(Param, Param, Param, Param, Param, Expr)> {
         let params = [
             Param {
                 name: None,

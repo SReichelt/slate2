@@ -1,3 +1,4 @@
+use anyhow::Result;
 use smallvec::smallvec;
 
 use crate::{
@@ -175,7 +176,7 @@ impl MLTTLambdaHandler {
 }
 
 impl LambdaHandler for MLTTLambdaHandler {
-    fn get_universe_type(&self) -> Result<Expr, String> {
+    fn get_universe_type(&self) -> Result<Expr> {
         Ok(Expr::var(self.u_idx))
     }
 
@@ -185,7 +186,7 @@ impl LambdaHandler for MLTTLambdaHandler {
         prop: Expr,
         kind: DependentTypeCtorKind,
         _: MinimalContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         let idx = match kind {
             DependentTypeCtorKind::Pi => self.pi_idx,
             DependentTypeCtorKind::Sigma => self.sigma_idx,
@@ -193,16 +194,11 @@ impl LambdaHandler for MLTTLambdaHandler {
         Ok(Expr::multi_app(Expr::var(idx), smallvec![domain, prop]))
     }
 
-    fn get_id_cmb(&self, domain: Expr, _: MinimalContext) -> Result<Expr, String> {
+    fn get_id_cmb(&self, domain: Expr, _: MinimalContext) -> Result<Expr> {
         Ok(Expr::app(Expr::var(self.id_idx), domain))
     }
 
-    fn get_const_cmb(
-        &self,
-        domain: Expr,
-        codomain: Expr,
-        _: MinimalContext,
-    ) -> Result<Expr, String> {
+    fn get_const_cmb(&self, domain: Expr, codomain: Expr, _: MinimalContext) -> Result<Expr> {
         Ok(Expr::multi_app(
             Expr::var(self.const_idx),
             smallvec![domain, codomain],
@@ -215,7 +211,7 @@ impl LambdaHandler for MLTTLambdaHandler {
         prop1: Expr,
         rel2: Expr,
         _: MinimalContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         Ok(Expr::multi_app(
             Expr::var(self.subst_idx),
             smallvec![domain, prop1, rel2],
@@ -228,7 +224,7 @@ impl LambdaHandler for MLTTLambdaHandler {
         left: Expr,
         right: Expr,
         _: MinimalContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         Ok(Expr::multi_app(
             Expr::var(self.eq_idx),
             smallvec![domain, left, right],
@@ -243,7 +239,7 @@ impl LambdaHandler for MLTTLambdaHandler {
         left: Expr,
         right: Expr,
         _: MinimalContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         Ok(Expr::multi_app(
             Expr::var(self.dep_eq_idx),
             smallvec![left_domain, right_domain, domain_eq, left, right],
@@ -253,10 +249,14 @@ impl LambdaHandler for MLTTLambdaHandler {
 
 #[cfg(test)]
 mod tests {
+    use crate::generic::context_object::*;
+
     use super::*;
 
+    use anyhow::{Error, Result};
+
     #[test]
-    fn test_basics() -> Result<(), String> {
+    fn test_basics() -> Result<()> {
         let mltt = get_mltt();
 
         let univ = mltt.parse_expr("U")?;
@@ -349,7 +349,7 @@ mod tests {
             "subst (Pi U (const U U U)) (const (Pi U (const U U U)) U U) (const (Pi U (const U U U)) (Pi U (const U U U)) (const U U U)) (id (Pi U (const U U U))) (const (Pi U (const U U U)) U U)"
         );
         let app_u_cmb_type = mltt.get_expr_type(&app_u)?;
-        assert!(app_u_cmb_type.is_defeq(&app_u_type, &mltt.get_root_context())?);
+        assert!(app_u_cmb_type.compare(&app_u_type, &mltt.get_root_context())?);
 
         mltt.convert_expr_to_combinators(&mut id_fun, -1)?;
         assert_eq!(mltt.print_expr(&id_fun), "id");
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_errors() -> Result<(), String> {
+    fn test_type_errors() -> Result<()> {
         let mltt = get_mltt();
 
         let non_fun_app = mltt.parse_expr("λ A : U. A A")?;
@@ -402,13 +402,13 @@ mod tests {
     }
 
     #[test]
-    fn test_type_of_types() -> Result<(), Vec<String>> {
+    fn test_type_of_types() -> Result<(), Vec<Error>> {
         let mltt = get_mltt();
         mltt.check_type_of_types()
     }
 
     #[test]
-    fn test_reduction_rule_types() -> Result<(), Vec<String>> {
+    fn test_reduction_rule_types() -> Result<(), Vec<Error>> {
         let mltt = get_mltt();
         mltt.check_reduction_rule_types()
     }

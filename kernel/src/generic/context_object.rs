@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::context::*;
 
 pub const REF_CHUNK_LEN: usize = 16;
@@ -199,24 +201,24 @@ pub trait ContextObjectWithCmp<Ctx: Context>: ContextObject {
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool;
+    ) -> Result<bool>;
 
     /// Checks whether the expression matches `target` when shifted to the subcontext
     /// `target_subctx`.
-    fn shift_and_compare(&self, ctx: &Ctx, target: &Self, target_subctx: &Ctx) -> bool {
+    fn shift_and_compare(&self, ctx: &Ctx, target: &Self, target_subctx: &Ctx) -> Result<bool> {
         debug_assert!(ctx.subcontext_shift(target_subctx) <= 0);
         self.shift_and_compare_impl(ctx, ctx, target, target_subctx)
     }
 
     /// Checks whether the expression matches `target`.
-    fn compare(&self, target: &Self, ctx: &Ctx) -> bool {
+    fn compare(&self, target: &Self, ctx: &Ctx) -> Result<bool> {
         self.shift_and_compare(ctx, target, ctx)
     }
 }
 
 impl<Ctx: Context> ContextObjectWithCmp<Ctx> for () {
-    fn shift_and_compare_impl(&self, _: &Ctx, _: &Ctx, _: &Self, _: &Ctx) -> bool {
-        true
+    fn shift_and_compare_impl(&self, _: &Ctx, _: &Ctx, _: &Self, _: &Ctx) -> Result<bool> {
+        Ok(true)
     }
 }
 
@@ -231,7 +233,7 @@ pub trait ContextObjectWithSubstCmp<SubstArg, Ctx: Context>:
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool;
+    ) -> Result<bool>;
 
     fn substitute_and_shift_and_compare(
         &self,
@@ -241,7 +243,7 @@ pub trait ContextObjectWithSubstCmp<SubstArg, Ctx: Context>:
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         debug_assert_eq!(subst_ctx.subcontext_shift(ctx), -(args.len() as VarIndex));
         debug_assert!(subst_ctx.subcontext_shift(target_subctx) <= 0);
         self.substitute_and_shift_and_compare_impl(
@@ -268,7 +270,7 @@ pub trait ContextObjectWithSubstCmp<SubstArg, Ctx: Context>:
         args_filled: &mut [bool],
         target: &Self,
         subst_ctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         self.substitute_and_shift_and_compare(ctx, args, args_filled, subst_ctx, target, subst_ctx)
     }
 }
@@ -282,8 +284,8 @@ impl<SubstArg, Ctx: Context> ContextObjectWithSubstCmp<SubstArg, Ctx> for () {
         _: &Ctx,
         _: &Self,
         _: &Ctx,
-    ) -> bool {
-        true
+    ) -> Result<bool> {
+        Ok(true)
     }
 }
 
@@ -306,5 +308,5 @@ pub trait SubstCmpInto<SubstArg, SubstResult, Ctx: Context> {
         subst_ctx: &Ctx,
         target: &SubstResult,
         target_subctx: &Ctx,
-    ) -> Option<bool>;
+    ) -> Option<Result<bool>>;
 }

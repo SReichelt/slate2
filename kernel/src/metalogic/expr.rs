@@ -3,6 +3,7 @@ use std::{
     rc::Rc,
 };
 
+use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
 
 use super::{metalogic::*, parse::*, print::*};
@@ -69,7 +70,7 @@ impl Expr {
         result
     }
 
-    pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self, String> {
+    pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
         ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
     }
 
@@ -82,7 +83,7 @@ impl Expr {
         result
     }
 
-    pub fn reduce(&mut self, ctx: &MetaLogicContext, mut max_depth: i32) -> Result<bool, String> {
+    pub fn reduce(&mut self, ctx: &MetaLogicContext, mut max_depth: i32) -> Result<bool> {
         if max_depth >= 0 {
             if max_depth == 0 {
                 return Ok(false);
@@ -116,7 +117,7 @@ impl Expr {
                 }
             }
 
-            if self.apply_reduction_rule(ctx) {
+            if self.apply_reduction_rule(ctx)? {
                 reduced = true;
             } else {
                 return Ok(reduced);
@@ -124,12 +125,12 @@ impl Expr {
         }
     }
 
-    fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> bool {
+    fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
         if let Expr::Lambda(_) = self {
             // Applying reduction rules to lambda expressions is not allowed. We need to exit early
             // here because otherwise the expression will be converted to a combinator over and over
             // again. And by their nature, combinators should not be reducible anyway.
-            return false;
+            return Ok(false);
         }
 
         let app_len = self.get_app_len();
@@ -139,21 +140,21 @@ impl Expr {
                 // Performance optimization for impossible match.
                 continue;
             }
-            if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source) {
+            if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
                 let mut expr = rule.body.target.clone();
                 expr.substitute(&mut args, true, ctx);
                 *self = expr;
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     pub fn convert_to_combinators(
         &mut self,
         ctx: &MetaLogicContext,
         mut max_depth: i32,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if max_depth == 0 {
             return Ok(());
         }
@@ -195,7 +196,7 @@ impl Expr {
         ctx: &Ctx,
         match_params: &[Param],
         match_expr: &Expr,
-    ) -> Option<SmallVec<[Expr; INLINE_PARAMS]>> {
+    ) -> Result<Option<SmallVec<[Expr; INLINE_PARAMS]>>> {
         let params_len = match_params.len();
         let mut args: SmallVec<[Expr; INLINE_PARAMS]> = smallvec![Expr::default(); params_len];
         let mut args_filled: SmallVec<[bool; INLINE_PARAMS]> = smallvec![false; params_len];
@@ -207,32 +208,21 @@ impl Expr {
                 self,
                 ctx,
             )
-        }) {
+        })? {
             if args_filled.iter().all(|filled| *filled) {
-                return Some(args);
+                return Ok(Some(args));
             }
         }
-        None
+        Ok(None)
     }
 
-    pub fn is_defeq(&self, other: &Self, ctx: &MetaLogicContext) -> Result<bool, String> {
-        if self.compare(other, ctx) {
-            return Ok(true);
-        }
-        let mut self_clone = self.clone();
-        let mut other_clone = other.clone();
-        self_clone.reduce(ctx, -1)?;
-        other_clone.reduce(ctx, -1)?;
-        Ok(self_clone.compare(&other_clone, ctx))
-    }
-
-    pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
+    pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         let mut result = self.get_unreduced_type(ctx)?;
         result.reduce(ctx, -1)?;
         Ok(result)
     }
 
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         match self {
             Expr::Var(var) => Ok(var.get_type(ctx)),
             Expr::App(app) => {
@@ -253,7 +243,7 @@ impl Expr {
                     let arg_str = arg.print(ctx);
                     let arg_type = arg.get_type(ctx)?;
                     let arg_type_str = arg_type.print(ctx);
-                    Err(format!("application type mismatch: [{fun_str} : {fun_type_str}] cannot be applied to [{arg_str} : {arg_type_str}]"))
+                    Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}» cannot be applied to «{arg_str} : {arg_type_str}»"))
                 }
             }
             Expr::Lambda(lambda) => ctx.with_local(&lambda.param, |body_ctx| {
@@ -273,13 +263,13 @@ impl Expr {
         &self,
         arg_type: Expr,
         ctx: &MetaLogicContext,
-    ) -> Result<Option<Expr>, String> {
+    ) -> Result<Option<Expr>> {
         let (prop_param, cmp_fun_type) = ctx.lambda_handler().get_semi_generic_dep_type(
             arg_type,
             DependentTypeCtorKind::Pi,
             ctx.as_minimal(),
         )?;
-        if let Some(mut prop_vec) = self.match_expr(ctx, &[prop_param], &cmp_fun_type) {
+        if let Some(mut prop_vec) = self.match_expr(ctx, &[prop_param], &cmp_fun_type)? {
             Ok(prop_vec.pop())
         } else {
             Ok(None)
@@ -370,7 +360,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         match (self, target) {
             (Expr::Var(var), Expr::Var(target_var)) => {
                 var.shift_and_compare_impl(ctx, orig_ctx, target_var, target_subctx)
@@ -382,20 +372,20 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
                 lambda.shift_and_compare_impl(ctx, orig_ctx, target_lambda, target_subctx)
             }
             (Expr::Lambda(lambda), _) => {
-                if let Some(cmb) = lambda.try_convert_to_combinator(ctx) {
+                if let Some(cmb) = lambda.try_convert_to_combinator(ctx)? {
                     cmb.shift_and_compare_impl(ctx, orig_ctx, target, target_subctx)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
             (_, Expr::Lambda(target_lambda)) => {
-                if let Some(target_cmb) = target_lambda.try_convert_to_combinator(ctx) {
+                if let Some(target_cmb) = target_lambda.try_convert_to_combinator(ctx)? {
                     self.shift_and_compare_impl(ctx, orig_ctx, &target_cmb, target_subctx)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 }
@@ -409,7 +399,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if let Expr::Var(var) = self {
             if let Some(result) =
                 var.compare_subst_arg_impl(ctx, args, args_filled, subst_ctx, target, target_subctx)
@@ -440,7 +430,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
                     target_subctx,
                 ),
             (Expr::Lambda(lambda), _) => {
-                if let Some(cmb) = lambda.try_convert_to_combinator(ctx) {
+                if let Some(cmb) = lambda.try_convert_to_combinator(ctx)? {
                     cmb.substitute_and_shift_and_compare_impl(
                         ctx,
                         args,
@@ -450,11 +440,11 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
                         target_subctx,
                     )
                 } else {
-                    false
+                    Ok(false)
                 }
             }
             (_, Expr::Lambda(target_lambda)) => {
-                if let Some(target_cmb) = target_lambda.try_convert_to_combinator(target_subctx) {
+                if let Some(target_cmb) = target_lambda.try_convert_to_combinator(target_subctx)? {
                     self.substitute_and_shift_and_compare_impl(
                         ctx,
                         args,
@@ -464,10 +454,10 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
                         target_subctx,
                     )
                 } else {
-                    false
+                    Ok(false)
                 }
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 }
@@ -483,27 +473,21 @@ pub type AppExpr = App<Expr, Expr>;
 pub type LambdaExpr = Lambda<Param, Expr>;
 
 impl LambdaExpr {
-    fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Option<Expr> {
+    fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
         if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
-            if let Ok(expr) = self.convert_to_combinator(metalogic_ctx) {
-                //dbg!(expr.print(metalogic_ctx));
-                return Some(expr);
-            } else {
-                debug_assert!(false);
-            }
+            let expr = self.convert_to_combinator(metalogic_ctx)?;
+            //dbg!(expr.print(metalogic_ctx));
+            Ok(Some(expr))
+        } else {
+            Ok(None)
         }
-        None
     }
 
-    fn convert_to_combinator(&self, ctx: &MetaLogicContext) -> Result<Expr, String> {
+    fn convert_to_combinator(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         Self::create_combinator_app(&self.param, &self.body, ctx)
     }
 
-    fn create_combinator_app(
-        param: &Param,
-        body: &Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Expr, String> {
+    fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> Result<Expr> {
         ctx.with_local(&param, |body_ctx| {
             //dbg!(body.print(body_ctx));
 
@@ -553,7 +537,7 @@ impl LambdaExpr {
         fun: &Expr,
         arg: &Expr,
         body_ctx: &MetaLogicContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         let fun_type = fun.get_type(body_ctx)?;
         let arg_type = arg.get_type(body_ctx)?;
         if let Some(fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
@@ -570,7 +554,7 @@ impl LambdaExpr {
             let fun_type_str = fun_type.print(body_ctx);
             let arg_str = arg.print(body_ctx);
             let arg_type_str = arg_type.print(body_ctx);
-            Err(format!("application type mismatch when converting to combinator: [{fun_str} : {fun_type_str}] cannot be applied to [{arg_str} : {arg_type_str}]"))
+            Err(anyhow!("application type mismatch when converting to combinator: «{fun_str} : {fun_type_str}» cannot be applied to «{arg_str} : {arg_type_str}»"))
         }
     }
 }
@@ -579,17 +563,6 @@ impl LambdaExpr {
 pub struct Param {
     pub name: Option<Rc<String>>,
     pub type_expr: Expr,
-}
-
-impl Param {
-    pub fn print_name(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        let param_name = if let Some(name) = &self.name {
-            name
-        } else {
-            "_"
-        };
-        f.write_str(param_name)
-    }
 }
 
 impl NamedObject for Param {
@@ -610,7 +583,7 @@ impl PartialEq for Param {
 
 impl Debug for Param {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.print_name(f)?;
+        f.write_str(self.get_name_or_placeholder())?;
         f.write_str(":")?;
         self.type_expr.fmt(f)
     }
@@ -657,7 +630,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Param {
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         self.type_expr
             .shift_and_compare_impl(ctx, orig_ctx, &target.type_expr, target_subctx)
     }
@@ -672,7 +645,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Param {
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         self.type_expr.substitute_and_shift_and_compare_impl(
             ctx,
             args,

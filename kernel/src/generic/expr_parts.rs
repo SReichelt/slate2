@@ -1,5 +1,6 @@
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
+use anyhow::Result;
 use smallvec::SmallVec;
 
 use super::{context::*, context_object::*};
@@ -16,7 +17,7 @@ impl Default for Var {
 }
 
 impl Debug for Var {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let Var(idx) = *self;
         write!(f, "#{idx}")
     }
@@ -62,7 +63,7 @@ impl<Ctx: Context> ContextObjectWithCmp<Ctx> for Var {
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         let Var(mut idx) = *self;
         let locals_start = ctx.locals_start();
         if idx < locals_start {
@@ -76,7 +77,7 @@ impl<Ctx: Context> ContextObjectWithCmp<Ctx> for Var {
             debug_assert!(!target_subctx.is_local_in_supercontext(idx, orig_ctx));
         }
         let Var(target_idx) = *target;
-        idx == target_idx
+        Ok(idx == target_idx)
     }
 }
 
@@ -130,7 +131,7 @@ impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
         subst_ctx: &Ctx,
         target: &SubstArg,
         target_subctx: &Ctx,
-    ) -> Option<bool> {
+    ) -> Option<Result<bool>> {
         let Var(idx) = *self;
         let locals_start = ctx.locals_start();
         if idx < locals_start {
@@ -147,7 +148,7 @@ impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
                     if !*filled {
                         let arg_shift = subst_ctx.subcontext_shift(target_subctx);
                         if target.has_refs_impl(arg_shift, 0) {
-                            return Some(false);
+                            return Some(Ok(false));
                         }
                         *filled = true;
                         *arg = target.shifted_impl(
@@ -155,7 +156,7 @@ impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
                             arg_shift,
                             -arg_shift,
                         );
-                        return Some(true);
+                        return Some(Ok(true));
                     }
                 }
                 return Some(arg.shift_and_compare(subst_ctx, target, target_subctx));
@@ -298,12 +299,12 @@ impl<
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if !self
             .param
-            .shift_and_compare_impl(ctx, orig_ctx, &target.param, target_subctx)
+            .shift_and_compare_impl(ctx, orig_ctx, &target.param, target_subctx)?
         {
-            return false;
+            return Ok(false);
         }
         ctx.with_local(&self.param, |body_ctx| {
             target_subctx.with_local(&target.param, |target_body_ctx| {
@@ -329,7 +330,7 @@ impl<
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if !self.param.substitute_and_shift_and_compare_impl(
             ctx,
             args,
@@ -337,8 +338,8 @@ impl<
             subst_ctx,
             &target.param,
             target_subctx,
-        ) {
-            return false;
+        )? {
+            return Ok(false);
         }
         ctx.with_local(&self.param, |body_ctx| {
             target_subctx.with_local(&target.param, |target_body_ctx| {
@@ -356,7 +357,7 @@ impl<
 }
 
 impl<Param: Debug, Body: Debug> Debug for Lambda<Param, Body> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("λ")?;
         self.param.fmt(f)?;
         f.write_str(".")?;
@@ -375,12 +376,12 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if !self
             .param
-            .shift_and_compare_impl(ctx, orig_ctx, &target.param, target_subctx)
+            .shift_and_compare_impl(ctx, orig_ctx, &target.param, target_subctx)?
         {
-            return false;
+            return Ok(false);
         }
         self.body
             .shift_and_compare_impl(ctx, orig_ctx, &target.body, target_subctx)
@@ -402,7 +403,7 @@ impl<
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if !self.param.substitute_and_shift_and_compare_impl(
             ctx,
             args,
@@ -410,8 +411,8 @@ impl<
             subst_ctx,
             &target.param,
             target_subctx,
-        ) {
-            return false;
+        )? {
+            return Ok(false);
         }
         self.body.substitute_and_shift_and_compare_impl(
             ctx,
@@ -425,7 +426,7 @@ impl<
 }
 
 impl<Fun: Debug, Arg: Debug> Debug for App<Fun, Arg> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.param.fmt(f)?;
         f.write_str("(")?;
         self.body.fmt(f)?;
@@ -532,9 +533,9 @@ impl<
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if self.params.len() != target.params.len() {
-            return false;
+            return Ok(false);
         }
         let mut param_idx = 0;
         for (param, target_param) in self.params.iter().zip(target.params.iter()) {
@@ -547,8 +548,8 @@ impl<
                         target_param_ctx,
                     )
                 })
-            }) {
-                return false;
+            })? {
+                return Ok(false);
             }
             param_idx += 1;
         }
@@ -576,9 +577,9 @@ impl<
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if self.params.len() != target.params.len() {
-            return false;
+            return Ok(false);
         }
         let mut param_idx = 0;
         for (param, target_param) in self.params.iter().zip(target.params.iter()) {
@@ -593,8 +594,8 @@ impl<
                         target_param_ctx,
                     )
                 })
-            }) {
-                return false;
+            })? {
+                return Ok(false);
             }
             param_idx += 1;
         }
@@ -614,7 +615,7 @@ impl<
 }
 
 impl<Param: Debug, Body: Debug> Debug for MultiLambda<Param, Body> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("λ")?;
         if self.params.len() == 1 {
             self.params[0].fmt(f)?;
@@ -646,13 +647,13 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
         orig_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if self.params.len() != target.params.len() {
-            return false;
+            return Ok(false);
         }
         for (param, target_param) in self.params.iter().zip(target.params.iter()) {
-            if !param.shift_and_compare_impl(ctx, orig_ctx, target_param, target_subctx) {
-                return false;
+            if !param.shift_and_compare_impl(ctx, orig_ctx, target_param, target_subctx)? {
+                return Ok(false);
             }
         }
         self.body
@@ -675,9 +676,9 @@ impl<
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
-    ) -> bool {
+    ) -> Result<bool> {
         if self.params.len() != target.params.len() {
-            return false;
+            return Ok(false);
         }
         for (param, target_param) in self.params.iter().zip(target.params.iter()) {
             if !param.substitute_and_shift_and_compare_impl(
@@ -687,8 +688,8 @@ impl<
                 subst_ctx,
                 target_param,
                 target_subctx,
-            ) {
-                return false;
+            )? {
+                return Ok(false);
             }
         }
         self.body.substitute_and_shift_and_compare_impl(
@@ -703,7 +704,7 @@ impl<
 }
 
 impl<Fun: Debug, Arg: Debug> Debug for MultiApp<Fun, Arg> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.body.fmt(f)?;
         f.write_str("(")?;
         let mut comma = false;

@@ -64,7 +64,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         match expr {
             Expr::Var(Var(idx)) => {
                 let param = self.context.get_var(*idx);
-                param.print_name(self.output)?;
+                self.output.write_str(param.get_name_or_placeholder())?;
                 let occurrence = self.context.get_name_occurrence(*idx, param);
                 if occurrence != 0 {
                     self.output.write_fmt(format_args!("@{occurrence}"))?;
@@ -92,6 +92,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -104,14 +105,30 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 context: body_ctx,
             };
             body_printing_ctx.print_expr_with_parens(&lambda.body, false, false, true, true, false)
-        })?;
-        Ok(())
+        })
     }
 
     fn print_param(&mut self, param: &Param) -> fmt::Result {
-        param.print_name(self.output)?;
+        self.output.write_str(param.get_name_or_placeholder())?;
         self.output.write_str(" : ")?;
         self.print_expr_with_parens(&param.type_expr, false, true, false, false, false)?;
+        Ok(())
+    }
+
+    fn print_params(&mut self, params: &[Param], prefix: char) -> fmt::Result {
+        if let Some((param, rest)) = params.split_first() {
+            self.output.write_char(prefix)?;
+            self.output.write_char(' ')?;
+            self.print_param(param)?;
+            self.output.write_str(". ")?;
+            self.context.with_local(&param, |rest_ctx| {
+                let mut rest_printing_ctx = PrintingContext {
+                    output: self.output,
+                    context: rest_ctx,
+                };
+                rest_printing_ctx.print_params(rest, prefix)
+            })?;
+        }
         Ok(())
     }
 
@@ -130,8 +147,9 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         if let Ok((domain_param, codomain_param, generic_indep_type)) =
             lambda_handler.get_generic_indep_type(kind, ctx)
         {
-            if let Some(arg_vec) =
-                expr.match_expr(&ctx, &[domain_param, codomain_param], &generic_indep_type)
+            if let Some(arg_vec) = expr
+                .match_expr(&ctx, &[domain_param, codomain_param], &generic_indep_type)
+                .map_err(|_| fmt::Error)?
             {
                 if let [domain, codomain] = arg_vec.as_slice() {
                     if parens_for_infix {
@@ -160,8 +178,9 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         if let Ok((domain_param, prop_param, generic_dep_type)) =
             lambda_handler.get_generic_dep_type(kind, ctx)
         {
-            if let Some(arg_vec) =
-                expr.match_expr(&ctx, &[domain_param, prop_param], &generic_dep_type)
+            if let Some(arg_vec) = expr
+                .match_expr(&ctx, &[domain_param, prop_param], &generic_dep_type)
+                .map_err(|_| fmt::Error)?
             {
                 if let [_domain, prop] = arg_vec.as_slice() {
                     if let Expr::Lambda(lambda) = prop {
@@ -190,11 +209,14 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         if let Ok((domain_param, left_param, right_param, generic_indep_eq_type)) =
             lambda_handler.get_generic_indep_eq_type(ctx)
         {
-            if let Some(arg_vec) = expr.match_expr(
-                &ctx,
-                &[domain_param, left_param, right_param],
-                &generic_indep_eq_type,
-            ) {
+            if let Some(arg_vec) = expr
+                .match_expr(
+                    &ctx,
+                    &[domain_param, left_param, right_param],
+                    &generic_indep_eq_type,
+                )
+                .map_err(|_| fmt::Error)?
+            {
                 if let [domain, left, right] = arg_vec.as_slice() {
                     if parens {
                         self.output.write_char('(')?;
@@ -226,17 +248,20 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             generic_dep_eq_type,
         )) = lambda_handler.get_generic_dep_eq_type(ctx)
         {
-            if let Some(arg_vec) = expr.match_expr(
-                &ctx,
-                &[
-                    left_domain_param,
-                    right_domain_param,
-                    domain_eq_param,
-                    left_param,
-                    right_param,
-                ],
-                &generic_dep_eq_type,
-            ) {
+            if let Some(arg_vec) = expr
+                .match_expr(
+                    &ctx,
+                    &[
+                        left_domain_param,
+                        right_domain_param,
+                        domain_eq_param,
+                        left_param,
+                        right_param,
+                    ],
+                    &generic_dep_eq_type,
+                )
+                .map_err(|_| fmt::Error)?
+            {
                 if let [left_domain, right_domain, domain_eq, left, right] = arg_vec.as_slice() {
                     if parens {
                         self.output.write_char('(')?;
@@ -268,5 +293,22 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         }
 
         Ok(false)
+    }
+
+    pub fn print_reduction_rule(&mut self, rule: &ReductionRule) -> fmt::Result {
+        self.print_params(&rule.params, '∀')?;
+        self.context.with_locals(&rule.params, |body_ctx| {
+            let mut body_printing_ctx = PrintingContext {
+                output: self.output,
+                context: body_ctx,
+            };
+            body_printing_ctx.print_reduction_body(&rule.body)
+        })
+    }
+
+    pub fn print_reduction_body(&mut self, body: &ReductionBody) -> fmt::Result {
+        self.print_expr(&body.source)?;
+        self.output.write_str(" :≡ ")?;
+        self.print_expr(&body.target)
     }
 }

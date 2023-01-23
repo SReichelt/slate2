@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
 
 use super::{expr::*, metalogic::*};
@@ -18,8 +19,8 @@ impl ParsingContext<'_, '_, '_> {
     pub fn parse<R>(
         s: &str,
         ctx: &MetaLogicContext,
-        f: impl FnOnce(&mut ParsingContext) -> Result<R, String>,
-    ) -> Result<R, String> {
+        f: impl FnOnce(&mut ParsingContext) -> Result<R>,
+    ) -> Result<R> {
         let mut parser_input = ParserInput(s);
         let mut parsing_context = ParsingContext {
             input: &mut parser_input,
@@ -30,7 +31,7 @@ impl ParsingContext<'_, '_, '_> {
         Ok(result)
     }
 
-    pub fn parse_expr(&mut self) -> Result<Expr, String> {
+    pub fn parse_expr(&mut self) -> Result<Expr> {
         let mut expr = self.parse_prod()?;
         if self.input.try_read_char('→') {
             let codomain = self.parse_expr()?;
@@ -44,7 +45,7 @@ impl ParsingContext<'_, '_, '_> {
         Ok(expr)
     }
 
-    fn parse_prod(&mut self) -> Result<Expr, String> {
+    fn parse_prod(&mut self) -> Result<Expr> {
         let mut expr = self.parse_eq()?;
         if self.input.try_read_char('×') {
             let right = self.parse_eq()?;
@@ -58,7 +59,7 @@ impl ParsingContext<'_, '_, '_> {
         Ok(expr)
     }
 
-    fn parse_eq(&mut self) -> Result<Expr, String> {
+    fn parse_eq(&mut self) -> Result<Expr> {
         let mut expr = self.parse_app()?;
         if self.input.try_read_char('=') {
             let mut domain = None;
@@ -79,16 +80,18 @@ impl ParsingContext<'_, '_, '_> {
                     if let Expr::Var(left_var) = &expr {
                         domain = Some(left_var.get_type(self.context));
                     } else {
-                        let msg = format!("need to specify left type of dependent equality");
-                        return self.input.error(msg);
+                        return self
+                            .input
+                            .error(anyhow!("need to specify left type of dependent equality"));
                     }
                 }
                 if right_domain.is_none() {
                     if let Expr::Var(right_var) = &right {
                         right_domain = Some(right_var.get_type(self.context));
                     } else {
-                        let msg = format!("need to specify right type of dependent equality");
-                        return self.input.error(msg);
+                        return self
+                            .input
+                            .error(anyhow!("need to specify right type of dependent equality"));
                     }
                 }
                 expr = self.context.lambda_handler().get_dep_eq_type(
@@ -107,8 +110,9 @@ impl ParsingContext<'_, '_, '_> {
                     } else if let Expr::Var(right_var) = &right {
                         domain = Some(right_var.get_type(self.context));
                     } else {
-                        let msg = format!("need to specify type of equality");
-                        return self.input.error(msg);
+                        return self
+                            .input
+                            .error(anyhow!("need to specify type of equality"));
                     }
                 }
                 expr = self.context.lambda_handler().get_indep_eq_type(
@@ -122,7 +126,7 @@ impl ParsingContext<'_, '_, '_> {
         Ok(expr)
     }
 
-    fn parse_app(&mut self) -> Result<Expr, String> {
+    fn parse_app(&mut self) -> Result<Expr> {
         self.input.skip_whitespace();
         if let Some(mut expr) = self.try_parse_one()? {
             self.input.skip_whitespace();
@@ -136,7 +140,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn try_parse_one(&mut self) -> Result<Option<Expr>, String> {
+    fn try_parse_one(&mut self) -> Result<Option<Expr>> {
         if self.input.try_read_char('(') {
             let expr = self.parse_expr()?;
             self.input.read_char(')')?;
@@ -154,8 +158,8 @@ impl ParsingContext<'_, '_, '_> {
             if let Some(var_idx) = self.context.get_var_index(name, occurrence) {
                 Ok(Some(Expr::var(var_idx)))
             } else {
-                let msg = format!("variable '{name}' not found");
-                self.input.error(msg)
+                let err = anyhow!("variable '{name}' not found");
+                self.input.error(err)
             }
         } else {
             Ok(None)
@@ -170,7 +174,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    pub fn parse_param(&mut self) -> Result<Param, String> {
+    pub fn parse_param(&mut self) -> Result<Param> {
         self.input.skip_whitespace();
         if let Some(param_name_str) = self.input.try_read_name() {
             let param_name = Self::get_param_name(param_name_str);
@@ -186,7 +190,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn parse_lambda(&mut self) -> Result<(SmallVec<[Param; INLINE_PARAMS]>, Expr), String> {
+    fn parse_lambda(&mut self) -> Result<(SmallVec<[Param; INLINE_PARAMS]>, Expr)> {
         let params = self.parse_lambda_params()?;
         let body = self.context.with_locals(&params, |body_ctx| {
             let mut body_parsing_ctx = ParsingContext {
@@ -198,7 +202,7 @@ impl ParsingContext<'_, '_, '_> {
         Ok((params, body))
     }
 
-    fn parse_lambda_params(&mut self) -> Result<SmallVec<[Param; INLINE_PARAMS]>, String> {
+    fn parse_lambda_params(&mut self) -> Result<SmallVec<[Param; INLINE_PARAMS]>> {
         self.input.skip_whitespace();
         if let Some(param_name_str) = self.input.try_read_name() {
             let mut param_names: SmallVec<[Option<Rc<String>>; INLINE_PARAMS]> =
@@ -228,7 +232,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn parse_dep_type(&mut self, kind: DependentTypeCtorKind) -> Result<Expr, String> {
+    fn parse_dep_type(&mut self, kind: DependentTypeCtorKind) -> Result<Expr> {
         let (mut params, body) = self.parse_lambda()?;
         self.create_multi_dep_type(&mut params, body, kind, self.context.as_minimal())
     }
@@ -239,7 +243,7 @@ impl ParsingContext<'_, '_, '_> {
         body: Expr,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr> {
         if let Some((param, rest_params)) = params.split_first_mut() {
             let rest = ctx.with_local(param, |rest_ctx| {
                 self.create_multi_dep_type(rest_params, body, kind, *rest_ctx)
@@ -254,7 +258,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    pub fn parse_reduction_rule(&mut self) -> Result<ReductionRule, String> {
+    pub fn parse_reduction_rule(&mut self) -> Result<ReductionRule> {
         let mut params = SmallVec::new();
         self.input.skip_whitespace();
         while self.input.try_read_char('∀') {
@@ -278,7 +282,7 @@ impl ParsingContext<'_, '_, '_> {
         Ok(ReductionRule { params, body })
     }
 
-    pub fn parse_reduction_body(&mut self) -> Result<ReductionBody, String> {
+    pub fn parse_reduction_body(&mut self) -> Result<ReductionBody> {
         let source = self.parse_expr()?;
         self.input.read_char_seq(":≡")?;
         let target = self.parse_expr()?;

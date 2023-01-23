@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::{expr::*, metalogic::*};
 
 pub struct TypeInit<'a> {
@@ -15,7 +17,7 @@ impl MetaLogic {
         types_init: &[TypeInit],
         defs_init: &[DefInit],
         create_lambda_handler: F,
-    ) -> Result<Self, String>
+    ) -> Result<Self>
     where
         F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
     {

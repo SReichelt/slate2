@@ -255,6 +255,10 @@ impl<ParamType, GlobalsType: VarAccessor<ParamType>> VarAccessor<ParamType>
 
 pub trait NamedObject {
     fn get_name(&self) -> Option<&str>;
+
+    fn get_name_or_placeholder(&self) -> &str {
+        self.get_name().unwrap_or("_")
+    }
 }
 
 pub trait NamedVarAccessor<ParamType: NamedObject>: VarAccessor<ParamType> {
