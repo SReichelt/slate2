@@ -60,14 +60,19 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    fn get_app_len(&self) -> usize {
-        let mut result = 0;
-        let mut expr = self;
-        while let Expr::App(app) = expr {
-            result += 1;
-            expr = &app.param;
+    fn get_const_app_info(&self) -> Option<(VarIndex, usize)> {
+        let mut len = 0;
+        let mut fun = self;
+        while let Expr::App(app) = fun {
+            len += 1;
+            fun = &app.param;
         }
-        result
+        if let Expr::Var(Var(var_idx)) = fun {
+            if *var_idx >= 0 {
+                return Some((*var_idx, len));
+            }
+        }
+        None
     }
 
     pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
@@ -126,27 +131,21 @@ impl Expr {
     }
 
     fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
-        if let Expr::Lambda(_) = self {
-            // Applying reduction rules to lambda expressions is not allowed. We need to exit early
-            // here because otherwise the expression will be converted to a combinator over and over
-            // again. And by their nature, combinators should not be reducible anyway.
-            return Ok(false);
-        }
-
-        let app_len = self.get_app_len();
-
-        for rule in ctx.reduction_rules() {
-            if app_len < rule.body.source.get_app_len() {
-                // Performance optimization for impossible match.
-                continue;
-            }
-            if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
-                let mut expr = rule.body.target.clone();
-                expr.substitute(&mut args, true, ctx);
-                *self = expr;
-                return Ok(true);
+        let const_app_info = self.get_const_app_info();
+        if const_app_info.is_some() {
+            for rule in ctx.reduction_rules() {
+                let rule_app_info = rule.body.source.get_const_app_info();
+                if rule_app_info == const_app_info {
+                    if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
+                        let mut expr = rule.body.target.clone();
+                        expr.substitute(&mut args, true, ctx);
+                        *self = expr;
+                        return Ok(true);
+                    }
+                }
             }
         }
+
         Ok(false)
     }
 
@@ -176,13 +175,7 @@ impl Expr {
                         lambda.body.convert_to_combinators(&body_ctx, max_depth)
                     })?;
 
-                    if max_depth >= -3 {
-                        dbg!(Expr::Lambda(lambda.clone()).print(ctx));
-                    }
                     *self = lambda.convert_to_combinator(ctx)?;
-                    if max_depth >= -3 {
-                        dbg!(self.print(ctx));
-                    }
                     continue;
                 }
             }
