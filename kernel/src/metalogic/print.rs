@@ -74,9 +74,9 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 if parens_for_app {
                     self.output.write_char('(')?;
                 }
-                self.print_expr_with_parens(&app.param, false, true, true, true, true)?;
+                self.print_expr_with_parens(&app.body, false, true, true, true, true)?;
                 self.output.write_char(' ')?;
-                self.print_expr_with_parens(&app.body, true, true, true, true, true)?;
+                self.print_arg(&app.param)?;
                 if parens_for_app {
                     self.output.write_char(')')?;
                 }
@@ -96,6 +96,17 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         Ok(())
     }
 
+    fn print_arg(&mut self, arg: &Arg) -> fmt::Result {
+        if arg.implicit {
+            self.output.write_char('{')?;
+            self.print_expr(&arg.expr)?;
+            self.output.write_char('}')?;
+            Ok(())
+        } else {
+            self.print_expr_with_parens(&arg.expr, true, true, true, true, true)
+        }
+    }
+
     fn print_lambda(&mut self, lambda: &LambdaExpr) -> fmt::Result {
         self.print_param(&lambda.param)?;
         self.output.write_str(". ")?;
@@ -109,9 +120,15 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
     }
 
     fn print_param(&mut self, param: &Param) -> fmt::Result {
+        if param.implicit {
+            self.output.write_char('{')?;
+        }
         self.output.write_str(param.get_name_or_placeholder())?;
         self.output.write_str(" : ")?;
         self.print_expr_with_parens(&param.type_expr, false, true, false, false, false)?;
+        if param.implicit {
+            self.output.write_char('}')?;
+        }
         Ok(())
     }
 

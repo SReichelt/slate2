@@ -31,6 +31,7 @@ impl MetaLogic {
                 constants.push(Param {
                     name: Some(Rc::new(name.into())),
                     type_expr: Expr::default(),
+                    implicit: false,
                 });
             } else {
                 return parser_input.expected("identifier");
@@ -210,7 +211,7 @@ impl MetaLogic {
         match expr {
             Expr::Var(_) => {}
             Expr::App(app) => {
-                self.check_type_of_types_in_expr(&app.param, ctx)?;
+                self.check_type_of_types_in_expr(&app.param.expr, ctx)?;
                 self.check_type_of_types_in_expr(&app.body, ctx)?;
             }
             Expr::Lambda(lambda) => {
@@ -351,6 +352,7 @@ pub trait LambdaHandler {
         let codomain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
+            implicit: false,
         };
         let indep_type = ctx.with_local(&codomain_param, |subctx| {
             domain.shift_to_subcontext(&ctx, subctx);
@@ -369,6 +371,7 @@ pub trait LambdaHandler {
         let prop_param = Param {
             name: None,
             type_expr: self.get_prop_type(domain.clone(), ctx)?,
+            implicit: false,
         };
         let dep_type = ctx.with_local(&prop_param, |subctx| {
             domain.shift_to_subcontext(&ctx, subctx);
@@ -386,6 +389,7 @@ pub trait LambdaHandler {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
+            implicit: false,
         };
         let (codomain_param, indep_type) = ctx.with_local(&domain_param, |subctx| {
             let domain_var = Expr::var(-1);
@@ -402,6 +406,7 @@ pub trait LambdaHandler {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
+            implicit: true,
         };
         let (prop_param, dep_type) = ctx.with_local(&domain_param, |subctx| {
             let domain_var = Expr::var(-1);
@@ -449,10 +454,12 @@ pub trait LambdaHandler {
             Param {
                 name: None,
                 type_expr: domain.clone(),
+                implicit: false,
             },
             Param {
                 name: None,
                 type_expr: domain.shifted_impl(ctx.locals_start(), 0, -1),
+                implicit: false,
             },
         ];
         let eq_type = ctx.with_locals(&params, |subctx| {
@@ -472,6 +479,7 @@ pub trait LambdaHandler {
         let domain_param = Param {
             name: None,
             type_expr: self.get_universe_type()?,
+            implicit: true,
         };
         let (left_param, right_param, eq_type) = ctx.with_local(&domain_param, |subctx| {
             let domain_var = Expr::var(-1);
@@ -491,10 +499,12 @@ pub trait LambdaHandler {
             Param {
                 name: None,
                 type_expr: left_domain.clone(),
+                implicit: false,
             },
             Param {
                 name: None,
                 type_expr: right_domain.shifted_impl(ctx.locals_start(), 0, -1),
+                implicit: false,
             },
         ];
         let eq_type = ctx.with_locals(&params, |subctx| {
@@ -524,10 +534,12 @@ pub trait LambdaHandler {
             Param {
                 name: None,
                 type_expr: self.get_universe_type()?,
+                implicit: true,
             },
             Param {
                 name: None,
                 type_expr: self.get_universe_type()?,
+                implicit: true,
             },
             Param {
                 name: None,
@@ -537,6 +549,7 @@ pub trait LambdaHandler {
                     Expr::var(-1),
                     ctx,
                 )?,
+                implicit: false,
             },
         ];
         let (left_param, right_param, eq_type) = ctx.with_locals(&params, |subctx| {

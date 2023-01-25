@@ -129,8 +129,7 @@ impl ParsingContext<'_, '_, '_> {
     fn parse_app(&mut self) -> Result<Expr> {
         self.input.skip_whitespace();
         if let Some(mut expr) = self.try_parse_one()? {
-            self.input.skip_whitespace();
-            while let Some(arg) = self.try_parse_one()? {
+            while let Some(arg) = self.try_parse_arg()? {
                 expr = Expr::app(expr, arg);
                 self.input.skip_whitespace();
             }
@@ -166,6 +165,25 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
+    fn try_parse_arg(&mut self) -> Result<Option<Arg>> {
+        self.input.skip_whitespace();
+        if self.input.try_read_char('{') {
+            let expr = self.parse_expr()?;
+            self.input.read_char('}')?;
+            Ok(Some(Arg {
+                expr,
+                implicit: true,
+            }))
+        } else if let Some(expr) = self.try_parse_one()? {
+            Ok(Some(Arg {
+                expr,
+                implicit: false,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn get_param_name(param_name_str: &str) -> Option<Rc<String>> {
         if param_name_str == "_" {
             None
@@ -176,14 +194,22 @@ impl ParsingContext<'_, '_, '_> {
 
     pub fn parse_param(&mut self) -> Result<Param> {
         self.input.skip_whitespace();
+        let mut implicit = false;
+        if self.input.try_read_char('{') {
+            implicit = true;
+        }
         if let Some(param_name_str) = self.input.try_read_name() {
             let param_name = Self::get_param_name(param_name_str);
             self.input.skip_whitespace();
             self.input.read_char(':')?;
             let param_type = self.parse_expr()?;
+            if implicit {
+                self.input.read_char('}')?;
+            }
             Ok(Param {
                 name: param_name,
                 type_expr: param_type,
+                implicit,
             })
         } else {
             self.input.expected("identifier")
@@ -204,6 +230,10 @@ impl ParsingContext<'_, '_, '_> {
 
     fn parse_lambda_params(&mut self) -> Result<SmallVec<[Param; INLINE_PARAMS]>> {
         self.input.skip_whitespace();
+        let mut implicit = false;
+        if self.input.try_read_char('{') {
+            implicit = true;
+        }
         if let Some(param_name_str) = self.input.try_read_name() {
             let mut param_names: SmallVec<[Option<Rc<String>>; INLINE_PARAMS]> =
                 smallvec![Self::get_param_name(param_name_str)];
@@ -214,6 +244,9 @@ impl ParsingContext<'_, '_, '_> {
             }
             self.input.read_char(':')?;
             let param_type = self.parse_expr()?;
+            if implicit {
+                self.input.read_char('}')?;
+            }
             self.input.read_char('.')?;
             let mut params: SmallVec<[Param; INLINE_PARAMS]> =
                 SmallVec::with_capacity(param_names.len());
@@ -223,6 +256,7 @@ impl ParsingContext<'_, '_, '_> {
                 params.push(Param {
                     name: param_name,
                     type_expr: param_type.shifted_impl(locals_start, 0, shift),
+                    implicit,
                 });
                 shift -= 1;
             }

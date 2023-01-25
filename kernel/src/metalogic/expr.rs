@@ -26,16 +26,33 @@ impl Expr {
         matches!(self, Expr::Var(_))
     }
 
-    pub fn app(fun: Expr, arg: Expr) -> Self {
+    pub fn app(fun: Expr, arg: Arg) -> Self {
         Expr::App(Box::new(App {
-            param: fun,
-            body: arg,
+            param: arg,
+            body: fun,
         }))
     }
 
-    pub fn multi_app(mut fun: Expr, args: SmallVec<[Expr; INLINE_PARAMS]>) -> Self {
+    pub fn explicit_app(fun: Expr, arg: Expr) -> Self {
+        Self::app(
+            fun,
+            Arg {
+                expr: arg,
+                implicit: false,
+            },
+        )
+    }
+
+    pub fn multi_app(mut fun: Expr, args: SmallVec<[Arg; INLINE_PARAMS]>) -> Self {
         for arg in args {
             fun = Self::app(fun, arg);
+        }
+        fun
+    }
+
+    pub fn explicit_multi_app(mut fun: Expr, args: SmallVec<[Expr; INLINE_PARAMS]>) -> Self {
+        for arg in args {
+            fun = Self::explicit_app(fun, arg);
         }
         fun
     }
@@ -55,6 +72,7 @@ impl Expr {
         let param = Param {
             name: None,
             type_expr: domain,
+            implicit: false,
         };
         ctx.with_local(&param, |body_ctx| body.shift_to_subcontext(ctx, body_ctx));
         Self::lambda(param, body)
@@ -65,7 +83,7 @@ impl Expr {
         let mut fun = self;
         while let Expr::App(app) = fun {
             len += 1;
-            fun = &app.param;
+            fun = &app.body;
         }
         if let Expr::Var(Var(var_idx)) = fun {
             if *var_idx >= 0 {
@@ -102,12 +120,12 @@ impl Expr {
             match self {
                 Expr::Var(_) => {}
                 Expr::App(app) => {
-                    reduced |= app.param.reduce(ctx, max_depth)?;
+                    reduced |= app.param.expr.reduce(ctx, max_depth)?;
                     reduced |= app.body.reduce(ctx, max_depth)?;
 
-                    if let Expr::Lambda(lambda) = &mut app.param {
+                    if let Expr::Lambda(lambda) = &mut app.body {
                         let mut expr = std::mem::take(&mut lambda.body);
-                        let arg = std::mem::take(&mut app.body);
+                        let arg = std::mem::take(&mut app.param.expr);
                         expr.substitute(&mut [arg], true, ctx);
                         *self = expr;
                         reduced = true;
@@ -163,7 +181,7 @@ impl Expr {
             match self {
                 Expr::Var(_) => {}
                 Expr::App(app) => {
-                    app.param.convert_to_combinators(ctx, max_depth)?;
+                    app.param.expr.convert_to_combinators(ctx, max_depth)?;
                     app.body.convert_to_combinators(ctx, max_depth)?;
                 }
                 Expr::Lambda(lambda) => {
@@ -224,17 +242,17 @@ impl Expr {
                 // to determine the property we need to match the type of the actual function
                 // argument against a term that denotes a sufficiently generic pi type. Then we
                 // apply the property to the argument of the application.
-                let fun = &app.param;
-                let arg = &app.body;
+                let fun = &app.body;
+                let arg = &app.param;
                 let fun_type = fun.get_type(ctx)?;
-                let arg_type = arg.get_type(ctx)?;
+                let arg_type = arg.expr.get_type(ctx)?;
                 if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
                     Ok(Expr::app(prop, arg.clone()))
                 } else {
                     let fun_str = fun.print(ctx);
                     let fun_type_str = fun_type.print(ctx);
-                    let arg_str = arg.print(ctx);
-                    let arg_type = arg.get_type(ctx)?;
+                    let arg_str = arg.expr.print(ctx);
+                    let arg_type = arg.expr.get_type(ctx)?;
                     let arg_type_str = arg_type.print(ctx);
                     Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}» cannot be applied to «{arg_str} : {arg_type_str}»"))
                 }
@@ -462,7 +480,7 @@ impl Var {
     }
 }
 
-pub type AppExpr = App<Expr, Expr>;
+pub type AppExpr = App<Expr, Arg>;
 pub type LambdaExpr = Lambda<Param, Expr>;
 
 impl LambdaExpr {
@@ -491,7 +509,7 @@ impl LambdaExpr {
                     body_type,
                     ctx.as_minimal(),
                 )?;
-                return Ok(Expr::app(cmb, shifted_body));
+                return Ok(Expr::explicit_app(cmb, shifted_body));
             }
 
             match body {
@@ -501,8 +519,8 @@ impl LambdaExpr {
                         .get_id_cmb(param.type_expr.clone(), ctx.as_minimal())
                 }
                 Expr::App(app) => {
-                    let fun = &app.param;
-                    let arg = &app.body;
+                    let fun = &app.body;
+                    let arg = &app.param.expr;
                     if let Expr::Var(Var(-1)) = arg {
                         // If the expression can be eta-reduced, do that instead of outputting a
                         // combinator.
@@ -513,7 +531,10 @@ impl LambdaExpr {
                     let cmb = Self::get_subst_cmb(param, ctx, fun, arg, body_ctx)?;
                     let fun_lambda = Expr::lambda(param.clone(), fun.clone());
                     let arg_lambda = Expr::lambda(param.clone(), arg.clone());
-                    Ok(Expr::multi_app(cmb, smallvec![fun_lambda, arg_lambda]))
+                    Ok(Expr::explicit_multi_app(
+                        cmb,
+                        smallvec![fun_lambda, arg_lambda],
+                    ))
                 }
                 Expr::Lambda(lambda) => {
                     let body_cmb = lambda.convert_to_combinator(body_ctx)?;
@@ -556,6 +577,7 @@ impl LambdaExpr {
 pub struct Param {
     pub name: Option<Rc<String>>,
     pub type_expr: Expr,
+    pub implicit: bool,
 }
 
 impl NamedObject for Param {
@@ -576,9 +598,16 @@ impl PartialEq for Param {
 
 impl Debug for Param {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.implicit {
+            f.write_str("{")?;
+        }
         f.write_str(self.get_name_or_placeholder())?;
         f.write_str(":")?;
-        self.type_expr.fmt(f)
+        self.type_expr.fmt(f)?;
+        if self.implicit {
+            f.write_str("}")?;
+        }
+        Ok(())
     }
 }
 
@@ -591,6 +620,7 @@ impl ContextObject for Param {
         Param {
             name: self.name.clone(),
             type_expr: self.type_expr.shifted_impl(start, end, shift),
+            implicit: self.implicit,
         }
     }
 
@@ -645,6 +675,99 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Param {
             args_filled,
             subst_ctx,
             &target.type_expr,
+            target_subctx,
+        )
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Arg {
+    pub expr: Expr,
+    pub implicit: bool,
+}
+
+impl PartialEq for Arg {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr
+    }
+}
+
+impl Debug for Arg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.implicit {
+            f.write_str("{")?;
+        }
+        self.expr.fmt(f)?;
+        if self.implicit {
+            f.write_str("}")?;
+        }
+        Ok(())
+    }
+}
+
+impl ContextObject for Arg {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+        self.expr.shift_impl(start, end, shift);
+    }
+
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+        Arg {
+            expr: self.expr.shifted_impl(start, end, shift),
+            implicit: self.implicit,
+        }
+    }
+
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+        self.expr.count_refs_impl(start, ref_counts);
+    }
+
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+        self.expr.has_refs_impl(start, end)
+    }
+}
+
+impl ContextObjectWithSubst<Expr> for Arg {
+    fn substitute_impl(
+        &mut self,
+        shift_start: VarIndex,
+        args_start: VarIndex,
+        args: &mut [Expr],
+        ref_counts: &mut [usize],
+    ) {
+        self.expr
+            .substitute_impl(shift_start, args_start, args, ref_counts);
+    }
+}
+
+impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Arg {
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        self.expr
+            .shift_and_compare_impl(ctx, orig_ctx, &target.expr, target_subctx)
+    }
+}
+
+impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [Expr],
+        args_filled: &mut [bool],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        self.expr.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            args_filled,
+            subst_ctx,
+            &target.expr,
             target_subctx,
         )
     }

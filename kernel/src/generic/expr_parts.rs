@@ -427,9 +427,9 @@ impl<
 
 impl<Fun: Debug, Arg: Debug> Debug for App<Fun, Arg> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.param.fmt(f)?;
-        f.write_str("(")?;
         self.body.fmt(f)?;
+        f.write_str("(")?;
+        self.param.fmt(f)?;
         f.write_str(")")
     }
 }
