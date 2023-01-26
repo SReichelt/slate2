@@ -9,23 +9,25 @@ use crate::{
     util::{anyhow::*, parser::*},
 };
 
+#[derive(Clone)]
+pub struct DefInit<'a> {
+    pub sym: &'a str,
+    pub red: &'a [&'a str],
+}
+
 pub struct MetaLogic {
     pub constants: Vec<Constant>,
     pub lambda_handler: Box<dyn LambdaHandler>,
 }
 
 impl MetaLogic {
-    pub fn construct<F>(
-        constants_init: &[&str],
-        reduction_rules_init: &[&str],
-        create_lambda_handler: F,
-    ) -> Result<Self>
+    pub fn construct<F>(constants_init: &[DefInit], create_lambda_handler: F) -> Result<Self>
     where
         F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
     {
         let mut constants = Vec::with_capacity(constants_init.len());
         for constant_init in constants_init {
-            let mut parser_input = ParserInput(constant_init);
+            let mut parser_input = ParserInput(constant_init.sym);
             if let Some(name) = parser_input.try_read_name() {
                 constants.push(Param {
                     name: Some(Rc::new(name.into())),
@@ -53,7 +55,7 @@ impl MetaLogic {
         let mut idx = 0;
         for constant_init in constants_init {
             let param = ParsingContext::parse(
-                constant_init,
+                constant_init.sym,
                 &metalogic.get_root_context(),
                 |parsing_context| parsing_context.parse_param(),
             )?;
@@ -61,15 +63,21 @@ impl MetaLogic {
             idx += 1;
         }
 
-        for rule_init in reduction_rules_init {
-            let (rule, source_const_idx) = ParsingContext::parse(
-                rule_init,
-                &metalogic.get_root_context(),
-                |parsing_context| parsing_context.parse_reduction_rule(),
-            )?;
-            metalogic.constants[source_const_idx as usize]
-                .reduction_rules
-                .push(rule);
+        idx = 0;
+        for constant_init in constants_init {
+            for rule_init in constant_init.red {
+                let rule = ParsingContext::parse(
+                    rule_init,
+                    &metalogic.get_root_context(),
+                    |parsing_context| parsing_context.parse_reduction_rule(idx as VarIndex),
+                )
+                .with_prefix(|| {
+                    let name = metalogic.constants[idx].get_name_or_placeholder();
+                    format!("failed to parse reduction rule for «{name}»")
+                })?;
+                metalogic.constants[idx].reduction_rules.push(rule);
+            }
+            idx += 1;
         }
 
         Ok(metalogic)
@@ -113,8 +121,9 @@ impl MetaLogic {
                 if let Err(error) =
                     self.check_reduction_rule_type(rule, &root_ctx)
                         .with_prefix(|| {
+                            let name = constant.param.get_name_or_placeholder();
                             let rule_str = rule.print(&root_ctx);
-                            format!("error in reduction rule «{rule_str}»")
+                            format!("error in reduction rule for «{name}» («{rule_str}»)")
                         })
                 {
                     errors.push(error);
