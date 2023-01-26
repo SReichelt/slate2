@@ -18,6 +18,30 @@ pub fn get_mltt() -> MetaLogic {
             },
             TypeInit {
                 ctor: DefInit {
+                    sym: "Empty : U",
+                    red: &[]
+                },
+                defs: &[
+                    DefInit {
+                        sym: "Empty_elim : Π A : U. Empty → A",
+                        red: &[],
+                    },
+                ],
+            },
+            TypeInit {
+                ctor: DefInit {
+                    sym: "Unit : U",
+                    red: &[]
+                },
+                defs: &[
+                    DefInit {
+                        sym: "unit : Unit",
+                        red: &[],
+                    },
+                ],
+            },
+            TypeInit {
+                ctor: DefInit {
                     sym: "Pi : Π {A : U}. (A → U) → U",
                     red: &[],
                 },
@@ -73,6 +97,7 @@ pub fn get_mltt() -> MetaLogic {
                     sym: "Eq : Π {A : U}. (A → A → U)",
                     red: &[
                         "Eq {U} :≡ λ A B : U. Sigma {U} (SplitEquiv A B)",
+                        "Eq {Unit} :≡ λ a b : Unit. Unit",
                         "∀ {A : U}. ∀ P : A → U. Eq {Pi {A} P} :≡ λ f g : Pi {A} P. Π a : A. f a ={P a} g a",
                         "∀ {A : U}. ∀ P : A → U. Eq {Sigma {A} P} :≡ λ p q : Sigma {A} P. Σ e_fst : Sigma_fst {A} {P} p ={A} Sigma_fst {A} {P} q. Sigma_snd {A} {P} p ={P (Sigma_fst {A} {P} p)}[ap {A} {U} P {Sigma_fst {A} {P} p} {Sigma_fst {A} {P} q} e_fst]{P (Sigma_fst {A} {P} q)} Sigma_snd {A} {P} q",
                     ],
@@ -90,6 +115,7 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "refl : Π {A : U}. Π a : A. a = a",
                         red: &[
                             "refl {U} :≡ λ A : U. Sigma_intro {U} (SplitEquiv A A) A (SplitEquiv_refl A)",
+                            "refl {Unit} :≡ λ a : Unit. unit",
                             "∀ {A : U}. ∀ P : A → U. refl {Pi {A} P} :≡ λ f : Pi {A} P. λ a : A. refl {P a} (f a)",
                             "∀ {A : U}. ∀ P : A → U. refl {Sigma {A} P} :≡ λ p : Sigma {A} P. Sigma_intro {Sigma_fst {A} {P} p ={A} Sigma_fst {A} {P} p} (λ e_fst : Sigma_fst {A} {P} p ={A} Sigma_fst {A} {P} p. Sigma_snd {A} {P} p ={P (Sigma_fst {A} {P} p)}[ap {A} {U} P {Sigma_fst {A} {P} p} {Sigma_fst {A} {P} p} e_fst]{P (Sigma_fst {A} {P} p)} Sigma_snd {A} {P} p) (refl {A} (Sigma_fst {A} {P} p)) (refl {P (Sigma_fst {A} {P} p)} (Sigma_snd {A} {P} p))",
                         ],
@@ -99,6 +125,7 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "symm : Π {A : U}. Π {a b : A}. a = b → b = a",
                         red: &[
                             "∀ {A : U}. ∀ a : A. symm {A} {a} {a} (refl {A} a) :≡ refl {A} a",
+                            "symm {Unit} :≡ λ {a b : Unit}. λ e : a = b. unit",
                             "symm {U} :≡ λ {A B : U}. λ e : A = B. Sigma_intro {U} (SplitEquiv B A) (middle {A} {B} e) (SplitEquiv_symm {A} {B} {middle {A} {B} e} (split {A} {B} e))",
                             "∀ {A : U}. ∀ P : A → U. symm {Pi {A} P} :≡ λ {f g : Pi {A} P}. λ e : f = g. λ a : A. symm {P a} {f a} {g a} (e a)",
                             // TODO
@@ -111,6 +138,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans A {a} {a} {b} (refl {A} a) e :≡ e",
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans A {a} {b} {b} e (refl {A} b) :≡ e",
                             "trans {U} :≡ λ {A B C : U}. λ e : A = B. λ f : B = C. Sigma_intro {U} (SplitEquiv A C) B (SplitEquiv_trans A B C (middle {A} {B} e) (middle {B} {C} f) (split {A} {B} e) (split {B} {C} f))",
+                            "trans {Unit} :≡ λ {a b c : Unit}. λ eab : a = b. λ ebc : b = c. unit",
                             "∀ {A : U}. ∀ P : A → U. trans {Pi {A} P} :≡ λ {f g h : Pi {A} P}. λ efg : f = g. λ egh : g = h. λ a : A. trans {P a} {f a} {g a} {h a} (efg a) (egh a)",
                             // TODO
                         ],
