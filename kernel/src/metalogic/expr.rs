@@ -78,7 +78,7 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    fn get_const_app_info(&self) -> Option<(VarIndex, usize)> {
+    pub fn get_const_app_info(&self) -> Option<(VarIndex, usize)> {
         let mut len = 0;
         let mut fun = self;
         while let Expr::App(app) = fun {
@@ -149,11 +149,9 @@ impl Expr {
     }
 
     fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
-        let const_app_info = self.get_const_app_info();
-        if const_app_info.is_some() {
-            for rule in ctx.reduction_rules() {
-                let rule_app_info = rule.body.source.get_const_app_info();
-                if rule_app_info == const_app_info {
+        if let Some((const_idx, app_len)) = self.get_const_app_info() {
+            for rule in &ctx.constants()[const_idx as usize].reduction_rules {
+                if rule.body.source_app_len == app_len {
                     if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
                         let mut expr = rule.body.target.clone();
                         expr.substitute(&mut args, true, ctx);

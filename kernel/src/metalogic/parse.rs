@@ -296,7 +296,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    pub fn parse_reduction_rule(&mut self) -> Result<ReductionRule> {
+    pub fn parse_reduction_rule(&mut self) -> Result<(ReductionRule, VarIndex)> {
         let mut params = SmallVec::new();
         self.input.skip_whitespace();
         while self.input.try_read_char('∀') {
@@ -310,20 +310,33 @@ impl ParsingContext<'_, '_, '_> {
             params.append(&mut new_params);
             self.input.skip_whitespace();
         }
-        let body = self.context.with_locals(&params, |body_ctx| {
+        let (body, source_const_idx) = self.context.with_locals(&params, |body_ctx| {
             let mut body_parsing_ctx = ParsingContext {
                 input: self.input,
                 context: body_ctx,
             };
             body_parsing_ctx.parse_reduction_body()
         })?;
-        Ok(ReductionRule { params, body })
+        Ok((ReductionRule { params, body }, source_const_idx))
     }
 
-    pub fn parse_reduction_body(&mut self) -> Result<ReductionBody> {
+    pub fn parse_reduction_body(&mut self) -> Result<(ReductionBody, VarIndex)> {
         let source = self.parse_expr()?;
         self.input.read_char_seq(":≡")?;
         let target = self.parse_expr()?;
-        Ok(ReductionBody { source, target })
+        if let Some((source_const_idx, source_app_len)) = source.get_const_app_info() {
+            Ok((
+                ReductionBody {
+                    source,
+                    target,
+                    source_app_len,
+                },
+                source_const_idx,
+            ))
+        } else {
+            self.input.error(anyhow!(
+                "source of reduction rule must be an application of a constant"
+            ))
+        }
     }
 }

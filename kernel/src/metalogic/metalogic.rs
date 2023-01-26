@@ -10,8 +10,7 @@ use crate::{
 };
 
 pub struct MetaLogic {
-    pub constants: Vec<Param>,
-    pub reduction_rules: Vec<ReductionRule>,
+    pub constants: Vec<Constant>,
     pub lambda_handler: Box<dyn LambdaHandler>,
 }
 
@@ -41,8 +40,13 @@ impl MetaLogic {
         let lambda_handler = create_lambda_handler(&constants);
 
         let mut metalogic = MetaLogic {
-            constants,
-            reduction_rules: Vec::with_capacity(reduction_rules_init.len()),
+            constants: constants
+                .into_iter()
+                .map(|param| Constant {
+                    param,
+                    reduction_rules: Vec::new(),
+                })
+                .collect(),
             lambda_handler,
         };
 
@@ -53,17 +57,19 @@ impl MetaLogic {
                 &metalogic.get_root_context(),
                 |parsing_context| parsing_context.parse_param(),
             )?;
-            metalogic.constants[idx].type_expr = param.type_expr;
+            metalogic.constants[idx].param.type_expr = param.type_expr;
             idx += 1;
         }
 
         for rule_init in reduction_rules_init {
-            let rule = ParsingContext::parse(
+            let (rule, source_const_idx) = ParsingContext::parse(
                 rule_init,
                 &metalogic.get_root_context(),
                 |parsing_context| parsing_context.parse_reduction_rule(),
             )?;
-            metalogic.reduction_rules.push(rule);
+            metalogic.constants[source_const_idx as usize]
+                .reduction_rules
+                .push(rule);
         }
 
         Ok(metalogic)
@@ -75,7 +81,7 @@ impl MetaLogic {
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
         let var_idx = self.constants.get_var_index(name, 0)?;
-        Some(self.constants.get_var(var_idx))
+        Some(&self.constants.get_var(var_idx).param)
     }
 
     pub fn parse_expr(&self, s: &str) -> Result<Expr> {
@@ -102,15 +108,17 @@ impl MetaLogic {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
-        for rule in &self.reduction_rules {
-            if let Err(error) = self
-                .check_reduction_rule_type(rule, &root_ctx)
-                .with_prefix(|| {
-                    let rule_str = rule.print(&root_ctx);
-                    format!("error in reduction rule «{rule_str}»")
-                })
-            {
-                errors.push(error);
+        for constant in &self.constants {
+            for rule in &constant.reduction_rules {
+                if let Err(error) =
+                    self.check_reduction_rule_type(rule, &root_ctx)
+                        .with_prefix(|| {
+                            let rule_str = rule.print(&root_ctx);
+                            format!("error in reduction rule «{rule_str}»")
+                        })
+                {
+                    errors.push(error);
+                }
             }
         }
 
@@ -150,7 +158,7 @@ impl MetaLogic {
 
         for constant in &self.constants {
             if let Err(error) = self
-                .check_type_of_types_in_param(constant, &root_ctx)
+                .check_type_of_types_in_param(&constant.param, &root_ctx)
                 .with_prefix(|| {
                     let name = constant.get_name_or_placeholder();
                     format!("type of constant «{name}» is invalid")
@@ -158,17 +166,17 @@ impl MetaLogic {
             {
                 errors.push(error);
             }
-        }
 
-        for rule in &self.reduction_rules {
-            if let Err(error) = self
-                .check_type_of_types_in_reduction_rule(rule, &root_ctx)
-                .with_prefix(|| {
-                    let rule_str = rule.print(&root_ctx);
-                    format!("types within reduction rule «{rule_str}» are invalid")
-                })
-            {
-                errors.push(error);
+            for rule in &constant.reduction_rules {
+                if let Err(error) = self
+                    .check_type_of_types_in_reduction_rule(rule, &root_ctx)
+                    .with_prefix(|| {
+                        let rule_str = rule.print(&root_ctx);
+                        format!("types within reduction rule «{rule_str}» are invalid")
+                    })
+                {
+                    errors.push(error);
+                }
             }
         }
 
@@ -237,21 +245,52 @@ impl MetaLogic {
     }
 }
 
+pub struct Constant {
+    pub param: Param,
+    pub reduction_rules: Vec<ReductionRule>,
+}
+
+impl NamedObject for Constant {
+    fn get_name(&self) -> Option<&str> {
+        self.param.get_name()
+    }
+}
+
+pub type ReductionRule = MultiLambda<Param, ReductionBody>;
+
+impl ReductionRule {
+    pub fn print(&self, ctx: &MetaLogicContext) -> String {
+        let mut result = String::new();
+        PrintingContext::print(&mut result, ctx, |printing_context| {
+            printing_context.print_reduction_rule(&self)
+        })
+        .unwrap();
+        result
+    }
+}
+
+pub struct ReductionBody {
+    pub source: Expr,
+    pub target: Expr,
+    pub source_app_len: usize,
+}
+
 impl VarAccessor<Param> for MetaLogic {
     fn get_var(&self, idx: VarIndex) -> &Param {
-        self.constants.get_var(idx)
+        &self.constants.get_var(idx).param
     }
 
-    fn for_each_var<R>(&self, f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
-        self.constants.for_each_var(f)
+    fn for_each_var<R>(&self, mut f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
+        self.constants
+            .for_each_var(|var_idx, constant| f(var_idx, &constant.param))
     }
 }
 
 pub type MetaLogicContext<'a> = ParamContextImpl<Param, &'a MetaLogic>;
 
 impl MetaLogicContext<'_> {
-    pub fn reduction_rules(&self) -> &[ReductionRule] {
-        &self.globals().reduction_rules
+    pub fn constants(&self) -> &[Constant] {
+        &self.globals().constants
     }
 
     pub fn lambda_handler(&self) -> &dyn LambdaHandler {
@@ -282,24 +321,6 @@ impl ComparisonContext for MetaLogicContext<'_> {
     fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
         Some(self)
     }
-}
-
-pub type ReductionRule = MultiLambda<Param, ReductionBody>;
-
-impl ReductionRule {
-    pub fn print(&self, ctx: &MetaLogicContext) -> String {
-        let mut result = String::new();
-        PrintingContext::print(&mut result, ctx, |printing_context| {
-            printing_context.print_reduction_rule(&self)
-        })
-        .unwrap();
-        result
-    }
-}
-
-pub struct ReductionBody {
-    pub source: Expr,
-    pub target: Expr,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
