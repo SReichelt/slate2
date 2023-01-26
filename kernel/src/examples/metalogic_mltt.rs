@@ -428,8 +428,8 @@ mod tests {
         let const_ctor_type = mltt.get_expr_type(&const_ctor)?;
         assert_eq!(mltt.print_expr(&const_ctor_type), "U → U → U");
 
-        let const_ctor_occ = mltt.parse_expr("λ A A : U. A@1")?;
-        assert_eq!(mltt.print_expr(&const_ctor_occ), "λ A : U. λ A : U. A@1");
+        let const_ctor_occ = mltt.parse_expr("λ A A : U. A⁺")?;
+        assert_eq!(mltt.print_expr(&const_ctor_occ), "λ A : U. λ A : U. A⁺");
         assert_eq!(const_ctor_occ, const_ctor);
 
         let const_id_ctor_occ = mltt.parse_expr("λ A A : U. A")?;

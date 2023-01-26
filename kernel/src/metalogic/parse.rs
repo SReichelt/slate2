@@ -153,7 +153,11 @@ impl ParsingContext<'_, '_, '_> {
         } else if self.input.try_read_char('Σ') {
             let expr = self.parse_dep_type(DependentTypeCtorKind::Sigma)?;
             Ok(Some(expr))
-        } else if let Some((name, occurrence)) = self.input.try_read_name_with_occurrence() {
+        } else if let Some(name) = self.input.try_read_name() {
+            let mut occurrence = 0;
+            while self.input.try_read_char('⁺') {
+                occurrence += 1;
+            }
             if let Some(var_idx) = self.context.get_var_index(name, occurrence) {
                 Ok(Some(Expr::var(var_idx)))
             } else {

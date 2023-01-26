@@ -66,8 +66,8 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 let param = self.context.get_var(*idx);
                 self.output.write_str(param.get_name_or_placeholder())?;
                 let occurrence = self.context.get_name_occurrence(*idx, param);
-                if occurrence != 0 {
-                    self.output.write_fmt(format_args!("@{occurrence}"))?;
+                for _ in 0..occurrence {
+                    self.output.write_char('⁺')?;
                 }
             }
             Expr::App(app) => {
