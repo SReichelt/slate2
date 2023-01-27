@@ -1,6 +1,6 @@
 use std::{fmt::Debug, rc::Rc};
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{anyhow, Result};
 
 use super::{expr::*, parse::*, print::*};
 
@@ -112,7 +112,7 @@ impl MetaLogic {
         expr.get_type(&self.get_root_context())
     }
 
-    fn check_exprs<'a>(&'a self, checker: &impl ExprChecker<'a>) -> Result<(), Vec<Error>> {
+    fn check_exprs<'a>(&'a self, checker: &impl ExprChecker<'a>) -> Result<()> {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
@@ -138,15 +138,15 @@ impl MetaLogic {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(errors)
+            Err(errors.combine())
         }
     }
 
-    pub fn check_type_of_types(&self) -> Result<(), Vec<Error>> {
+    pub fn check_type_of_types(&self) -> Result<()> {
         self.check_exprs(&ParamTypeChecker)
     }
 
-    pub fn check_reduction_rule_types(&self) -> Result<(), Vec<Error>> {
+    pub fn check_reduction_rule_types(&self) -> Result<()> {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
@@ -168,7 +168,7 @@ impl MetaLogic {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(errors)
+            Err(errors.combine())
         }
     }
 

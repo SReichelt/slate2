@@ -420,7 +420,7 @@ mod tests {
 
     use super::*;
 
-    use anyhow::{Error, Result};
+    use anyhow::Result;
 
     #[test]
     fn test_basics() -> Result<()> {
@@ -566,13 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn test_type_of_types() -> Result<(), Vec<Error>> {
+    fn test_type_of_types() -> Result<()> {
         let mltt = get_mltt();
         mltt.check_type_of_types()
     }
 
     #[test]
-    fn test_reduction_rule_types() -> Result<(), Vec<Error>> {
+    fn test_reduction_rule_types() -> Result<()> {
         let mltt = get_mltt();
         mltt.check_reduction_rule_types()
     }
