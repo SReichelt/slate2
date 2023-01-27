@@ -95,19 +95,26 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    pub fn get_const_app_info(&self) -> Option<(VarIndex, usize)> {
-        let mut len = 0;
-        let mut fun = self;
-        while let Expr::App(app) = fun {
-            len += 1;
-            fun = &app.body;
-        }
-        if let Expr::Var(Var(var_idx)) = fun {
-            if *var_idx >= 0 {
-                return Some((*var_idx, len));
+    pub fn traverse<Ctx: ParamContext<Param>>(
+        &self,
+        visitor: &impl ExprVisitor<Ctx>,
+        ctx: &Ctx,
+    ) -> Result<()> {
+        match self {
+            Expr::Var(_) => {}
+            Expr::App(app) => {
+                app.param.traverse(visitor, ctx)?;
+                app.body.traverse(visitor, ctx)?;
+            }
+            Expr::Lambda(lambda) => {
+                lambda.param.traverse(visitor, ctx)?;
+                ctx.with_local(&lambda.param, |body_ctx| {
+                    lambda.body.traverse(visitor, body_ctx)
+                })?;
             }
         }
-        None
+
+        visitor.expr(self, ctx)
     }
 
     pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
@@ -160,9 +167,11 @@ impl Expr {
             if self.apply_reduction_rule(ctx)? {
                 reduced = true;
             } else {
-                return Ok(reduced);
+                break;
             }
         }
+
+        Ok(reduced)
     }
 
     fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
@@ -180,6 +189,21 @@ impl Expr {
         }
 
         Ok(false)
+    }
+
+    pub fn get_const_app_info(&self) -> Option<(VarIndex, usize)> {
+        let mut len = 0;
+        let mut fun = self;
+        while let Expr::App(app) = fun {
+            len += 1;
+            fun = &app.body;
+        }
+        if let Expr::Var(Var(var_idx)) = fun {
+            if *var_idx >= 0 {
+                return Some((*var_idx, len));
+            }
+        }
+        None
     }
 
     pub fn convert_to_combinators(
@@ -602,6 +626,31 @@ pub struct Param {
     pub implicit: bool,
 }
 
+impl Param {
+    pub fn traverse<Ctx: ParamContext<Param>>(
+        &self,
+        visitor: &impl ExprVisitor<Ctx>,
+        ctx: &Ctx,
+    ) -> Result<()> {
+        self.type_expr.traverse(visitor, ctx)?;
+        visitor.param(self, ctx)
+    }
+
+    pub fn traverse_multi<Ctx: ParamContext<Param>>(
+        params: &[Self],
+        visitor: &impl ExprVisitor<Ctx>,
+        ctx: &Ctx,
+    ) -> Result<()> {
+        for param_idx in 0..params.len() {
+            let param = &params[param_idx];
+            ctx.with_locals(&params[0..param_idx], |param_ctx| {
+                param.traverse(visitor, param_ctx)
+            })?;
+        }
+        Ok(())
+    }
+}
+
 impl NamedObject for Param {
     fn get_name(&self) -> Option<&str> {
         if let Some(name) = &self.name {
@@ -708,6 +757,17 @@ pub struct Arg {
     pub implicit: bool,
 }
 
+impl Arg {
+    pub fn traverse<Ctx: ParamContext<Param>>(
+        &self,
+        visitor: &impl ExprVisitor<Ctx>,
+        ctx: &Ctx,
+    ) -> Result<()> {
+        self.expr.traverse(visitor, ctx)?;
+        visitor.arg(self, ctx)
+    }
+}
+
 impl PartialEq for Arg {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
@@ -792,5 +852,36 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
             &target.expr,
             target_subctx,
         )
+    }
+}
+
+pub trait ExprVisitor<Ctx: Context> {
+    fn expr(&self, _expr: &Expr, _ctx: &Ctx) -> Result<()> {
+        Ok(())
+    }
+
+    fn param(&self, _param: &Param, _ctx: &Ctx) -> Result<()> {
+        Ok(())
+    }
+
+    fn arg(&self, _arg: &Arg, _ctx: &Ctx) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub struct ParamTypeChecker;
+
+impl ExprVisitor<MetaLogicContext<'_>> for ParamTypeChecker {
+    fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
+        let type_type = param.type_expr.get_type(ctx)?;
+        let cmp_type_type = ctx.lambda_handler().get_universe_type()?;
+        if type_type.compare(&cmp_type_type, ctx)? {
+            Ok(())
+        } else {
+            let type_str = param.type_expr.print(ctx);
+            let type_type_str = type_type.print(ctx);
+            let cmp_type_type_str = cmp_type_type.print(ctx);
+            Err(anyhow!("parameter type «{type_str} : {type_type_str}» must have type «{cmp_type_type_str}» instead"))
+        }
     }
 }

@@ -112,6 +112,40 @@ impl MetaLogic {
         expr.get_type(&self.get_root_context())
     }
 
+    fn check_exprs<'a>(&'a self, checker: &impl ExprChecker<'a>) -> Result<(), Vec<Error>> {
+        let mut errors = Vec::new();
+        let root_ctx = self.get_root_context();
+
+        for constant in &self.constants {
+            if let Err(error) = constant.param.traverse(checker, &root_ctx).with_prefix(|| {
+                let name = constant.get_name_or_placeholder();
+                checker.get_constant_error_prefix(name)
+            }) {
+                errors.push(error);
+            }
+
+            for rule in &constant.reduction_rules {
+                if let Err(error) = rule.traverse(checker, &root_ctx).with_prefix(|| {
+                    let name = constant.get_name_or_placeholder();
+                    let rule_str = rule.print(&root_ctx);
+                    checker.get_rule_error_prefix(name, &rule_str)
+                }) {
+                    errors.push(error);
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn check_type_of_types(&self) -> Result<(), Vec<Error>> {
+        self.check_exprs(&ParamTypeChecker)
+    }
+
     pub fn check_reduction_rule_types(&self) -> Result<(), Vec<Error>> {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
@@ -160,98 +194,6 @@ impl MetaLogic {
             }
         })
     }
-
-    pub fn check_type_of_types(&self) -> Result<(), Vec<Error>> {
-        let mut errors = Vec::new();
-        let root_ctx = self.get_root_context();
-
-        for constant in &self.constants {
-            if let Err(error) = self
-                .check_type_of_types_in_param(&constant.param, &root_ctx)
-                .with_prefix(|| {
-                    let name = constant.get_name_or_placeholder();
-                    format!("type of constant «{name}» is invalid")
-                })
-            {
-                errors.push(error);
-            }
-
-            for rule in &constant.reduction_rules {
-                if let Err(error) = self
-                    .check_type_of_types_in_reduction_rule(rule, &root_ctx)
-                    .with_prefix(|| {
-                        let rule_str = rule.print(&root_ctx);
-                        format!("types within reduction rule «{rule_str}» are invalid")
-                    })
-                {
-                    errors.push(error);
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-
-    fn check_type_of_types_in_param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
-        self.check_type_of_types_in_expr(&param.type_expr, ctx)?;
-        let type_type = param.type_expr.get_type(ctx)?;
-        let cmp_type_type = self.lambda_handler.get_universe_type()?;
-        if type_type.compare(&cmp_type_type, ctx)? {
-            Ok(())
-        } else {
-            let type_str = param.type_expr.print(ctx);
-            let type_type_str = type_type.print(ctx);
-            let cmp_type_type_str = cmp_type_type.print(ctx);
-            Err(anyhow!("parameter type «{type_str} : {type_type_str}» must have type «{cmp_type_type_str}» instead"))
-        }
-    }
-
-    fn check_type_of_types_in_params(
-        &self,
-        params: &[Param],
-        ctx: &MetaLogicContext,
-    ) -> Result<()> {
-        for param_idx in 0..params.len() {
-            let param = &params[param_idx];
-            ctx.with_locals(&params[0..param_idx], |param_ctx| {
-                self.check_type_of_types_in_param(param, param_ctx)
-            })?;
-        }
-        Ok(())
-    }
-
-    fn check_type_of_types_in_expr(&self, expr: &Expr, ctx: &MetaLogicContext) -> Result<()> {
-        match expr {
-            Expr::Var(_) => {}
-            Expr::App(app) => {
-                self.check_type_of_types_in_expr(&app.param.expr, ctx)?;
-                self.check_type_of_types_in_expr(&app.body, ctx)?;
-            }
-            Expr::Lambda(lambda) => {
-                self.check_type_of_types_in_param(&lambda.param, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| {
-                    self.check_type_of_types_in_expr(&lambda.body, body_ctx)
-                })?;
-            }
-        };
-        Ok(())
-    }
-
-    fn check_type_of_types_in_reduction_rule(
-        &self,
-        rule: &ReductionRule,
-        ctx: &MetaLogicContext,
-    ) -> Result<()> {
-        self.check_type_of_types_in_params(&rule.params, ctx)?;
-        ctx.with_locals(&rule.params, |rule_ctx| {
-            self.check_type_of_types_in_expr(&rule.body.source, rule_ctx)?;
-            self.check_type_of_types_in_expr(&rule.body.target, rule_ctx)
-        })
-    }
 }
 
 pub struct Constant {
@@ -268,6 +210,17 @@ impl NamedObject for Constant {
 pub type ReductionRule = MultiLambda<Param, ReductionBody>;
 
 impl ReductionRule {
+    fn traverse<Ctx: ParamContext<Param>>(
+        &self,
+        visitor: &impl ExprVisitor<Ctx>,
+        ctx: &Ctx,
+    ) -> Result<()> {
+        Param::traverse_multi(&self.params, visitor, ctx)?;
+        ctx.with_locals(&self.params, |rule_ctx| {
+            self.body.traverse(visitor, rule_ctx)
+        })
+    }
+
     pub fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         PrintingContext::print(&mut result, ctx, |printing_context| {
@@ -282,6 +235,17 @@ pub struct ReductionBody {
     pub source: Expr,
     pub target: Expr,
     pub source_app_len: usize,
+}
+
+impl ReductionBody {
+    fn traverse<Ctx: ParamContext<Param>>(
+        &self,
+        visitor: &impl ExprVisitor<Ctx>,
+        ctx: &Ctx,
+    ) -> Result<()> {
+        self.source.traverse(visitor, ctx)?;
+        self.target.traverse(visitor, ctx)
+    }
 }
 
 impl VarAccessor<Param> for MetaLogic {
@@ -602,5 +566,20 @@ pub trait LambdaHandler {
             right_param,
             eq_type,
         ))
+    }
+}
+
+pub trait ExprChecker<'a>: ExprVisitor<MetaLogicContext<'a>> {
+    fn get_constant_error_prefix(&self, name: &str) -> String;
+    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String;
+}
+
+impl<'a> ExprChecker<'a> for ParamTypeChecker {
+    fn get_constant_error_prefix(&self, name: &str) -> String {
+        format!("type of constant «{name}» is invalid")
+    }
+
+    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
+        format!("types within reduction rule for «{name}» are invalid («{rule_str}»)")
     }
 }
