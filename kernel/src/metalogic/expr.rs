@@ -57,6 +57,23 @@ impl Expr {
         fun
     }
 
+    pub fn apply(self, arg: Arg, ctx: &impl Context) -> Self {
+        if let Expr::Lambda(lambda) = self {
+            let mut expr = lambda.body;
+            expr.substitute(&mut [arg.expr], true, ctx);
+            expr
+        } else {
+            Self::app(self, arg)
+        }
+    }
+
+    pub fn multi_apply(mut self, args: SmallVec<[Arg; INLINE_PARAMS]>, ctx: &impl Context) -> Self {
+        for arg in args {
+            self = Self::apply(self, arg, ctx);
+        }
+        self
+    }
+
     pub fn lambda(param: Param, body: Expr) -> Self {
         Expr::Lambda(Box::new(Lambda { param, body }))
     }
@@ -227,6 +244,13 @@ impl Expr {
 
     pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         let mut result = self.get_unreduced_type(ctx)?;
+        // There is a lot of potential for optimization here:
+        // * Fully reducing all types is very suboptimal. We could have different reduction
+        //   strengths instead.
+        // * If we are determining the type of an application, then the types of the function and
+        //   argument have already been reduced. Instead of ignoring that here, we could exploit it
+        //   by skipping all subexpressions where no substitution occurs. The current behavior is
+        //   especially problematic because the run time grows quadratically with expression size.
         result.reduce(ctx, -1)?;
         Ok(result)
     }
@@ -245,7 +269,7 @@ impl Expr {
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.expr.get_type(ctx)?;
                 if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
-                    Ok(Expr::app(prop, arg.clone()))
+                    Ok(Expr::apply(prop, arg.clone(), ctx))
                 } else {
                     let fun_str = fun.print(ctx);
                     let fun_type_str = fun_type.print(ctx);
