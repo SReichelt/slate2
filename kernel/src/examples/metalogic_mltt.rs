@@ -135,9 +135,9 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "trans : Π {A : U}. Π {a b c : A}. a = b → b = c → a = c",
                         red: &[
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans A {a} {a} {b} (refl {A} a) e :≡ e",
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans A {a} {b} {b} e (refl {A} b) :≡ e",
-                            "trans {U} :≡ λ {A B C : U}. λ e : A = B. λ f : B = C. Sigma_intro {U} (SplitEquiv A C) B (SplitEquiv_trans A B C (middle {A} {B} e) (middle {B} {C} f) (split {A} {B} e) (split {B} {C} f))",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {A} {a} {a} {b} (refl {A} a) e :≡ e",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {A} {a} {b} {b} e (refl {A} b) :≡ e",
+                            "trans {U} :≡ λ {A B C : U}. λ e : A = B. λ f : B = C. Sigma_intro {U} (SplitEquiv A C) B (SplitEquiv_trans {A} {B} {C} {middle {A} {B} e} {middle {B} {C} f} (split {A} {B} e) (split {B} {C} f))",
                             "trans {Unit} :≡ λ {a b c : Unit}. λ eab : a = b. λ ebc : b = c. unit",
                             "∀ {A : U}. ∀ P : A → U. trans {Pi {A} P} :≡ λ {f g h : Pi {A} P}. λ efg : f = g. λ egh : g = h. λ a : A. trans {P a} {f a} {g a} {h a} (efg a) (egh a)",
                             // TODO
@@ -150,7 +150,7 @@ pub fn get_mltt() -> MetaLogic {
                 ctor: DefInit {
                     sym: "DepEq : Π {A B : U}. A = B → A → B → U",
                     red: &[
-                        "DepEq :≡ λ {A B : U}. λ e : A = B. λ a : A. λ b : B. QuasiEquiv_to {A} {middle {A} {B} e} (SplitEquiv_left {A} {B} {middle A B e} (split {A} {B} e)) a ={middle {A} {B} e} QuasiEquiv_to {B} {middle {A} {B} e} (SplitEquiv_right {A} {B} {middle {A} {B} e} (split {A} {B} e)) b"
+                        "DepEq :≡ λ {A B : U}. λ e : A = B. λ a : A. λ b : B. QuasiEquiv_to {A} {middle {A} {B} e} (SplitEquiv_left {A} {B} {middle {A} {B} e} (split {A} {B} e)) a ={middle {A} {B} e} QuasiEquiv_to {B} {middle {A} {B} e} (SplitEquiv_right {A} {B} {middle {A} {B} e} (split {A} {B} e)) b"
                     ],
                 },
                 defs: &[
@@ -221,7 +221,7 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "SplitEquiv_trans : Π {A B C X Y : U}. SplitEquiv A B X → SplitEquiv B C Y → SplitEquiv A C B",
-                        red: &["SplitEquiv_trans :≡ λ {A B C X Y : U}. λ e : SplitEquiv A B X. λ f : SplitEquiv B C Y. SplitEquiv_intro {A} {C} {B} (SplitEquiv_to_QuasiEquiv {A} {B} {X} e) (SplitEquiv_to_QuasiEquiv {C} {B} {Y} (SplitEquiv_symm {B} {C} {Y} f))"],
+                        red: &["SplitEquiv_trans :≡ λ {A B C X Y : U}. λ e : SplitEquiv A B X. λ f : SplitEquiv B C Y. SplitEquiv_intro A C B (SplitEquiv_to_QuasiEquiv {A} {B} {X} e) (SplitEquiv_to_QuasiEquiv {C} {B} {Y} (SplitEquiv_symm {B} {C} {Y} f))"],
                     },
                 ],
             },
@@ -411,6 +411,10 @@ impl LambdaHandler for MLTTLambdaHandler {
                 right_arg
             ],
         ))
+    }
+
+    fn implicit_arg_max_depth(&self) -> u32 {
+        1
     }
 }
 

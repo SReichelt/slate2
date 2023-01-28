@@ -80,6 +80,8 @@ impl MetaLogic {
             idx += 1;
         }
 
+        metalogic.insert_implicit_args()?;
+
         Ok(metalogic)
     }
 
@@ -112,7 +114,60 @@ impl MetaLogic {
         expr.get_type(&self.get_root_context())
     }
 
-    fn check_exprs<'a>(&'a self, checker: &impl ExprChecker<'a>) -> Result<()> {
+    fn insert_implicit_args(&mut self) -> Result<()> {
+        let mut new_constants = Vec::with_capacity(self.constants.len());
+        let mut errors = Vec::new();
+        let max_depth = self.lambda_handler.implicit_arg_max_depth();
+        let root_ctx = self.get_root_context();
+
+        for constant in &self.constants {
+            let mut new_constant = Constant {
+                param: constant.param.clone(),
+                reduction_rules: Vec::with_capacity(constant.reduction_rules.len()),
+            };
+
+            if let Err(error) = new_constant
+                .param
+                .insert_implicit_args(&root_ctx, max_depth)
+                .with_prefix(|| {
+                    let name = new_constant.get_name_or_placeholder();
+                    format!("invalid implicit arguments in type of constant «{name}»")
+                })
+            {
+                errors.push(error);
+            }
+
+            for rule in &constant.reduction_rules {
+                let mut new_rule = rule.clone();
+
+                if let Err(error) = new_rule
+                    .insert_implicit_args(&root_ctx, max_depth)
+                    .with_prefix(|| {
+                        let name = constant.get_name_or_placeholder();
+                        let rule_str = new_rule.print(&root_ctx);
+                        format!(
+                        "invalid implicit arguments in reduction rule for «{name}» («{rule_str}»)"
+                    )
+                    })
+                {
+                    errors.push(error);
+                }
+
+                new_constant.reduction_rules.push(new_rule);
+            }
+
+            new_constants.push(new_constant);
+        }
+
+        if errors.is_empty() {
+            self.constants = new_constants;
+            Ok(())
+        } else {
+            Err(errors.combine())
+        }
+    }
+
+    fn traverse_exprs<'a>(&'a self, checker: &impl ExprChecker<'a>) -> Result<()> {
         let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
@@ -143,7 +198,7 @@ impl MetaLogic {
     }
 
     pub fn check_type_of_types(&self) -> Result<()> {
-        self.check_exprs(&ParamTypeChecker)
+        self.traverse_exprs(&ParamTypeChecker)
     }
 
     pub fn check_reduction_rule_types(&self) -> Result<()> {
@@ -196,6 +251,7 @@ impl MetaLogic {
     }
 }
 
+#[derive(Clone)]
 pub struct Constant {
     pub param: Param,
     pub reduction_rules: Vec<ReductionRule>,
@@ -229,8 +285,16 @@ impl ReductionRule {
         .unwrap();
         result
     }
+
+    fn insert_implicit_args(&mut self, ctx: &MetaLogicContext, max_depth: u32) -> Result<()> {
+        Param::insert_implicit_args_multi(&mut self.params, ctx, max_depth)?;
+        ctx.with_locals(&self.params, |rule_ctx| {
+            self.body.insert_implicit_args(rule_ctx, max_depth)
+        })
+    }
 }
 
+#[derive(Clone)]
 pub struct ReductionBody {
     pub source: Expr,
     pub target: Expr,
@@ -245,6 +309,21 @@ impl ReductionBody {
     ) -> Result<()> {
         self.source.traverse(visitor, ctx)?;
         self.target.traverse(visitor, ctx)
+    }
+
+    pub fn insert_implicit_args(&mut self, ctx: &MetaLogicContext, max_depth: u32) -> Result<()> {
+        let opt_source_type = self
+            .source
+            .insert_implicit_args_and_get_type(ctx, max_depth)?;
+        let opt_target_type = self
+            .target
+            .insert_implicit_args_and_get_type(ctx, max_depth)?;
+
+        if let (Some(source_type), Some(target_type)) = (opt_source_type, opt_target_type) {
+            Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -567,6 +646,8 @@ pub trait LambdaHandler {
             eq_type,
         ))
     }
+
+    fn implicit_arg_max_depth(&self) -> u32;
 }
 
 pub trait ExprChecker<'a>: ExprVisitor<MetaLogicContext<'a>> {

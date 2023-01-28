@@ -59,9 +59,7 @@ impl Expr {
 
     pub fn apply(self, arg: Arg, ctx: &impl Context) -> Self {
         if let Expr::Lambda(lambda) = self {
-            let mut expr = lambda.body;
-            expr.substitute(&mut [arg.expr], true, ctx);
-            expr
+            lambda.apply(arg, ctx)
         } else {
             Self::app(self, arg)
         }
@@ -148,10 +146,7 @@ impl Expr {
                     reduced |= app.body.reduce(ctx, max_depth)?;
 
                     if let Expr::Lambda(lambda) = &mut app.body {
-                        let mut expr = std::mem::take(&mut lambda.body);
-                        let arg = std::mem::take(&mut app.param.expr);
-                        expr.substitute(&mut [arg], true, ctx);
-                        *self = expr;
+                        *self = std::mem::take(lambda).apply(std::mem::take(&mut app.param), ctx);
                         reduced = true;
                         continue;
                     }
@@ -293,7 +288,7 @@ impl Expr {
                 let fun_type = fun.get_type(ctx)?;
                 let arg_type = arg.expr.get_type(ctx)?;
                 if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
-                    Ok(Expr::apply(prop, arg.clone(), ctx))
+                    Ok(prop.apply(arg.clone(), ctx))
                 } else {
                     let fun_str = fun.print(ctx);
                     let fun_type_str = fun_type.print(ctx);
@@ -330,6 +325,136 @@ impl Expr {
             Ok(prop_vec.pop())
         } else {
             Ok(None)
+        }
+    }
+
+    pub fn match_generic_indep_type(
+        &self,
+        kind: DependentTypeCtorKind,
+        ctx: &MetaLogicContext,
+    ) -> Option<(Expr, Expr)> {
+        let min_ctx = ctx.as_minimal();
+        if let Ok((domain_param, codomain_param, generic_indep_type)) =
+            ctx.lambda_handler().get_generic_indep_type(kind, min_ctx)
+        {
+            if let Ok(Some(mut arg_vec)) = self.match_expr(
+                &min_ctx,
+                &[domain_param, codomain_param],
+                &generic_indep_type,
+            ) {
+                let codomain = arg_vec.pop().unwrap();
+                let domain = arg_vec.pop().unwrap();
+                return Some((domain, codomain));
+            }
+        }
+        None
+    }
+
+    pub fn match_generic_dep_type(
+        &self,
+        kind: DependentTypeCtorKind,
+        ctx: &MetaLogicContext,
+    ) -> Option<LambdaExpr> {
+        let min_ctx = ctx.as_minimal();
+        if let Ok((domain_param, prop_param, generic_dep_type)) =
+            ctx.lambda_handler().get_generic_dep_type(kind, min_ctx)
+        {
+            if let Ok(Some(mut arg_vec)) =
+                self.match_expr(&min_ctx, &[domain_param, prop_param], &generic_dep_type)
+            {
+                let prop = arg_vec.pop().unwrap();
+                if let Expr::Lambda(lambda) = prop {
+                    return Some(*lambda);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn insert_implicit_args_and_get_type(
+        &mut self,
+        ctx: &MetaLogicContext,
+        max_depth: u32,
+    ) -> Result<Option<Expr>> {
+        if let Some(mut expr_type) = self.insert_implicit_args(ctx, max_depth)? {
+            if max_depth > 0 {
+                expr_type.insert_implicit_args(ctx, max_depth - 1)?;
+                return Ok(Some(expr_type));
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn insert_implicit_args(
+        &mut self,
+        ctx: &MetaLogicContext,
+        max_depth: u32,
+    ) -> Result<Option<Expr>> {
+        match self {
+            Expr::Var(var) => Ok(Some(var.get_type(ctx))),
+            Expr::App(app) => {
+                let fun = &mut app.body;
+                let arg = &mut app.param;
+                let opt_fun_type = fun.insert_implicit_args_and_get_type(ctx, max_depth)?;
+                arg.expr.insert_implicit_args(ctx, max_depth)?;
+                if let Some(fun_type) = opt_fun_type {
+                    if let Some(lambda) =
+                        fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
+                    {
+                        if arg.implicit != lambda.param.implicit {
+                            let name = lambda.param.get_name_or_placeholder();
+                            if lambda.param.implicit {
+                                return Err(anyhow!("expected implicit argument for «{name}»"));
+                            } else {
+                                return Err(anyhow!("expected explicit argument for «{name}»"));
+                            }
+                        }
+                        return Ok(Some(lambda.apply(arg.clone(), ctx)));
+                    }
+                }
+                Ok(None)
+            }
+            Expr::Lambda(lambda) => ctx.with_local(&lambda.param, |body_ctx| {
+                let opt_body_type = lambda
+                    .body
+                    .insert_implicit_args_and_get_type(body_ctx, max_depth)?;
+                if let Some(body_type) = opt_body_type {
+                    let prop = Expr::lambda(lambda.param.clone(), body_type);
+                    return Ok(Some(ctx.lambda_handler().get_dep_type(
+                        lambda.param.type_expr.clone(),
+                        prop,
+                        DependentTypeCtorKind::Pi,
+                        ctx.as_minimal(),
+                    )?));
+                }
+                Ok(None)
+            }),
+        }
+    }
+
+    pub fn match_type_arg_implicitness(
+        type_1: &Self,
+        type_2: &Self,
+        ctx: &MetaLogicContext,
+    ) -> Result<()> {
+        if let (Some(lambda_1), Some(lambda_2)) = (
+            type_1.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx),
+            type_2.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx),
+        ) {
+            if lambda_1.param.implicit != lambda_2.param.implicit {
+                let name_1 = lambda_1.param.get_name_or_placeholder();
+                let name_2 = lambda_1.param.get_name_or_placeholder();
+                return Err(anyhow!(
+                    "implicitness of «{name_1}» does not match implicitness of «{name_2}»"
+                ));
+            }
+
+            ctx.with_local(&lambda_1.param, |body_ctx| {
+                Self::match_type_arg_implicitness(&lambda_1.body, &lambda_2.body, body_ctx)
+            })
+        } else {
+            Ok(())
         }
     }
 }
@@ -530,6 +655,12 @@ pub type AppExpr = App<Expr, Arg>;
 pub type LambdaExpr = Lambda<Param, Expr>;
 
 impl LambdaExpr {
+    fn apply(self, arg: Arg, ctx: &impl Context) -> Expr {
+        let mut expr = self.body;
+        expr.substitute(&mut [arg.expr], true, ctx);
+        expr
+    }
+
     fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
         if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
             let expr = self.convert_to_combinator(metalogic_ctx)?;
@@ -645,6 +776,26 @@ impl Param {
             let param = &params[param_idx];
             ctx.with_locals(&params[0..param_idx], |param_ctx| {
                 param.traverse(visitor, param_ctx)
+            })?;
+        }
+        Ok(())
+    }
+
+    pub fn insert_implicit_args(&mut self, ctx: &MetaLogicContext, max_depth: u32) -> Result<()> {
+        self.type_expr.insert_implicit_args(ctx, max_depth)?;
+        Ok(())
+    }
+
+    pub fn insert_implicit_args_multi(
+        params: &mut [Self],
+        ctx: &MetaLogicContext,
+        max_depth: u32,
+    ) -> Result<()> {
+        for param_idx in 0..params.len() {
+            let (prev, next) = params.split_at_mut(param_idx);
+            let param = &mut next[0];
+            ctx.with_locals(prev, |param_ctx| {
+                param.type_expr.insert_implicit_args(param_ctx, max_depth)
             })?;
         }
         Ok(())

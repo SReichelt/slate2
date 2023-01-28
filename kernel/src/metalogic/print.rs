@@ -158,62 +158,39 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         parens_for_prefix: bool,
         parens_for_infix: bool,
     ) -> Result<bool, fmt::Error> {
-        let ctx = self.context.as_minimal();
-        let lambda_handler = self.context.lambda_handler();
-
-        if let Ok((domain_param, codomain_param, generic_indep_type)) =
-            lambda_handler.get_generic_indep_type(kind, ctx)
-        {
-            if let Some(arg_vec) = expr
-                .match_expr(&ctx, &[domain_param, codomain_param], &generic_indep_type)
-                .map_err(|_| fmt::Error)?
-            {
-                if let [domain, codomain] = arg_vec.as_slice() {
-                    if parens_for_infix {
-                        self.output.write_char('(')?;
-                    }
-                    self.print_expr_with_parens(domain, false, true, true, true, false)?;
-                    self.output.write_char(' ')?;
-                    self.output.write_char(infix)?;
-                    self.output.write_char(' ')?;
-                    self.print_expr_with_parens(
-                        codomain,
-                        false,
-                        true,
-                        kind != DependentTypeCtorKind::Pi,
-                        true,
-                        false,
-                    )?;
-                    if parens_for_infix {
-                        self.output.write_char(')')?;
-                    }
-                    return Ok(true);
-                }
+        if let Some((domain, codomain)) = expr.match_generic_indep_type(kind, self.context) {
+            if parens_for_infix {
+                self.output.write_char('(')?;
             }
+            self.print_expr_with_parens(&domain, false, true, true, true, false)?;
+            self.output.write_char(' ')?;
+            self.output.write_char(infix)?;
+            self.output.write_char(' ')?;
+            self.print_expr_with_parens(
+                &codomain,
+                false,
+                true,
+                kind != DependentTypeCtorKind::Pi,
+                true,
+                false,
+            )?;
+            if parens_for_infix {
+                self.output.write_char(')')?;
+            }
+            return Ok(true);
         }
 
-        if let Ok((domain_param, prop_param, generic_dep_type)) =
-            lambda_handler.get_generic_dep_type(kind, ctx)
-        {
-            if let Some(arg_vec) = expr
-                .match_expr(&ctx, &[domain_param, prop_param], &generic_dep_type)
-                .map_err(|_| fmt::Error)?
-            {
-                if let [_domain, prop] = arg_vec.as_slice() {
-                    if let Expr::Lambda(lambda) = prop {
-                        if parens_for_prefix {
-                            self.output.write_char('(')?;
-                        }
-                        self.output.write_char(prefix)?;
-                        self.output.write_char(' ')?;
-                        self.print_lambda(lambda)?;
-                        if parens_for_prefix {
-                            self.output.write_char(')')?;
-                        }
-                        return Ok(true);
-                    }
-                }
+        if let Some(lambda) = expr.match_generic_dep_type(kind, self.context) {
+            if parens_for_prefix {
+                self.output.write_char('(')?;
             }
+            self.output.write_char(prefix)?;
+            self.output.write_char(' ')?;
+            self.print_lambda(&lambda)?;
+            if parens_for_prefix {
+                self.output.write_char(')')?;
+            }
+            return Ok(true);
         }
 
         Ok(false)
@@ -226,14 +203,11 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         if let Ok((domain_param, left_param, right_param, generic_indep_eq_type)) =
             lambda_handler.get_generic_indep_eq_type(ctx)
         {
-            if let Some(arg_vec) = expr
-                .match_expr(
-                    &ctx,
-                    &[domain_param, left_param, right_param],
-                    &generic_indep_eq_type,
-                )
-                .map_err(|_| fmt::Error)?
-            {
+            if let Ok(Some(arg_vec)) = expr.match_expr(
+                &ctx,
+                &[domain_param, left_param, right_param],
+                &generic_indep_eq_type,
+            ) {
                 if let [domain, left, right] = arg_vec.as_slice() {
                     if parens {
                         self.output.write_char('(')?;
@@ -265,20 +239,17 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             generic_dep_eq_type,
         )) = lambda_handler.get_generic_dep_eq_type(ctx)
         {
-            if let Some(arg_vec) = expr
-                .match_expr(
-                    &ctx,
-                    &[
-                        left_domain_param,
-                        right_domain_param,
-                        domain_eq_param,
-                        left_param,
-                        right_param,
-                    ],
-                    &generic_dep_eq_type,
-                )
-                .map_err(|_| fmt::Error)?
-            {
+            if let Ok(Some(arg_vec)) = expr.match_expr(
+                &ctx,
+                &[
+                    left_domain_param,
+                    right_domain_param,
+                    domain_eq_param,
+                    left_param,
+                    right_param,
+                ],
+                &generic_dep_eq_type,
+            ) {
                 if let [left_domain, right_domain, domain_eq, left, right] = arg_vec.as_slice() {
                     if parens {
                         self.output.write_char('(')?;
