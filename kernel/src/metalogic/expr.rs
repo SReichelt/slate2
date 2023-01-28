@@ -12,6 +12,7 @@ use crate::generic::{context::*, context_object::*, expr_parts::*};
 
 #[derive(Clone, PartialEq)]
 pub enum Expr {
+    Placeholder,
     Var(Var), // includes primitive constants
     App(Box<AppExpr>),
     Lambda(Box<LambdaExpr>),
@@ -93,28 +94,6 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    pub fn traverse<Ctx: ParamContext<Param>>(
-        &self,
-        visitor: &impl ExprVisitor<Ctx>,
-        ctx: &Ctx,
-    ) -> Result<()> {
-        match self {
-            Expr::Var(_) => {}
-            Expr::App(app) => {
-                app.param.traverse(visitor, ctx)?;
-                app.body.traverse(visitor, ctx)?;
-            }
-            Expr::Lambda(lambda) => {
-                lambda.param.traverse(visitor, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| {
-                    lambda.body.traverse(visitor, body_ctx)
-                })?;
-            }
-        }
-
-        visitor.expr(self, ctx)
-    }
-
     pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
         ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
     }
@@ -140,6 +119,7 @@ impl Expr {
 
         loop {
             match self {
+                Expr::Placeholder => {}
                 Expr::Var(_) => {}
                 Expr::App(app) => {
                     reduced |= app.param.expr.reduce(ctx, max_depth)?;
@@ -213,6 +193,7 @@ impl Expr {
 
         loop {
             match self {
+                Expr::Placeholder => {}
                 Expr::Var(_) => {}
                 Expr::App(app) => {
                     app.param.expr.convert_to_combinators(ctx, max_depth)?;
@@ -276,6 +257,7 @@ impl Expr {
 
     fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         match self {
+            Expr::Placeholder => Ok(Expr::Placeholder),
             Expr::Var(var) => Ok(var.get_type(ctx)),
             Expr::App(app) => {
                 // Finding the result type of an application is surprisingly tricky because the
@@ -371,68 +353,6 @@ impl Expr {
         None
     }
 
-    pub fn insert_implicit_args_and_get_type(
-        &mut self,
-        ctx: &MetaLogicContext,
-        max_depth: u32,
-    ) -> Result<Option<Expr>> {
-        if let Some(mut expr_type) = self.insert_implicit_args(ctx, max_depth)? {
-            if max_depth > 0 {
-                expr_type.insert_implicit_args(ctx, max_depth - 1)?;
-                return Ok(Some(expr_type));
-            }
-        }
-
-        Ok(None)
-    }
-
-    pub fn insert_implicit_args(
-        &mut self,
-        ctx: &MetaLogicContext,
-        max_depth: u32,
-    ) -> Result<Option<Expr>> {
-        match self {
-            Expr::Var(var) => Ok(Some(var.get_type(ctx))),
-            Expr::App(app) => {
-                let fun = &mut app.body;
-                let arg = &mut app.param;
-                let opt_fun_type = fun.insert_implicit_args_and_get_type(ctx, max_depth)?;
-                arg.expr.insert_implicit_args(ctx, max_depth)?;
-                if let Some(fun_type) = opt_fun_type {
-                    if let Some(lambda) =
-                        fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
-                    {
-                        if arg.implicit != lambda.param.implicit {
-                            let name = lambda.param.get_name_or_placeholder();
-                            if lambda.param.implicit {
-                                return Err(anyhow!("expected implicit argument for «{name}»"));
-                            } else {
-                                return Err(anyhow!("expected explicit argument for «{name}»"));
-                            }
-                        }
-                        return Ok(Some(lambda.apply(arg.clone(), ctx)));
-                    }
-                }
-                Ok(None)
-            }
-            Expr::Lambda(lambda) => ctx.with_local(&lambda.param, |body_ctx| {
-                let opt_body_type = lambda
-                    .body
-                    .insert_implicit_args_and_get_type(body_ctx, max_depth)?;
-                if let Some(body_type) = opt_body_type {
-                    let prop = Expr::lambda(lambda.param.clone(), body_type);
-                    return Ok(Some(ctx.lambda_handler().get_dep_type(
-                        lambda.param.type_expr.clone(),
-                        prop,
-                        DependentTypeCtorKind::Pi,
-                        ctx.as_minimal(),
-                    )?));
-                }
-                Ok(None)
-            }),
-        }
-    }
-
     pub fn match_type_arg_implicitness(
         type_1: &Self,
         type_2: &Self,
@@ -461,13 +381,14 @@ impl Expr {
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Var(Var::default())
+        Expr::Placeholder
     }
 }
 
 impl Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Expr::Placeholder => f.write_str("_"),
             Self::Var(var) => var.fmt(f),
             Self::App(app) => app.fmt(f),
             Self::Lambda(lambda) => lambda.fmt(f),
@@ -478,6 +399,7 @@ impl Debug for Expr {
 impl ContextObject for Expr {
     fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
         match self {
+            Expr::Placeholder => {}
             Expr::Var(var) => var.shift_impl(start, end, shift),
             Expr::App(app) => app.shift_impl(start, end, shift),
             Expr::Lambda(lambda) => lambda.shift_impl(start, end, shift),
@@ -486,6 +408,7 @@ impl ContextObject for Expr {
 
     fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         match self {
+            Expr::Placeholder => Expr::Placeholder,
             Expr::Var(var) => Expr::Var(var.shifted_impl(start, end, shift)),
             Expr::App(app) => Expr::App(Box::new(app.shifted_impl(start, end, shift))),
             Expr::Lambda(lambda) => Expr::Lambda(Box::new(lambda.shifted_impl(start, end, shift))),
@@ -494,6 +417,7 @@ impl ContextObject for Expr {
 
     fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
         match self {
+            Expr::Placeholder => {}
             Expr::Var(var) => var.count_refs_impl(start, ref_counts),
             Expr::App(app) => app.count_refs_impl(start, ref_counts),
             Expr::Lambda(lambda) => lambda.count_refs_impl(start, ref_counts),
@@ -502,6 +426,7 @@ impl ContextObject for Expr {
 
     fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
         match self {
+            Expr::Placeholder => false,
             Expr::Var(var) => var.has_refs_impl(start, end),
             Expr::App(app) => app.has_refs_impl(start, end),
             Expr::Lambda(lambda) => lambda.has_refs_impl(start, end),
@@ -518,6 +443,7 @@ impl ContextObjectWithSubst<Expr> for Expr {
         ref_counts: &mut [usize],
     ) {
         match self {
+            Expr::Placeholder => {}
             Expr::Var(var) => {
                 if let Some(subst_arg) =
                     var.get_subst_arg_impl(shift_start, args_start, args, ref_counts)
@@ -544,6 +470,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
         target_subctx: &Ctx,
     ) -> Result<bool> {
         match (self, target) {
+            (Expr::Placeholder, Expr::Placeholder) => Ok(true),
             (Expr::Var(var), Expr::Var(target_var)) => {
                 var.shift_and_compare_impl(ctx, orig_ctx, target_var, target_subctx)
             }
@@ -591,6 +518,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
         }
 
         match (self, target) {
+            (Expr::Placeholder, Expr::Placeholder) => Ok(true),
             (Expr::Var(var), Expr::Var(target_var)) => {
                 var.shift_and_compare_impl(ctx, subst_ctx, target_var, target_subctx)
             }
@@ -690,11 +618,9 @@ impl LambdaExpr {
             }
 
             match body {
-                Expr::Var(Var(idx)) => {
-                    debug_assert_eq!(*idx, -1); // Otherwise it was constant.
-                    ctx.lambda_handler()
-                        .get_id_cmb(param.type_expr.clone(), ctx.as_minimal())
-                }
+                Expr::Var(Var(-1)) => ctx
+                    .lambda_handler()
+                    .get_id_cmb(param.type_expr.clone(), ctx.as_minimal()),
                 Expr::App(app) => {
                     let fun = &app.body;
                     let arg = &app.param.expr;
@@ -718,6 +644,7 @@ impl LambdaExpr {
                     //dbg!(body_cmb.print(body_ctx));
                     Self::create_combinator_app(param, &body_cmb, ctx)
                 }
+                _ => unreachable!("constant body should have been detected"),
             }
         })
     }
@@ -755,51 +682,6 @@ pub struct Param {
     pub name: Option<Rc<String>>,
     pub type_expr: Expr,
     pub implicit: bool,
-}
-
-impl Param {
-    pub fn traverse<Ctx: ParamContext<Param>>(
-        &self,
-        visitor: &impl ExprVisitor<Ctx>,
-        ctx: &Ctx,
-    ) -> Result<()> {
-        self.type_expr.traverse(visitor, ctx)?;
-        visitor.param(self, ctx)
-    }
-
-    pub fn traverse_multi<Ctx: ParamContext<Param>>(
-        params: &[Self],
-        visitor: &impl ExprVisitor<Ctx>,
-        ctx: &Ctx,
-    ) -> Result<()> {
-        for param_idx in 0..params.len() {
-            let param = &params[param_idx];
-            ctx.with_locals(&params[0..param_idx], |param_ctx| {
-                param.traverse(visitor, param_ctx)
-            })?;
-        }
-        Ok(())
-    }
-
-    pub fn insert_implicit_args(&mut self, ctx: &MetaLogicContext, max_depth: u32) -> Result<()> {
-        self.type_expr.insert_implicit_args(ctx, max_depth)?;
-        Ok(())
-    }
-
-    pub fn insert_implicit_args_multi(
-        params: &mut [Self],
-        ctx: &MetaLogicContext,
-        max_depth: u32,
-    ) -> Result<()> {
-        for param_idx in 0..params.len() {
-            let (prev, next) = params.split_at_mut(param_idx);
-            let param = &mut next[0];
-            ctx.with_locals(prev, |param_ctx| {
-                param.type_expr.insert_implicit_args(param_ctx, max_depth)
-            })?;
-        }
-        Ok(())
-    }
 }
 
 impl NamedObject for Param {
@@ -908,17 +790,6 @@ pub struct Arg {
     pub implicit: bool,
 }
 
-impl Arg {
-    pub fn traverse<Ctx: ParamContext<Param>>(
-        &self,
-        visitor: &impl ExprVisitor<Ctx>,
-        ctx: &Ctx,
-    ) -> Result<()> {
-        self.expr.traverse(visitor, ctx)?;
-        visitor.arg(self, ctx)
-    }
-}
-
 impl PartialEq for Arg {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
@@ -1006,23 +877,65 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
     }
 }
 
-pub trait ExprVisitor<Ctx: Context> {
-    fn expr(&self, _expr: &Expr, _ctx: &Ctx) -> Result<()> {
+pub trait ExprVisitor {
+    fn expr(&self, _expr: &Expr, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn param(&self, _param: &Param, _ctx: &Ctx) -> Result<()> {
+    fn param(&self, _param: &Param, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn arg(&self, _arg: &Arg, _ctx: &Ctx) -> Result<()> {
+    fn params(&self, params: &[Param], ctx: &MetaLogicContext) -> Result<()> {
+        for param_idx in 0..params.len() {
+            let (prev, next) = params.split_at(param_idx);
+            let param = &next[0];
+            ctx.with_locals(prev, |param_ctx| self.param(param, param_ctx))?;
+        }
         Ok(())
+    }
+
+    fn arg(&self, _arg: &Arg, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub struct DeepExprVisitor<Visitor: ExprVisitor>(pub Visitor);
+
+impl<Visitor: ExprVisitor> ExprVisitor for DeepExprVisitor<Visitor> {
+    fn expr(&self, expr: &Expr, ctx: &MetaLogicContext) -> Result<()> {
+        match expr {
+            Expr::Placeholder => {}
+            Expr::Var(_) => {}
+            Expr::App(app) => {
+                self.arg(&app.param, ctx)?;
+                self.expr(&app.body, ctx)?;
+            }
+            Expr::Lambda(lambda) => {
+                self.param(&lambda.param, ctx)?;
+                ctx.with_local(&lambda.param, |body_ctx| self.expr(&lambda.body, body_ctx))?;
+            }
+        }
+
+        self.0.expr(expr, ctx)
+    }
+
+    fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&param.type_expr, ctx)?;
+
+        self.0.param(param, ctx)
+    }
+
+    fn arg(&self, arg: &Arg, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&arg.expr, ctx)?;
+
+        self.0.arg(arg, ctx)
     }
 }
 
 pub struct ParamTypeChecker;
 
-impl ExprVisitor<MetaLogicContext<'_>> for ParamTypeChecker {
+impl ExprVisitor for ParamTypeChecker {
     fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
         let type_type = param.type_expr.get_type(ctx)?;
         let cmp_type_type = ctx.lambda_handler().get_universe_type()?;
@@ -1034,5 +947,126 @@ impl ExprVisitor<MetaLogicContext<'_>> for ParamTypeChecker {
             let cmp_type_type_str = cmp_type_type.print(ctx);
             Err(anyhow!("parameter type «{type_str} : {type_type_str}» must have type «{cmp_type_type_str}» instead"))
         }
+    }
+}
+
+pub trait ExprManipulator {
+    fn expr(&self, _expr: &mut Expr, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn param(&self, _param: &mut Param, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn params(&self, params: &mut [Param], ctx: &MetaLogicContext) -> Result<()> {
+        for param_idx in 0..params.len() {
+            let (prev, next) = params.split_at_mut(param_idx);
+            let param = &mut next[0];
+            ctx.with_locals(prev, |param_ctx| self.param(param, param_ctx))?;
+        }
+        Ok(())
+    }
+
+    fn arg(&self, _arg: &mut Arg, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub struct ImplicitArgInserter {
+    pub max_depth: u32,
+}
+
+impl ImplicitArgInserter {
+    pub fn insert_implicit_args_and_get_type(
+        &self,
+        expr: &mut Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Option<Expr>> {
+        if let Some(mut expr_type) = self.insert_implicit_args(expr, ctx)? {
+            if self.max_depth > 0 {
+                let type_arg_inserter = ImplicitArgInserter {
+                    max_depth: self.max_depth - 1,
+                };
+                type_arg_inserter.insert_implicit_args(&mut expr_type, ctx)?;
+                return Ok(Some(expr_type));
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn insert_implicit_args(
+        &self,
+        expr: &mut Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Option<Expr>> {
+        match expr {
+            Expr::Placeholder => Ok(None),
+            Expr::Var(var) => Ok(Some(var.get_type(ctx))),
+            Expr::App(app) => {
+                let fun = &mut app.body;
+                let arg = &mut app.param;
+                loop {
+                    let opt_fun_type = self.insert_implicit_args_and_get_type(fun, ctx)?;
+                    self.arg(arg, ctx)?;
+                    if let Some(fun_type) = opt_fun_type {
+                        if let Some(lambda) =
+                            fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
+                        {
+                            if arg.implicit != lambda.param.implicit {
+                                if lambda.param.implicit {
+                                    *fun = Expr::app(
+                                        std::mem::take(fun),
+                                        Arg {
+                                            expr: Expr::Placeholder,
+                                            implicit: true,
+                                        },
+                                    );
+                                    continue;
+                                } else {
+                                    let name = lambda.param.get_name_or_placeholder();
+                                    return Err(anyhow!("expected explicit argument for «{name}»"));
+                                }
+                            }
+                            return Ok(Some(lambda.apply(arg.clone(), ctx)));
+                        }
+                    }
+                    return Ok(None);
+                }
+            }
+            Expr::Lambda(lambda) => {
+                self.param(&mut lambda.param, ctx)?;
+                ctx.with_local(&lambda.param, |body_ctx| {
+                    let opt_body_type =
+                        self.insert_implicit_args_and_get_type(&mut lambda.body, body_ctx)?;
+                    if let Some(body_type) = opt_body_type {
+                        let prop = Expr::lambda(lambda.param.clone(), body_type);
+                        return Ok(Some(ctx.lambda_handler().get_dep_type(
+                            lambda.param.type_expr.clone(),
+                            prop,
+                            DependentTypeCtorKind::Pi,
+                            ctx.as_minimal(),
+                        )?));
+                    }
+                    Ok(None)
+                })
+            }
+        }
+    }
+}
+
+impl ExprManipulator for ImplicitArgInserter {
+    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
+        self.insert_implicit_args(expr, ctx)?;
+        Ok(())
+    }
+
+    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&mut param.type_expr, ctx)
+    }
+
+    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&mut arg.expr, ctx)
     }
 }

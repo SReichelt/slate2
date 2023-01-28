@@ -62,6 +62,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         }
 
         match expr {
+            Expr::Placeholder => self.output.write_char('_')?,
             Expr::Var(Var(idx)) => {
                 let param = self.context.get_var(*idx);
                 self.output.write_str(param.get_name_or_placeholder())?;

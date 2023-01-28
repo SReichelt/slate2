@@ -154,15 +154,19 @@ impl ParsingContext<'_, '_, '_> {
             let expr = self.parse_dep_type(DependentTypeCtorKind::Sigma)?;
             Ok(Some(expr))
         } else if let Some(name) = self.input.try_read_name() {
-            let mut occurrence = 0;
-            while self.input.try_read_char('⁺') {
-                occurrence += 1;
-            }
-            if let Some(var_idx) = self.context.get_var_index(name, occurrence) {
-                Ok(Some(Expr::var(var_idx)))
+            if name == "_" {
+                Ok(Some(Expr::Placeholder))
             } else {
-                let err = anyhow!("variable '{name}' not found");
-                self.input.error(err)
+                let mut occurrence = 0;
+                while self.input.try_read_char('⁺') {
+                    occurrence += 1;
+                }
+                if let Some(var_idx) = self.context.get_var_index(name, occurrence) {
+                    Ok(Some(Expr::var(var_idx)))
+                } else {
+                    let err = anyhow!("variable '{name}' not found");
+                    self.input.error(err)
+                }
             }
         } else {
             Ok(None)
@@ -205,8 +209,11 @@ impl ParsingContext<'_, '_, '_> {
         if let Some(param_name_str) = self.input.try_read_name() {
             let param_name = Self::get_param_name(param_name_str);
             self.input.skip_whitespace();
-            self.input.read_char(':')?;
-            let param_type = self.parse_expr()?;
+            let param_type = if self.input.try_read_char(':') {
+                self.parse_expr()?
+            } else {
+                Expr::Placeholder
+            };
             if implicit {
                 self.input.read_char('}')?;
             }
@@ -246,8 +253,11 @@ impl ParsingContext<'_, '_, '_> {
                 param_names.push(Self::get_param_name(param_name_str));
                 self.input.skip_whitespace();
             }
-            self.input.read_char(':')?;
-            let param_type = self.parse_expr()?;
+            let param_type = if self.input.try_read_char(':') {
+                self.parse_expr()?
+            } else {
+                Expr::Placeholder
+            };
             if implicit {
                 self.input.read_char('}')?;
             }

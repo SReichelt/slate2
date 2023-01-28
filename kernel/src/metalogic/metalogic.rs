@@ -81,6 +81,7 @@ impl MetaLogic {
         }
 
         metalogic.insert_implicit_args()?;
+        metalogic.fill_placeholders()?;
 
         Ok(metalogic)
     }
@@ -114,10 +115,42 @@ impl MetaLogic {
         expr.get_type(&self.get_root_context())
     }
 
-    fn insert_implicit_args(&mut self) -> Result<()> {
+    fn visit_exprs<Visitor: MetaLogicVisitor>(&self, visitor: &Visitor) -> Result<()> {
+        let mut errors = Vec::new();
+        let root_ctx = self.get_root_context();
+
+        for constant in &self.constants {
+            if let Err(error) = visitor.param(&constant.param, &root_ctx).with_prefix(|| {
+                let name = constant.get_name_or_placeholder();
+                visitor.get_constant_error_prefix(name)
+            }) {
+                errors.push(error);
+            }
+
+            for rule in &constant.reduction_rules {
+                if let Err(error) = visitor.reduction_rule(rule, &root_ctx).with_prefix(|| {
+                    let name = constant.get_name_or_placeholder();
+                    let rule_str = rule.print(&root_ctx);
+                    visitor.get_rule_error_prefix(name, &rule_str)
+                }) {
+                    errors.push(error);
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.combine())
+        }
+    }
+
+    fn manipulate_exprs<Manipulator: MetaLogicManipulator>(
+        &mut self,
+        manipulator: &Manipulator,
+    ) -> Result<()> {
         let mut new_constants = Vec::with_capacity(self.constants.len());
         let mut errors = Vec::new();
-        let max_depth = self.lambda_handler.implicit_arg_max_depth();
         let root_ctx = self.get_root_context();
 
         for constant in &self.constants {
@@ -126,12 +159,11 @@ impl MetaLogic {
                 reduction_rules: Vec::with_capacity(constant.reduction_rules.len()),
             };
 
-            if let Err(error) = new_constant
-                .param
-                .insert_implicit_args(&root_ctx, max_depth)
+            if let Err(error) = manipulator
+                .param(&mut new_constant.param, &root_ctx)
                 .with_prefix(|| {
                     let name = new_constant.get_name_or_placeholder();
-                    format!("invalid implicit arguments in type of constant «{name}»")
+                    manipulator.get_constant_error_prefix(name)
                 })
             {
                 errors.push(error);
@@ -140,14 +172,12 @@ impl MetaLogic {
             for rule in &constant.reduction_rules {
                 let mut new_rule = rule.clone();
 
-                if let Err(error) = new_rule
-                    .insert_implicit_args(&root_ctx, max_depth)
+                if let Err(error) = manipulator
+                    .reduction_rule(&mut new_rule, &root_ctx)
                     .with_prefix(|| {
                         let name = constant.get_name_or_placeholder();
                         let rule_str = new_rule.print(&root_ctx);
-                        format!(
-                        "invalid implicit arguments in reduction rule for «{name}» («{rule_str}»)"
-                    )
+                        manipulator.get_rule_error_prefix(name, &rule_str)
                     })
                 {
                     errors.push(error);
@@ -167,38 +197,19 @@ impl MetaLogic {
         }
     }
 
-    fn traverse_exprs<'a>(&'a self, checker: &impl ExprChecker<'a>) -> Result<()> {
-        let mut errors = Vec::new();
-        let root_ctx = self.get_root_context();
+    fn insert_implicit_args(&mut self) -> Result<()> {
+        self.manipulate_exprs(&ImplicitArgInserter {
+            max_depth: self.lambda_handler.implicit_arg_max_depth(),
+        })
+    }
 
-        for constant in &self.constants {
-            if let Err(error) = constant.param.traverse(checker, &root_ctx).with_prefix(|| {
-                let name = constant.get_name_or_placeholder();
-                checker.get_constant_error_prefix(name)
-            }) {
-                errors.push(error);
-            }
-
-            for rule in &constant.reduction_rules {
-                if let Err(error) = rule.traverse(checker, &root_ctx).with_prefix(|| {
-                    let name = constant.get_name_or_placeholder();
-                    let rule_str = rule.print(&root_ctx);
-                    checker.get_rule_error_prefix(name, &rule_str)
-                }) {
-                    errors.push(error);
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.combine())
-        }
+    fn fill_placeholders(&mut self) -> Result<()> {
+        // TODO
+        Ok(())
     }
 
     pub fn check_type_of_types(&self) -> Result<()> {
-        self.traverse_exprs(&ParamTypeChecker)
+        self.visit_exprs(&DeepExprVisitor(ParamTypeChecker))
     }
 
     pub fn check_reduction_rule_types(&self) -> Result<()> {
@@ -266,17 +277,6 @@ impl NamedObject for Constant {
 pub type ReductionRule = MultiLambda<Param, ReductionBody>;
 
 impl ReductionRule {
-    fn traverse<Ctx: ParamContext<Param>>(
-        &self,
-        visitor: &impl ExprVisitor<Ctx>,
-        ctx: &Ctx,
-    ) -> Result<()> {
-        Param::traverse_multi(&self.params, visitor, ctx)?;
-        ctx.with_locals(&self.params, |rule_ctx| {
-            self.body.traverse(visitor, rule_ctx)
-        })
-    }
-
     pub fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         PrintingContext::print(&mut result, ctx, |printing_context| {
@@ -285,13 +285,6 @@ impl ReductionRule {
         .unwrap();
         result
     }
-
-    fn insert_implicit_args(&mut self, ctx: &MetaLogicContext, max_depth: u32) -> Result<()> {
-        Param::insert_implicit_args_multi(&mut self.params, ctx, max_depth)?;
-        ctx.with_locals(&self.params, |rule_ctx| {
-            self.body.insert_implicit_args(rule_ctx, max_depth)
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -299,32 +292,6 @@ pub struct ReductionBody {
     pub source: Expr,
     pub target: Expr,
     pub source_app_len: usize,
-}
-
-impl ReductionBody {
-    fn traverse<Ctx: ParamContext<Param>>(
-        &self,
-        visitor: &impl ExprVisitor<Ctx>,
-        ctx: &Ctx,
-    ) -> Result<()> {
-        self.source.traverse(visitor, ctx)?;
-        self.target.traverse(visitor, ctx)
-    }
-
-    pub fn insert_implicit_args(&mut self, ctx: &MetaLogicContext, max_depth: u32) -> Result<()> {
-        let opt_source_type = self
-            .source
-            .insert_implicit_args_and_get_type(ctx, max_depth)?;
-        let opt_target_type = self
-            .target
-            .insert_implicit_args_and_get_type(ctx, max_depth)?;
-
-        if let (Some(source_type), Some(target_type)) = (opt_source_type, opt_target_type) {
-            Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)?;
-        }
-
-        Ok(())
-    }
 }
 
 impl VarAccessor<Param> for MetaLogic {
@@ -650,17 +617,91 @@ pub trait LambdaHandler {
     fn implicit_arg_max_depth(&self) -> u32;
 }
 
-pub trait ExprChecker<'a>: ExprVisitor<MetaLogicContext<'a>> {
+pub trait MetaLogicVisitorBase {
     fn get_constant_error_prefix(&self, name: &str) -> String;
     fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String;
 }
 
-impl<'a> ExprChecker<'a> for ParamTypeChecker {
+impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitorBase
+    for DeepExprVisitor<Visitor>
+{
+    fn get_constant_error_prefix(&self, name: &str) -> String {
+        self.0.get_constant_error_prefix(name)
+    }
+
+    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
+        self.0.get_rule_error_prefix(name, rule_str)
+    }
+}
+
+impl MetaLogicVisitorBase for ParamTypeChecker {
     fn get_constant_error_prefix(&self, name: &str) -> String {
         format!("type of constant «{name}» is invalid")
     }
 
     fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
         format!("types within reduction rule for «{name}» are invalid («{rule_str}»)")
+    }
+}
+
+impl MetaLogicVisitorBase for ImplicitArgInserter {
+    fn get_constant_error_prefix(&self, name: &str) -> String {
+        format!("invalid implicit arguments in type of constant «{name}»")
+    }
+
+    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
+        format!("invalid implicit arguments in reduction rule for «{name}» («{rule_str}»)")
+    }
+}
+
+pub trait MetaLogicVisitor: MetaLogicVisitorBase + ExprVisitor {
+    fn reduction_rule(&self, _rule: &ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn reduction_body(&self, _body: &ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitor for DeepExprVisitor<Visitor> {
+    fn reduction_rule(&self, rule: &ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+        self.params(&rule.params, ctx)?;
+        ctx.with_locals(&rule.params, |body| self.reduction_body(&rule.body, body))
+    }
+
+    fn reduction_body(&self, body: &ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&body.source, ctx)?;
+        self.expr(&body.target, ctx)
+    }
+}
+
+pub trait MetaLogicManipulator: MetaLogicVisitorBase + ExprManipulator {
+    fn reduction_rule(&self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+
+    fn reduction_body(&self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl MetaLogicManipulator for ImplicitArgInserter {
+    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+        self.params(&mut rule.params, ctx)?;
+        ctx.with_locals(&rule.params, |body| {
+            self.reduction_body(&mut rule.body, body)
+        })
+    }
+
+    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+        let opt_source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
+        let opt_target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
+
+        if let (Some(source_type), Some(target_type)) = (opt_source_type, opt_target_type) {
+            Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)?;
+        }
+
+        Ok(())
     }
 }
