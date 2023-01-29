@@ -1169,6 +1169,7 @@ impl PlaceholderFiller {
                 //);
                 let arg_type =
                     self.fill_placeholders(&mut arg.expr, expected_arg_type, force, ctx)?;
+                // TODO: Maybe we don't need this; we might replace expected_fun_type with "Π _ : A. _".
                 let (mut prop_param, expected_fun_type) =
                     ctx.lambda_handler().get_semi_generic_dep_type(
                         arg_type,
@@ -1208,21 +1209,20 @@ impl PlaceholderFiller {
                 }
             }
             Expr::Lambda(lambda) => {
-                self.param(&mut lambda.param, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| {
-                    expected_type.shift_to_subcontext(ctx, body_ctx);
-                    let arg_type = lambda.param.type_expr.shifted_to_subcontext(ctx, body_ctx);
-                    let expected_body_type = if let Some(prop) =
-                        expected_type.get_prop_from_fun_type(arg_type, body_ctx)?
-                    {
-                        let param_arg = Arg {
-                            expr: Expr::var(-1),
-                            implicit: lambda.param.implicit,
-                        };
-                        prop.apply(param_arg, body_ctx)
+                let opt_expected_type_lambda =
+                    expected_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx);
+                let expected_body_type =
+                    if let Some(expected_type_lambda) = opt_expected_type_lambda {
+                        if lambda.param.type_expr == Expr::Placeholder {
+                            lambda.param.type_expr = expected_type_lambda.param.type_expr;
+                        }
+                        expected_type_lambda.body
                     } else {
                         Expr::Placeholder
                     };
+                self.param(&mut lambda.param, ctx)?;
+                ctx.with_local(&lambda.param, |body_ctx| {
+                    expected_type.shift_to_subcontext(ctx, body_ctx);
                     let body_type = self.fill_placeholders(
                         &mut lambda.body,
                         expected_body_type,

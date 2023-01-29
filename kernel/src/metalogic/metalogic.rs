@@ -736,7 +736,8 @@ impl MetaLogicManipulator for PlaceholderFiller {
     }
 
     fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut body.source, ctx)?;
-        self.expr(&mut body.target, ctx)
+        let source_type = self.fill_placeholders(&mut body.source, Expr::Placeholder, true, ctx)?;
+        self.fill_placeholders(&mut body.target, source_type, true, ctx)?;
+        Ok(())
     }
 }
