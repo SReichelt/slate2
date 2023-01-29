@@ -16,8 +16,9 @@ pub struct DefInit<'a> {
 }
 
 pub struct MetaLogic {
-    pub constants: Vec<Constant>,
-    pub lambda_handler: Box<dyn LambdaHandler>,
+    constants: Vec<Constant>,
+    lambda_handler: Box<dyn LambdaHandler>,
+    initialized: bool,
 }
 
 impl MetaLogic {
@@ -50,6 +51,7 @@ impl MetaLogic {
                 })
                 .collect(),
             lambda_handler,
+            initialized: false,
         };
 
         let mut idx = 0;
@@ -83,6 +85,7 @@ impl MetaLogic {
         metalogic.insert_implicit_args()?;
         metalogic.fill_placeholders()?;
 
+        metalogic.initialized = true;
         Ok(metalogic)
     }
 
@@ -147,7 +150,7 @@ impl MetaLogic {
 
     fn manipulate_exprs<Manipulator: MetaLogicManipulator>(
         &mut self,
-        manipulator: &Manipulator,
+        manipulator: &mut Manipulator,
     ) -> Result<()> {
         let mut new_constants = Vec::with_capacity(self.constants.len());
         let mut errors = Vec::new();
@@ -198,14 +201,13 @@ impl MetaLogic {
     }
 
     fn insert_implicit_args(&mut self) -> Result<()> {
-        self.manipulate_exprs(&ImplicitArgInserter {
+        self.manipulate_exprs(&mut ImplicitArgInserter {
             max_depth: self.lambda_handler.implicit_arg_max_depth(),
         })
     }
 
     fn fill_placeholders(&mut self) -> Result<()> {
-        // TODO
-        Ok(())
+        self.manipulate_exprs(&mut PlaceholderFiller)
     }
 
     pub fn check_type_of_types(&self) -> Result<()> {
@@ -321,6 +323,8 @@ impl MetaLogicContext<'_> {
 /// `MetaLogicContext` or `MinimalContext`.
 pub trait ComparisonContext: ParamContext<Param> {
     fn as_metalogic_context(&self) -> Option<&MetaLogicContext>;
+
+    fn initialized(&self) -> bool;
 }
 
 // We need this so that with_reduction_options can take a single closure instead of two, which is
@@ -334,11 +338,19 @@ impl ComparisonContext for MinimalContext {
     fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
         None
     }
+
+    fn initialized(&self) -> bool {
+        true
+    }
 }
 
 impl ComparisonContext for MetaLogicContext<'_> {
     fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
         Some(self)
+    }
+
+    fn initialized(&self) -> bool {
+        self.globals().initialized
     }
 }
 
@@ -654,6 +666,16 @@ impl MetaLogicVisitorBase for ImplicitArgInserter {
     }
 }
 
+impl MetaLogicVisitorBase for PlaceholderFiller {
+    fn get_constant_error_prefix(&self, name: &str) -> String {
+        format!("unable to fill placeholder in type of constant «{name}»")
+    }
+
+    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
+        format!("unable to fill placeholder in reduction rule for «{name}» («{rule_str}»)")
+    }
+}
+
 pub trait MetaLogicVisitor: MetaLogicVisitorBase + ExprVisitor {
     fn reduction_rule(&self, _rule: &ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
@@ -677,31 +699,41 @@ impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitor for DeepExprV
 }
 
 pub trait MetaLogicManipulator: MetaLogicVisitorBase + ExprManipulator {
-    fn reduction_rule(&self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&mut self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn reduction_body(&self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_body(&mut self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 }
 
 impl MetaLogicManipulator for ImplicitArgInserter {
-    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&mut self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
         self.params(&mut rule.params, ctx)?;
         ctx.with_locals(&rule.params, |body| {
             self.reduction_body(&mut rule.body, body)
         })
     }
 
-    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        let opt_source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
-        let opt_target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
+    fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+        let source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
+        let target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
 
-        if let (Some(source_type), Some(target_type)) = (opt_source_type, opt_target_type) {
-            Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)?;
-        }
+        Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)
+    }
+}
 
-        Ok(())
+impl MetaLogicManipulator for PlaceholderFiller {
+    fn reduction_rule(&mut self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+        self.params(&mut rule.params, ctx)?;
+        ctx.with_locals(&rule.params, |body| {
+            self.reduction_body(&mut rule.body, body)
+        })
+    }
+
+    fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&mut body.source, ctx)?;
+        self.expr(&mut body.target, ctx)
     }
 }
