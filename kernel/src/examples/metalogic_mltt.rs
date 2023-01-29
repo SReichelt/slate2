@@ -115,7 +115,7 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "refl : Π {A : U}. Π a : A. a = a",
                         red: &[
                             "refl {U} :≡ λ A : U. Sigma_intro (SplitEquiv A A) A (SplitEquiv_refl A)",
-                            "refl {Unit} :≡ λ a : Unit. unit",
+                            "refl {Unit} :≡ λ _. unit",
                             "∀ {A : U}. ∀ P : A → U. refl {Pi P} :≡ λ f. λ a : A. refl (f a)",
                             "∀ {A : U}. ∀ P : A → U. refl {Sigma P} :≡ λ p. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst p. Sigma_snd p ={P (Sigma_fst p)}[ap {A} {_} P {Sigma_fst p} {Sigma_fst p} e_fst]{P (Sigma_fst p)} Sigma_snd p) (refl (Sigma_fst p)) (refl (Sigma_snd p))",
                         ],
@@ -125,7 +125,7 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "symm : Π {A : U}. Π {a b : A}. a = b → b = a",
                         red: &[
                             "∀ {A : U}. ∀ a : A. symm {_} {a} {a} (refl a) :≡ refl a",
-                            "symm {Unit} :≡ λ {a b}. λ e. unit",
+                            "symm {Unit} :≡ λ {_ _}. λ _. unit",
                             "symm {U} :≡ λ {A B}. λ e. Sigma_intro (SplitEquiv B A) (middle {A} {B} e) (SplitEquiv_symm {A} {B} {middle {A} {B} e} (split {A} {B} e))",
                             "∀ {A : U}. ∀ P : A → U. symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm {_} {f a} {g a} (e a)",
                             // TODO
@@ -138,7 +138,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {a} {b} (refl a) e :≡ e",
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {b} {b} e (refl b) :≡ e",
                             "trans {U} :≡ λ {A B C}. λ e f. Sigma_intro (SplitEquiv A C) B (SplitEquiv_trans {A} {B} {C} {middle {A} {B} e} {middle {B} {C} f} (split {A} {B} e) (split {B} {C} f))",
-                            "trans {Unit} :≡ λ {a b c}. λ eab ebc. unit",
+                            "trans {Unit} :≡ λ {_ _ _}. λ _ _. unit",
                             "∀ {A : U}. ∀ P : A → U. trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans {_} {f a} {g a} {h a} (efg a) (egh a)",
                             // TODO
                         ],

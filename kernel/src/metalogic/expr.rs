@@ -507,8 +507,9 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
-        let result = match (self, target) {
-            (Expr::Placeholder, Expr::Placeholder) => Ok(true),
+        match (self, target) {
+            (Expr::Placeholder, _) => Ok(true),
+            (_, Expr::Placeholder) => Ok(true),
             (Expr::Var(var), Expr::Var(target_var)) => {
                 var.shift_and_compare_impl(ctx, orig_ctx, target_var, target_subctx)
             }
@@ -533,9 +534,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
                 }
             }
             _ => Ok(false),
-        }?;
-
-        Ok(result || !ctx.initialized())
+        }
     }
 }
 
@@ -557,8 +556,9 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
             }
         }
 
-        let result = match (self, target) {
-            (Expr::Placeholder, Expr::Placeholder) => Ok(true),
+        match (self, target) {
+            (Expr::Placeholder, _) => Ok(true),
+            (_, Expr::Placeholder) => Ok(true),
             (Expr::Var(var), Expr::Var(target_var)) => {
                 var.shift_and_compare_impl(ctx, subst_ctx, target_var, target_subctx)
             }
@@ -608,9 +608,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
                 }
             }
             _ => Ok(false),
-        }?;
-
-        Ok(result || !ctx.initialized())
+        }
     }
 }
 
@@ -1109,7 +1107,7 @@ impl PlaceholderFiller {
     pub fn fill_placeholders(
         &mut self,
         expr: &mut Expr,
-        mut expected_type: Expr,
+        expected_type: Expr,
         force: bool,
         ctx: &MetaLogicContext,
     ) -> Result<Expr> {
@@ -1169,40 +1167,30 @@ impl PlaceholderFiller {
                 //);
                 let arg_type =
                     self.fill_placeholders(&mut arg.expr, expected_arg_type, force, ctx)?;
-                // TODO: Maybe we don't need this; we might replace expected_fun_type with "Π _ : A. _".
-                let (mut prop_param, expected_fun_type) =
-                    ctx.lambda_handler().get_semi_generic_dep_type(
-                        arg_type,
-                        DependentTypeCtorKind::Pi,
-                        ctx.as_minimal(),
-                    )?;
-                prop_param.name = Some(Rc::new("PP".into())); // TODO remove
-                let fun_type = ctx.with_local(&prop_param, |prop_ctx| -> Result<Expr> {
-                    fun.shift_to_subcontext(ctx, prop_ctx);
-                    //dbg!(
-                    //    "filling fun placeholders",
-                    //    fun.print(prop_ctx),
-                    //    arg.expr.print(ctx),
-                    //    expected_type.print(ctx),
-                    //    expected_fun_type.print(prop_ctx),
-                    //);
-                    let mut fun_type_result =
-                        self.fill_placeholders(fun, expected_fun_type.clone(), force, prop_ctx);
-                    //dbg!(
-                    //    "filled fun placeholders",
-                    //    fun.print(prop_ctx),
-                    //    arg.expr.print(ctx),
-                    //    expected_type.print(ctx),
-                    //    expected_fun_type.print(prop_ctx),
-                    //    fun_type.print(prop_ctx),
-                    //);
-                    fun.shift_to_supercontext(prop_ctx, ctx);
-                    if let Ok(fun_type) = &mut fun_type_result {
-                        fun_type.shift_to_supercontext(prop_ctx, ctx); // TODO robustness
-                    }
-                    fun_type_result
-                })?;
-                if let Some(prop) = fun_type.match_expr_1(ctx, prop_param, &expected_fun_type)? {
+                let expected_fun_type = ctx.lambda_handler().get_dep_type(
+                    arg_type.clone(),
+                    Expr::Placeholder,
+                    DependentTypeCtorKind::Pi,
+                    ctx.as_minimal(),
+                )?;
+                //dbg!(
+                //    "filling fun placeholders",
+                //    fun.print(ctx),
+                //    arg.expr.print(ctx),
+                //    expected_type.print(ctx),
+                //    expected_fun_type.print(ctx),
+                //);
+                let fun_type =
+                    self.fill_placeholders(fun, expected_fun_type.clone(), force, ctx)?;
+                //dbg!(
+                //    "filled fun placeholders",
+                //    fun.print(ctx),
+                //    arg.expr.print(ctx),
+                //    expected_type.print(ctx),
+                //    expected_fun_type.print(ctx),
+                //    fun_type.print(ctx),
+                //);
+                if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
                     Ok(prop.apply(arg.clone(), ctx))
                 } else {
                     Ok(Expr::Placeholder)
@@ -1222,7 +1210,6 @@ impl PlaceholderFiller {
                     };
                 self.param(&mut lambda.param, ctx)?;
                 ctx.with_local(&lambda.param, |body_ctx| {
-                    expected_type.shift_to_subcontext(ctx, body_ctx);
                     let body_type = self.fill_placeholders(
                         &mut lambda.body,
                         expected_body_type,
