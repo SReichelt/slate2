@@ -52,7 +52,7 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "const : Π A : U. Π {B : U}. B → (A → B)",
-                        red: &["∀ A : U. ∀ {B : U}. ∀ b : B. ∀ a : A. (const A {_} b) a :≡ b"],
+                        red: &["∀ A : U. ∀ {B : U}. ∀ b : B. ∀ a : A. (const A b) a :≡ b"],
                     },
                     DefInit {
                         sym: "subst : Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. (Π a : A. Pi (Q a)) → (Π f : Pi P. Π a : A. Q a (f a))",
@@ -72,11 +72,11 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "Sigma_fst : Π {A : U}. Π {P : A → U}. Sigma P → A",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_fst {_} {_} (Sigma_intro P a b) :≡ a"],
+                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_fst (Sigma_intro P a b) :≡ a"],
                     },
                     DefInit {
                         sym: "Sigma_snd : Π {A : U}. Π {P : A → U}. Π p : Sigma P. P (Sigma_fst p)",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_snd {_} {_} (Sigma_intro P a b) :≡ b"],
+                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_snd (Sigma_intro P a b) :≡ b"],
                     },
                     DefInit {
                         sym: "Pair_intro : Π A B : U. A → B → (A × B)",
@@ -443,11 +443,6 @@ mod tests {
             mltt.print_expr(&const_cmb.type_expr),
             "Π A : U. Π {B : U}. B → A → B"
         );
-
-        dbg!(mltt.get_root_context().constants()
-            [mltt.get_root_context().get_var_index("const", 0).unwrap() as usize]
-            .reduction_rules[0]
-            .print(&mltt.get_root_context()));
 
         let subst_cmb = mltt.get_constant("subst").unwrap();
         assert_eq!(

@@ -1016,41 +1016,6 @@ pub trait ExprManipulator {
     }
 }
 
-/*pub struct DeepExprManipulator<Manipulator: ExprManipulator>(pub Manipulator);
-
-impl<Manipulator: ExprManipulator> ExprManipulator for DeepExprManipulator<Manipulator> {
-    fn expr(&mut self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
-        match expr {
-            Expr::Placeholder => {}
-            Expr::Var(_) => {}
-            Expr::App(app) => {
-                self.arg(&mut app.param, ctx)?;
-                self.expr(&mut app.body, ctx)?;
-            }
-            Expr::Lambda(lambda) => {
-                self.param(&mut lambda.param, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| {
-                    self.expr(&mut lambda.body, body_ctx)
-                })?;
-            }
-        }
-
-        self.0.expr(expr, ctx)
-    }
-
-    fn param(&mut self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut param.type_expr, ctx)?;
-
-        self.0.param(param, ctx)
-    }
-
-    fn arg(&mut self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut arg.expr, ctx)?;
-
-        self.0.arg(arg, ctx)
-    }
-}*/
-
 pub struct ImplicitArgInserter {
     pub max_depth: u32,
 }

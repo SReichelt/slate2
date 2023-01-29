@@ -720,6 +720,9 @@ impl MetaLogicManipulator for ImplicitArgInserter {
         let source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
         let target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
 
+        let (_, source_app_len) = body.source.get_app_info();
+        body.source_app_len = source_app_len;
+
         Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)
     }
 }
