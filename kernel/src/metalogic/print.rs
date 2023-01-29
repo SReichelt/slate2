@@ -181,7 +181,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             return Ok(true);
         }
 
-        if let Some(lambda) = expr.match_generic_dep_type(kind, self.context) {
+        if let Some(lambda) = expr.match_generic_dep_type(kind, false, self.context) {
             if parens_for_prefix {
                 self.output.write_char('(')?;
             }

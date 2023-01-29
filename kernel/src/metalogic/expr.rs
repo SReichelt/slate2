@@ -372,17 +372,27 @@ impl Expr {
     pub fn match_generic_dep_type(
         &self,
         kind: DependentTypeCtorKind,
+        convert_to_lambda: bool,
         ctx: &MetaLogicContext,
     ) -> Option<LambdaExpr> {
         let min_ctx = ctx.as_minimal();
         if let Ok((domain_param, prop_param, generic_dep_type)) =
             ctx.lambda_handler().get_generic_dep_type(kind, min_ctx)
         {
-            if let Ok(Some((_domain, prop))) =
+            if let Ok(Some((domain, prop))) =
                 self.match_expr_2(&min_ctx, domain_param, prop_param, &generic_dep_type)
             {
                 if let Expr::Lambda(lambda) = prop {
                     return Some(*lambda);
+                } else if convert_to_lambda {
+                    return Some(Lambda {
+                        param: Param {
+                            name: None,
+                            type_expr: domain,
+                            implicit: false,
+                        },
+                        body: Expr::explicit_app(prop, Expr::var(-1)),
+                    });
                 }
             }
         }
@@ -396,8 +406,8 @@ impl Expr {
     ) -> Result<()> {
         if *type_1 != Expr::Placeholder && *type_2 != Expr::Placeholder {
             if let (Some(lambda_1), Some(lambda_2)) = (
-                type_1.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx),
-                type_2.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx),
+                type_1.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx),
+                type_2.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx),
             ) {
                 if lambda_1.param.implicit != lambda_2.param.implicit {
                     let name_1 = lambda_1.param.get_name_or_placeholder();
@@ -1051,7 +1061,7 @@ impl ImplicitArgInserter {
                     self.arg(arg, ctx)?;
                     if fun_type != Expr::Placeholder {
                         if let Some(lambda) =
-                            fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
+                            fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx)
                         {
                             if arg.implicit != lambda.param.implicit {
                                 if lambda.param.implicit {
@@ -1115,6 +1125,7 @@ impl PlaceholderFiller {
             Expr::Placeholder => {
                 if force {
                     let type_str = expected_type.print(ctx);
+                    //panic!("DEBUG");
                     Err(anyhow!("unfilled placeholder of type «{type_str}»"))
                 } else {
                     Ok(Expr::Placeholder)
@@ -1135,10 +1146,15 @@ impl PlaceholderFiller {
                 //    expected_type.print(ctx),
                 //    initial_fun_type.print(ctx)
                 //);
-                let expected_arg_type = if let Some(lambda) =
-                    initial_fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
+                let mut expected_param = Param {
+                    name: None,
+                    type_expr: Expr::Placeholder,
+                    implicit: arg.implicit,
+                };
+                if let Some(lambda) =
+                    initial_fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx)
                 {
-                    let expected_arg_type = lambda.param.type_expr.clone();
+                    expected_param = lambda.param;
                     if arg.expr == Expr::Placeholder && expected_type != Expr::Placeholder {
                         //dbg!(
                         //    "try to substitute arg",
@@ -1148,28 +1164,27 @@ impl PlaceholderFiller {
                         //    initial_fun_type.print(ctx)
                         //);
                         if let Some(arg_value) =
-                            expected_type.match_expr_1(ctx, lambda.param, &lambda.body)?
+                            expected_type.match_expr_1(ctx, expected_param.clone(), &lambda.body)?
                         {
                             arg.expr = arg_value;
                             //dbg!("substituted arg", arg.expr.print(ctx));
                         }
                     }
-                    expected_arg_type
-                } else {
-                    Expr::Placeholder
-                };
+                }
                 //dbg!(
                 //    "fill arg placeholders",
                 //    fun.print(ctx),
                 //    arg.expr.print(ctx),
                 //    expected_type.print(ctx),
-                //    expected_arg_type.print(ctx)
+                //    initial_fun_type.print(ctx),
+                //    expected_param.type_expr.print(ctx)
                 //);
                 let arg_type =
-                    self.fill_placeholders(&mut arg.expr, expected_arg_type, force, ctx)?;
+                    self.fill_placeholders(&mut arg.expr, expected_param.type_expr, force, ctx)?;
+                expected_param.type_expr = arg_type.clone();
                 let expected_fun_type = ctx.lambda_handler().get_dep_type(
                     arg_type.clone(),
-                    Expr::Placeholder,
+                    Expr::lambda(expected_param, Expr::Placeholder),
                     DependentTypeCtorKind::Pi,
                     ctx.as_minimal(),
                 )?;
@@ -1180,8 +1195,7 @@ impl PlaceholderFiller {
                 //    expected_type.print(ctx),
                 //    expected_fun_type.print(ctx),
                 //);
-                let fun_type =
-                    self.fill_placeholders(fun, expected_fun_type.clone(), force, ctx)?;
+                let fun_type = self.fill_placeholders(fun, expected_fun_type, force, ctx)?;
                 //dbg!(
                 //    "filled fun placeholders",
                 //    fun.print(ctx),
@@ -1198,16 +1212,14 @@ impl PlaceholderFiller {
             }
             Expr::Lambda(lambda) => {
                 let opt_expected_type_lambda =
-                    expected_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx);
-                let expected_body_type =
-                    if let Some(expected_type_lambda) = opt_expected_type_lambda {
-                        if lambda.param.type_expr == Expr::Placeholder {
-                            lambda.param.type_expr = expected_type_lambda.param.type_expr;
-                        }
-                        expected_type_lambda.body
-                    } else {
-                        Expr::Placeholder
-                    };
+                    expected_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx);
+                let mut expected_body_type = Expr::Placeholder;
+                if let Some(expected_type_lambda) = opt_expected_type_lambda {
+                    if lambda.param.type_expr == Expr::Placeholder {
+                        lambda.param.type_expr = expected_type_lambda.param.type_expr;
+                    }
+                    expected_body_type = expected_type_lambda.body;
+                }
                 self.param(&mut lambda.param, ctx)?;
                 ctx.with_local(&lambda.param, |body_ctx| {
                     let body_type = self.fill_placeholders(
