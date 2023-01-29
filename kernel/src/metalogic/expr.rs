@@ -1,5 +1,6 @@
 use std::{
     fmt::{self, Debug},
+    mem::take,
     rc::Rc,
 };
 
@@ -126,7 +127,7 @@ impl Expr {
                     reduced |= app.body.reduce(ctx, max_depth)?;
 
                     if let Expr::Lambda(lambda) = &mut app.body {
-                        *self = std::mem::take(lambda).apply(std::mem::take(&mut app.param), ctx);
+                        *self = take(lambda).apply(take(&mut app.param), ctx);
                         reduced = true;
                         continue;
                     }
@@ -150,14 +151,18 @@ impl Expr {
     }
 
     fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
-        if let Some((const_idx, app_len)) = self.get_const_app_info() {
-            for rule in &ctx.constants()[const_idx as usize].reduction_rules {
-                if rule.body.source_app_len == app_len {
-                    if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
-                        let mut expr = rule.body.target.clone();
-                        expr.substitute(&mut args, true, ctx);
-                        *self = expr;
-                        return Ok(true);
+        if ctx.initialized() {
+            if let Some((const_idx, app_len)) = self.get_const_app_info() {
+                for rule in &ctx.constants()[const_idx as usize].reduction_rules {
+                    if rule.body.source_app_len == app_len {
+                        if let Some(mut args) =
+                            self.match_expr(ctx, &rule.params, &rule.body.source)?
+                        {
+                            let mut expr = rule.body.target.clone();
+                            expr.substitute(&mut args, true, ctx);
+                            *self = expr;
+                            return Ok(true);
+                        }
                     }
                 }
             }
@@ -628,12 +633,13 @@ impl LambdaExpr {
 
     fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
         if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
-            let expr = self.convert_to_combinator(metalogic_ctx)?;
-            //dbg!(expr.print(metalogic_ctx));
-            Ok(Some(expr))
-        } else {
-            Ok(None)
+            if metalogic_ctx.initialized() {
+                let expr = self.convert_to_combinator(metalogic_ctx)?;
+                //dbg!(expr.print(metalogic_ctx));
+                return Ok(Some(expr));
+            }
         }
+        Ok(None)
     }
 
     fn convert_to_combinator(&self, ctx: &MetaLogicContext) -> Result<Expr> {
@@ -1087,7 +1093,7 @@ impl ImplicitArgInserter {
                             if arg.implicit != lambda.param.implicit {
                                 if lambda.param.implicit {
                                     *fun = Expr::app(
-                                        std::mem::take(fun),
+                                        take(fun),
                                         Arg {
                                             expr: Expr::Placeholder,
                                             implicit: true,

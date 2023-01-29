@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{mem::take, rc::Rc};
 
 use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
@@ -62,41 +62,23 @@ impl ParsingContext<'_, '_, '_> {
     fn parse_eq(&mut self) -> Result<Expr> {
         let mut expr = self.parse_app()?;
         if self.input.try_read_char('=') {
-            let mut domain = None;
+            let mut domain = Expr::Placeholder;
             if self.input.try_read_char('{') {
-                domain = Some(self.parse_expr()?);
+                domain = self.parse_expr()?;
                 self.input.read_char('}')?;
             }
             if self.input.try_read_char('[') {
                 let domain_eq = self.parse_expr()?;
                 self.input.read_char(']')?;
-                let mut right_domain = None;
+                let mut right_domain = Expr::Placeholder;
                 if self.input.try_read_char('{') {
-                    right_domain = Some(self.parse_expr()?);
+                    right_domain = self.parse_expr()?;
                     self.input.read_char('}')?;
                 }
                 let right = self.parse_app()?;
-                if domain.is_none() {
-                    if let Expr::Var(left_var) = &expr {
-                        domain = Some(left_var.get_type(self.context));
-                    } else {
-                        return self
-                            .input
-                            .error(anyhow!("need to specify left type of dependent equality"));
-                    }
-                }
-                if right_domain.is_none() {
-                    if let Expr::Var(right_var) = &right {
-                        right_domain = Some(right_var.get_type(self.context));
-                    } else {
-                        return self
-                            .input
-                            .error(anyhow!("need to specify right type of dependent equality"));
-                    }
-                }
                 expr = self.context.lambda_handler().get_dep_eq_type(
-                    domain.unwrap(),
-                    right_domain.unwrap(),
+                    domain,
+                    right_domain,
                     domain_eq,
                     expr,
                     right,
@@ -104,19 +86,8 @@ impl ParsingContext<'_, '_, '_> {
                 )?;
             } else {
                 let right = self.parse_app()?;
-                if domain.is_none() {
-                    if let Expr::Var(left_var) = &expr {
-                        domain = Some(left_var.get_type(self.context));
-                    } else if let Expr::Var(right_var) = &right {
-                        domain = Some(right_var.get_type(self.context));
-                    } else {
-                        return self
-                            .input
-                            .error(anyhow!("need to specify type of equality"));
-                    }
-                }
                 expr = self.context.lambda_handler().get_indep_eq_type(
-                    domain.unwrap(),
+                    domain,
                     expr,
                     right,
                     self.context.as_minimal(),
@@ -297,7 +268,7 @@ impl ParsingContext<'_, '_, '_> {
                 self.create_multi_dep_type(rest_params, body, kind, *rest_ctx)
             })?;
             let domain = param.type_expr.clone();
-            let prop = Expr::lambda(std::mem::take(param), rest);
+            let prop = Expr::lambda(take(param), rest);
             self.context
                 .lambda_handler()
                 .get_dep_type(domain, prop, kind, ctx)

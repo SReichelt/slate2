@@ -23,7 +23,10 @@
 //! combinators S, K, and I can be defined as let-bindings. (Of course, being equivalent really just
 //! means it is Turing-complete.)
 
-use std::fmt::{self, Debug};
+use std::{
+    fmt::{self, Debug},
+    mem::take,
+};
 
 use smallvec::{smallvec, SmallVec};
 
@@ -249,7 +252,7 @@ impl SubstInto<InnerExpr, InnerExpr> for VarApp {
                     }
                     InnerExpr::VarApp(var_app) => {
                         app.body = var_app;
-                        InnerExpr::VarApp(VarApp::App(std::mem::take(app)))
+                        InnerExpr::VarApp(VarApp::App(take(app)))
                     }
                 };
                 Some(result)

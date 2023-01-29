@@ -1,4 +1,7 @@
-use std::fmt::{self, Debug};
+use std::{
+    fmt::{self, Debug},
+    mem::take,
+};
 
 use anyhow::Result;
 use smallvec::SmallVec;
@@ -106,7 +109,7 @@ impl<SubstArg: ContextObject + Default> SubstInto<SubstArg, SubstArg> for Var {
                         if shift_start < 0 {
                             arg.shift_impl(shift_start - args_start, 0, args_end);
                         }
-                        return Some(std::mem::take(arg));
+                        return Some(take(arg));
                     }
                 }
                 if shift_start < 0 {

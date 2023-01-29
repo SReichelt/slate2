@@ -55,8 +55,8 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["∀ A : U. ∀ {B : U}. ∀ b : B. ∀ a : A. (const A {_} b) a :≡ b"],
                     },
                     DefInit {
-                        sym: "subst : Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. (Π a : A. Pi {_} (Q a)) → (Π f : Pi {_} P. Π a : A. Q a (f a))",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ {Q : (Π a : A. P a → U)}. ∀ g : (Π a : A. Pi {_} (Q a)). ∀ f : Pi {_} P. ∀ a : A. (subst {_} {_} {_} g f) a :≡ g a (f a)"],
+                        sym: "subst : Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. (Π a : A. Pi (Q a)) → (Π f : Pi P. Π a : A. Q a (f a))",
+                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ {Q : (Π a : A. P a → U)}. ∀ g : (Π a : A. Pi (Q a)). ∀ f : Pi P. ∀ a : A. (subst g f) a :≡ g a (f a)"],
                     },
                 ],
             },
@@ -67,20 +67,20 @@ pub fn get_mltt() -> MetaLogic {
                 },
                 defs: &[
                     DefInit {
-                        sym: "Sigma_intro : Π {A : U}. Π P : A → U. Π a : A. P a → Sigma {_} P",
+                        sym: "Sigma_intro : Π {A : U}. Π P : A → U. Π a : A. P a → Sigma P",
                         red: &[],
                     },
                     DefInit {
-                        sym: "Sigma_fst : Π {A : U}. Π {P : A → U}. Sigma {_} P → A",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_fst {_} {_} (Sigma_intro {_} P a b) :≡ a"],
+                        sym: "Sigma_fst : Π {A : U}. Π {P : A → U}. Sigma P → A",
+                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_fst {_} {_} (Sigma_intro P a b) :≡ a"],
                     },
                     DefInit {
-                        sym: "Sigma_snd : Π {A : U}. Π {P : A → U}. Π p : Sigma {_} P. P (Sigma_fst {_} {_} p)",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_snd {_} {_} (Sigma_intro {_} P a b) :≡ b"],
+                        sym: "Sigma_snd : Π {A : U}. Π {P : A → U}. Π p : Sigma P. P (Sigma_fst p)",
+                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. Sigma_snd {_} {_} (Sigma_intro P a b) :≡ b"],
                     },
                     DefInit {
                         sym: "Pair_intro : Π A B : U. A → B → (A × B)",
-                        red: &["Pair_intro :≡ λ A B : U. Sigma_intro {_} (λ _ : A. B)"],
+                        red: &["Pair_intro :≡ λ A B : U. Sigma_intro (λ _ : A. B)"],
                     },
                     DefInit {
                         sym: "Pair_fst : Π {A B : U}. (A × B) → A",
@@ -96,10 +96,10 @@ pub fn get_mltt() -> MetaLogic {
                 ctor: DefInit {
                     sym: "Eq : Π {A : U}. (A → A → U)",
                     red: &[
-                        "Eq {U} :≡ λ A B : U. Sigma {_} (SplitEquiv A B)",
+                        "Eq {U} :≡ λ A B : U. Sigma (SplitEquiv A B)",
                         "Eq {Unit} :≡ λ a b : Unit. Unit",
-                        "∀ {A : U}. ∀ P : A → U. Eq {Pi {_} P} :≡ λ f g : Pi {_} P. Π a : A. f a ={_} g a",
-                        "∀ {A : U}. ∀ P : A → U. Eq {Sigma {_} P} :≡ λ p q : Sigma {_} P. Σ e_fst : Sigma_fst {_} {_} p ={_} Sigma_fst {_} {_} q. Sigma_snd {_} {_} p ={P (Sigma_fst {_} {_} p)}[ap {A} {_} P {Sigma_fst {_} {_} p} {Sigma_fst {_} {_} q} e_fst]{P (Sigma_fst {_} {_} q)} Sigma_snd {_} {_} q",
+                        "∀ {A : U}. ∀ P : A → U. Eq {Pi P} :≡ λ f g : Pi P. Π a : A. f a = g a",
+                        "∀ {A : U}. ∀ P : A → U. Eq {Sigma P} :≡ λ p q : Sigma P. Σ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p ={P (Sigma_fst p)}[ap {A} {_} P {Sigma_fst p} {Sigma_fst q} e_fst]{P (Sigma_fst q)} Sigma_snd q",
                     ],
                 },
                 defs: &[
@@ -114,20 +114,20 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "refl : Π {A : U}. Π a : A. a = a",
                         red: &[
-                            "refl {U} :≡ λ A : U. Sigma_intro {_} (SplitEquiv A A) A (SplitEquiv_refl A)",
+                            "refl {U} :≡ λ A : U. Sigma_intro (SplitEquiv A A) A (SplitEquiv_refl A)",
                             "refl {Unit} :≡ λ a : Unit. unit",
-                            "∀ {A : U}. ∀ P : A → U. refl {Pi {_} P} :≡ λ f : Pi {_} P. λ a : A. refl {_} (f a)",
-                            "∀ {A : U}. ∀ P : A → U. refl {Sigma {_} P} :≡ λ p : Sigma {_} P. Sigma_intro {Sigma_fst {_} {_} p ={_} Sigma_fst {_} {_} p} (λ e_fst : Sigma_fst {_} {_} p ={_} Sigma_fst {_} {_} p. Sigma_snd {_} {_} p ={P (Sigma_fst {_} {_} p)}[ap {A} {_} P {Sigma_fst {_} {_} p} {Sigma_fst {_} {_} p} e_fst]{P (Sigma_fst {_} {_} p)} Sigma_snd {_} {_} p) (refl {_} (Sigma_fst {_} {_} p)) (refl {P (Sigma_fst {_} {_} p)} (Sigma_snd {_} {_} p))",
+                            "∀ {A : U}. ∀ P : A → U. refl {Pi P} :≡ λ f : Pi P. λ a : A. refl (f a)",
+                            "∀ {A : U}. ∀ P : A → U. refl {Sigma P} :≡ λ p : Sigma P. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst p. Sigma_snd p ={P (Sigma_fst p)}[ap {A} {_} P {Sigma_fst p} {Sigma_fst p} e_fst]{P (Sigma_fst p)} Sigma_snd p) (refl (Sigma_fst p)) (refl (Sigma_snd p))",
                         ],
                     },
                     // TODO: implement these for different equalities
                     DefInit {
                         sym: "symm : Π {A : U}. Π {a b : A}. a = b → b = a",
                         red: &[
-                            "∀ {A : U}. ∀ a : A. symm {_} {a} {a} (refl {_} a) :≡ refl {_} a",
+                            "∀ {A : U}. ∀ a : A. symm {_} {a} {a} (refl a) :≡ refl a",
                             "symm {Unit} :≡ λ {a b : Unit}. λ e : a = b. unit",
                             "symm {U} :≡ λ {A B : U}. λ e : A = B. Sigma_intro {_} (SplitEquiv B A) (middle {A} {B} e) (SplitEquiv_symm {A} {B} {middle {A} {B} e} (split {A} {B} e))",
-                            "∀ {A : U}. ∀ P : A → U. symm {Pi {_} P} :≡ λ {f g : Pi {_} P}. λ e : f = g. λ a : A. symm {_} {f a} {g a} (e a)",
+                            "∀ {A : U}. ∀ P : A → U. symm {Pi P} :≡ λ {f g : Pi P}. λ e : f = g. λ a : A. symm {_} {f a} {g a} (e a)",
                             // TODO
                             //"∀ {A : U}. ∀ P : A → U. symm {Sigma P} :≡ λ {p q : Sigma P}. λ e : p = q. Sigma_intro _ _ (symm (Sigma_fst e)) (symm (Sigma_snd e))",
                         ],
@@ -135,11 +135,11 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "trans : Π {A : U}. Π {a b c : A}. a = b → b = c → a = c",
                         red: &[
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {a} {b} (refl {_} a) e :≡ e",
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {b} {b} e (refl {_} b) :≡ e",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {a} {b} (refl a) e :≡ e",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {b} {b} e (refl b) :≡ e",
                             "trans {U} :≡ λ {A B C : U}. λ e : A = B. λ f : B = C. Sigma_intro {_} (SplitEquiv A C) B (SplitEquiv_trans {A} {B} {C} {middle {A} {B} e} {middle {B} {C} f} (split {A} {B} e) (split {B} {C} f))",
                             "trans {Unit} :≡ λ {a b c : Unit}. λ eab : a = b. λ ebc : b = c. unit",
-                            "∀ {A : U}. ∀ P : A → U. trans {Pi {_} P} :≡ λ {f g h : Pi {_} P}. λ efg : f = g. λ egh : g = h. λ a : A. trans {_} {f a} {g a} {h a} (efg a) (egh a)",
+                            "∀ {A : U}. ∀ P : A → U. trans {Pi P} :≡ λ {f g h : Pi P}. λ efg : f = g. λ egh : g = h. λ a : A. trans {_} {f a} {g a} {h a} (efg a) (egh a)",
                             // TODO
                         ],
                     },
@@ -228,17 +228,17 @@ pub fn get_mltt() -> MetaLogic {
         ],
         &[
             DefInit {
-                sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi {_} P. Π {a a' : A}. Π e : a = a'. f a ={P a}[ap {A} {_} P {a} {a'} e]{P a'} f a'",
+                sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a ={P a}[ap {A} {_} P {a} {a'} e]{P a'} f a'",
                 red: &[
-                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi {_} P. ∀ a : A. apd {A} {_} f {a} {a} (refl {_} a) :≡ refl {_} (f a)",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd {A} {_} f {a} {a} (refl a) :≡ refl (f a)",
                     "∀ {A : U}. apd {A} {_} (id A) :≡ λ {a a' : A}. λ e : a = a'. e",
-                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd {A} {_} (const A {_} b) :≡ λ {a a' : A}. λ e : a = a'. refl {_} b",
+                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd {A} {_} (const A b) :≡ λ {a a' : A}. λ e : a = a'. refl b",
                     "∀ A B : U. apd {B} {_} (const A {B}) :≡ λ {b b' : B}. λ e : b = b'. λ a : A. e",
                     // TODO: lots more
                 ],
             },
             DefInit {
-                sym: "ap : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a ={_} f a'",
+                sym: "ap : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
                 red: &["ap :≡ λ {A B : U}. apd {A} {λ _ : A. B}"],
             },
         ],
@@ -443,6 +443,11 @@ mod tests {
             mltt.print_expr(&const_cmb.type_expr),
             "Π A : U. Π {B : U}. B → A → B"
         );
+
+        dbg!(mltt.get_root_context().constants()
+            [mltt.get_root_context().get_var_index("const", 0).unwrap() as usize]
+            .reduction_rules[0]
+            .print(&mltt.get_root_context()));
 
         let subst_cmb = mltt.get_constant("subst").unwrap();
         assert_eq!(
