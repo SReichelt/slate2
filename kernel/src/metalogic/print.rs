@@ -7,6 +7,7 @@ use crate::generic::{context::*, expr_parts::*};
 pub struct PrintingContext<'a, 'b, W: fmt::Write> {
     output: &'a mut W,
     context: &'a MetaLogicContext<'b>,
+    include_all_implicit_args: bool,
 }
 
 impl<W: fmt::Write> PrintingContext<'_, '_, W> {
@@ -18,6 +19,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         let mut printing_context = PrintingContext {
             output: result,
             context: ctx,
+            include_all_implicit_args: ctx.print_all_implicit_args(),
         };
         f(&mut printing_context)
     }
@@ -75,9 +77,20 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 if parens_for_app {
                     self.output.write_char('(')?;
                 }
-                self.print_expr_with_parens(&app.body, false, true, true, true, true)?;
+                let mut fun = &app.body;
+                let arg = &app.param;
+                if !arg.implicit && !self.include_all_implicit_args {
+                    while let Expr::App(fun_app) = fun {
+                        if fun_app.param.implicit {
+                            fun = &fun_app.body;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.print_expr_with_parens(fun, false, true, true, true, true)?;
                 self.output.write_char(' ')?;
-                self.print_arg(&app.param)?;
+                self.print_arg(arg)?;
                 if parens_for_app {
                     self.output.write_char(')')?;
                 }
@@ -115,6 +128,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             let mut body_printing_ctx = PrintingContext {
                 output: self.output,
                 context: body_ctx,
+                include_all_implicit_args: self.include_all_implicit_args,
             };
             body_printing_ctx.print_expr_with_parens(&lambda.body, false, false, false, true, false)
         })
@@ -143,6 +157,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 let mut rest_printing_ctx = PrintingContext {
                     output: self.output,
                     context: rest_ctx,
+                    include_all_implicit_args: self.include_all_implicit_args,
                 };
                 rest_printing_ctx.print_params(rest, prefix)
             })?;
@@ -216,7 +231,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     self.print_expr_with_parens(left, false, true, true, true, true)?;
                     self.output.write_char(' ')?;
                     self.output.write_char('=')?;
-                    if !(left.is_var() || right.is_var()) {
+                    if self.include_all_implicit_args {
                         self.output.write_char('{')?;
                         self.print_expr(domain)?;
                         self.output.write_char('}')?;
@@ -258,7 +273,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     self.print_expr_with_parens(left, false, true, true, true, true)?;
                     self.output.write_char(' ')?;
                     self.output.write_char('=')?;
-                    if !(left.is_var()) {
+                    if self.include_all_implicit_args {
                         self.output.write_char('{')?;
                         self.print_expr(left_domain)?;
                         self.output.write_char('}')?;
@@ -266,7 +281,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     self.output.write_char('[')?;
                     self.print_expr(domain_eq)?;
                     self.output.write_char(']')?;
-                    if !(right.is_var()) {
+                    if self.include_all_implicit_args {
                         self.output.write_char('{')?;
                         self.print_expr(right_domain)?;
                         self.output.write_char('}')?;
@@ -290,6 +305,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             let mut body_printing_ctx = PrintingContext {
                 output: self.output,
                 context: body_ctx,
+                include_all_implicit_args: self.include_all_implicit_args,
             };
             body_printing_ctx.print_reduction_body(&rule.body)
         })

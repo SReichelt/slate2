@@ -222,14 +222,17 @@ impl<Ctx: Context> ContextObjectWithCmp<Ctx> for () {
     }
 }
 
-pub trait ContextObjectWithSubstCmp<SubstArg, Ctx: Context>:
+pub trait CanBeEmpty {
+    fn is_empty(&self) -> bool;
+}
+
+pub trait ContextObjectWithSubstCmp<SubstArg: CanBeEmpty, Ctx: Context>:
     ContextObjectWithSubst<SubstArg> + ContextObjectWithCmp<Ctx>
 {
     fn substitute_and_shift_and_compare_impl(
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
@@ -239,48 +242,34 @@ pub trait ContextObjectWithSubstCmp<SubstArg, Ctx: Context>:
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
         debug_assert_eq!(subst_ctx.subcontext_shift(ctx), -(args.len() as VarIndex));
         debug_assert!(subst_ctx.subcontext_shift(target_subctx) <= 0);
-        self.substitute_and_shift_and_compare_impl(
-            ctx,
-            args,
-            args_filled,
-            subst_ctx,
-            target,
-            target_subctx,
-        )
+        self.substitute_and_shift_and_compare_impl(ctx, args, subst_ctx, target, target_subctx)
     }
 
     /// Performs substitution like `substitute`, but compares the result against `target` instead of
-    /// mutating. Arguments may optionally be omitted by setting the corresponding item of
-    /// `args_filled` to `false`. Whenever such an argument is encountered during comparison, it is
-    /// filled with the corresponding part of `target`, and the associated `args_filled` item is set
-    /// to `true`.
-    ///
-    /// If `args_filled` is shorter than `args`, all remaining arguments are assumed to be filled.
+    /// mutating. `SubstArg::default()` indicates missing arguments. Whenever such an argument is
+    /// encountered during comparison, it is filled with the corresponding part of `target`.
     fn substitute_and_compare(
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         target: &Self,
         subst_ctx: &Ctx,
     ) -> Result<bool> {
-        self.substitute_and_shift_and_compare(ctx, args, args_filled, subst_ctx, target, subst_ctx)
+        self.substitute_and_shift_and_compare(ctx, args, subst_ctx, target, subst_ctx)
     }
 }
 
-impl<SubstArg, Ctx: Context> ContextObjectWithSubstCmp<SubstArg, Ctx> for () {
+impl<SubstArg: CanBeEmpty, Ctx: Context> ContextObjectWithSubstCmp<SubstArg, Ctx> for () {
     fn substitute_and_shift_and_compare_impl(
         &self,
         _: &Ctx,
         _: &mut [SubstArg],
-        _: &mut [bool],
         _: &Ctx,
         _: &Self,
         _: &Ctx,
@@ -299,12 +288,11 @@ pub trait SubstInto<SubstArg, SubstResult> {
     ) -> Option<SubstResult>;
 }
 
-pub trait SubstCmpInto<SubstArg, SubstResult, Ctx: Context> {
+pub trait SubstCmpInto<SubstArg: CanBeEmpty, SubstResult, Ctx: Context> {
     fn compare_subst_arg_impl(
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &SubstResult,
         target_subctx: &Ctx,

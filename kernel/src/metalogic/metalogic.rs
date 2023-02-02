@@ -19,6 +19,7 @@ pub struct MetaLogic {
     constants: Vec<Constant>,
     lambda_handler: Box<dyn LambdaHandler>,
     initialized: bool,
+    pub print_all_implicit_args: bool,
 }
 
 impl MetaLogic {
@@ -52,6 +53,7 @@ impl MetaLogic {
                 .collect(),
             lambda_handler,
             initialized: false,
+            print_all_implicit_args: true,
         };
 
         let mut idx = 0;
@@ -86,6 +88,7 @@ impl MetaLogic {
         metalogic.fill_placeholders()?;
 
         metalogic.initialized = true;
+        metalogic.print_all_implicit_args = false;
         Ok(metalogic)
     }
 
@@ -150,7 +153,7 @@ impl MetaLogic {
 
     fn manipulate_exprs<Manipulator: MetaLogicManipulator>(
         &mut self,
-        manipulator: &mut Manipulator,
+        manipulator: &Manipulator,
     ) -> Result<()> {
         let mut new_constants = Vec::with_capacity(self.constants.len());
         let mut errors = Vec::new();
@@ -201,13 +204,16 @@ impl MetaLogic {
     }
 
     fn insert_implicit_args(&mut self) -> Result<()> {
-        self.manipulate_exprs(&mut ImplicitArgInserter {
+        self.manipulate_exprs(&ImplicitArgInserter {
             max_depth: self.lambda_handler.implicit_arg_max_depth(),
         })
     }
 
     fn fill_placeholders(&mut self) -> Result<()> {
-        self.manipulate_exprs(&mut PlaceholderFiller)
+        self.manipulate_exprs(&PlaceholderFiller {
+            force: true,
+            max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
+        })
     }
 
     pub fn check_type_of_types(&self) -> Result<()> {
@@ -316,6 +322,10 @@ impl MetaLogicContext<'_> {
 
     pub fn lambda_handler(&self) -> &dyn LambdaHandler {
         self.globals().lambda_handler.as_ref()
+    }
+
+    pub fn print_all_implicit_args(&self) -> bool {
+        self.globals().print_all_implicit_args
     }
 }
 
@@ -627,6 +637,7 @@ pub trait LambdaHandler {
     }
 
     fn implicit_arg_max_depth(&self) -> u32;
+    fn placeholder_max_reduction_depth(&self) -> u32;
 }
 
 pub trait MetaLogicVisitorBase {
@@ -699,45 +710,45 @@ impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitor for DeepExprV
 }
 
 pub trait MetaLogicManipulator: MetaLogicVisitorBase + ExprManipulator {
-    fn reduction_rule(&mut self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn reduction_body(&mut self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_body(&self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 }
 
 impl MetaLogicManipulator for ImplicitArgInserter {
-    fn reduction_rule(&mut self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
         self.params(&mut rule.params, ctx)?;
         ctx.with_locals(&rule.params, |body| {
             self.reduction_body(&mut rule.body, body)
         })
     }
 
-    fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
         let source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
         let target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
 
         let (_, source_app_len) = body.source.get_app_info();
         body.source_app_len = source_app_len;
 
-        Expr::match_type_arg_implicitness(&source_type, &target_type, ctx)
+        Expr::check_type_arg_implicitness(&source_type, &target_type, ctx)
     }
 }
 
 impl MetaLogicManipulator for PlaceholderFiller {
-    fn reduction_rule(&mut self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
         self.params(&mut rule.params, ctx)?;
         ctx.with_locals(&rule.params, |body| {
             self.reduction_body(&mut rule.body, body)
         })
     }
 
-    fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        let source_type = self.fill_placeholders(&mut body.source, Expr::Placeholder, true, ctx)?;
-        self.fill_placeholders(&mut body.target, source_type, true, ctx)?;
+    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+        let source_type = self.fill_placeholders(&mut body.source, Expr::Placeholder, ctx)?;
+        self.fill_placeholders(&mut body.target, source_type, ctx)?;
         Ok(())
     }
 }

@@ -123,14 +123,13 @@ impl<SubstArg: ContextObject + Default> SubstInto<SubstArg, SubstArg> for Var {
     }
 }
 
-impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
+impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default + CanBeEmpty>
     SubstCmpInto<SubstArg, SubstArg, Ctx> for Var
 {
     fn compare_subst_arg_impl(
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &SubstArg,
         target_subctx: &Ctx,
@@ -146,21 +145,13 @@ impl<Ctx: Context, SubstArg: ContextObjectWithCmp<Ctx> + Default>
             if idx < args_end {
                 let array_idx = (idx - args_start) as usize;
                 let arg = &mut args[array_idx];
-                if array_idx < args_filled.len() {
-                    let filled = &mut args_filled[array_idx];
-                    if !*filled {
-                        let arg_shift = subst_ctx.subcontext_shift(target_subctx);
-                        if target.has_refs_impl(arg_shift, 0) {
-                            return Some(Ok(false));
-                        }
-                        *filled = true;
-                        *arg = target.shifted_impl(
-                            target_subctx.locals_start(),
-                            arg_shift,
-                            -arg_shift,
-                        );
-                        return Some(Ok(true));
+                if arg.is_empty() {
+                    let arg_shift = subst_ctx.subcontext_shift(target_subctx);
+                    if target.has_refs_impl(arg_shift, 0) {
+                        return Some(Ok(false));
                     }
+                    *arg = target.shifted_impl(target_subctx.locals_start(), arg_shift, -arg_shift);
+                    return Some(Ok(true));
                 }
                 return Some(arg.shift_and_compare(subst_ctx, target, target_subctx));
             }
@@ -319,7 +310,7 @@ impl<
 }
 
 impl<
-        SubstArg,
+        SubstArg: CanBeEmpty,
         Ctx: ParamContext<Param>,
         Param: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Body: ContextObjectWithSubstCmp<SubstArg, Ctx>,
@@ -329,7 +320,6 @@ impl<
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
@@ -337,7 +327,6 @@ impl<
         if !self.param.substitute_and_shift_and_compare_impl(
             ctx,
             args,
-            args_filled,
             subst_ctx,
             &target.param,
             target_subctx,
@@ -349,7 +338,6 @@ impl<
                 self.body.substitute_and_shift_and_compare_impl(
                     body_ctx,
                     args,
-                    args_filled,
                     subst_ctx,
                     &target.body,
                     target_body_ctx,
@@ -392,7 +380,7 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
 }
 
 impl<
-        SubstArg,
+        SubstArg: CanBeEmpty,
         Ctx: Context,
         Fun: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Arg: ContextObjectWithSubstCmp<SubstArg, Ctx>,
@@ -402,7 +390,6 @@ impl<
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
@@ -410,7 +397,6 @@ impl<
         if !self.param.substitute_and_shift_and_compare_impl(
             ctx,
             args,
-            args_filled,
             subst_ctx,
             &target.param,
             target_subctx,
@@ -420,7 +406,6 @@ impl<
         self.body.substitute_and_shift_and_compare_impl(
             ctx,
             args,
-            args_filled,
             subst_ctx,
             &target.body,
             target_subctx,
@@ -566,7 +551,7 @@ impl<
 }
 
 impl<
-        SubstArg,
+        SubstArg: CanBeEmpty,
         Ctx: ParamContext<Param>,
         Param: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Body: ContextObjectWithSubstCmp<SubstArg, Ctx>,
@@ -576,7 +561,6 @@ impl<
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
@@ -591,7 +575,6 @@ impl<
                     param.substitute_and_shift_and_compare_impl(
                         param_ctx,
                         args,
-                        args_filled,
                         subst_ctx,
                         target_param,
                         target_param_ctx,
@@ -607,7 +590,6 @@ impl<
                 self.body.substitute_and_shift_and_compare_impl(
                     body_ctx,
                     args,
-                    args_filled,
                     subst_ctx,
                     &target.body,
                     target_body_ctx,
@@ -665,7 +647,7 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
 }
 
 impl<
-        SubstArg,
+        SubstArg: CanBeEmpty,
         Ctx: Context,
         Fun: ContextObjectWithSubstCmp<SubstArg, Ctx>,
         Arg: ContextObjectWithSubstCmp<SubstArg, Ctx>,
@@ -675,7 +657,6 @@ impl<
         &self,
         ctx: &Ctx,
         args: &mut [SubstArg],
-        args_filled: &mut [bool],
         subst_ctx: &Ctx,
         target: &Self,
         target_subctx: &Ctx,
@@ -687,7 +668,6 @@ impl<
             if !param.substitute_and_shift_and_compare_impl(
                 ctx,
                 args,
-                args_filled,
                 subst_ctx,
                 target_param,
                 target_subctx,
@@ -698,7 +678,6 @@ impl<
         self.body.substitute_and_shift_and_compare_impl(
             ctx,
             args,
-            args_filled,
             subst_ctx,
             &target.body,
             target_subctx,

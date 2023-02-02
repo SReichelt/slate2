@@ -99,7 +99,7 @@ pub fn get_mltt() -> MetaLogic {
                         "Eq {U} :≡ λ A B : U. Sigma (SplitEquiv A B)",
                         "Eq {Unit} :≡ λ a b : Unit. Unit",
                         "∀ {A : U}. ∀ P : A → U. Eq {Pi P} :≡ λ f g. Π a : A. f a = g a",
-                        "∀ {A : U}. ∀ P : A → U. Eq {Sigma P} :≡ λ p q. Σ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p ={P (Sigma_fst p)}[ap {A} {_} P {Sigma_fst p} {Sigma_fst q} e_fst]{P (Sigma_fst q)} Sigma_snd q",
+                        "∀ {A : U}. ∀ P : A → U. Eq {Sigma P} :≡ λ p q. Σ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q",
                     ],
                 },
                 defs: &[
@@ -108,7 +108,7 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["middle :≡ λ {A B}. Sigma_fst {U} {SplitEquiv A B}"],
                     },
                     DefInit {
-                        sym: "split : Π {A B : U}. Π e : A = B. SplitEquiv A B (middle {A} {B} e)",
+                        sym: "split : Π {A B : U}. Π e : A = B. SplitEquiv A B (middle e)",
                         red: &["split :≡ λ {A B}. Sigma_snd {U} {SplitEquiv A B}"],
                     },
                     DefInit {
@@ -117,29 +117,28 @@ pub fn get_mltt() -> MetaLogic {
                             "refl {U} :≡ λ A : U. Sigma_intro (SplitEquiv A A) A (SplitEquiv_refl A)",
                             "refl {Unit} :≡ λ _. unit",
                             "∀ {A : U}. ∀ P : A → U. refl {Pi P} :≡ λ f. λ a : A. refl (f a)",
-                            "∀ {A : U}. ∀ P : A → U. refl {Sigma P} :≡ λ p. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst p. Sigma_snd p ={P (Sigma_fst p)}[ap {A} {_} P {Sigma_fst p} {Sigma_fst p} e_fst]{P (Sigma_fst p)} Sigma_snd p) (refl (Sigma_fst p)) (refl (Sigma_snd p))",
+                            "∀ {A : U}. ∀ P : A → U. refl {Sigma P} :≡ λ p. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst p. Sigma_snd p =[ap P e_fst] Sigma_snd p) (refl (Sigma_fst p)) (refl (Sigma_snd p))",
                         ],
                     },
-                    // TODO: implement these for different equalities
                     DefInit {
                         sym: "symm : Π {A : U}. Π {a b : A}. a = b → b = a",
                         red: &[
-                            "∀ {A : U}. ∀ a : A. symm {_} {a} {a} (refl a) :≡ refl a",
+                            "∀ {A : U}. ∀ a : A. symm (refl a) :≡ refl a",
                             "symm {Unit} :≡ λ {_ _}. λ _. unit",
-                            "symm {U} :≡ λ {A B}. λ e. Sigma_intro (SplitEquiv B A) (middle {A} {B} e) (SplitEquiv_symm {A} {B} {middle {A} {B} e} (split {A} {B} e))",
-                            "∀ {A : U}. ∀ P : A → U. symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm {_} {f a} {g a} (e a)",
+                            "symm {U} :≡ λ {A B}. λ e. Sigma_intro (SplitEquiv B A) (middle e) (SplitEquiv_symm (split e))",
+                            "∀ {A : U}. ∀ P : A → U. symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
                             // TODO
-                            //"∀ {A : U}. ∀ P : A → U. symm {Sigma P} :≡ λ {p q : Sigma P}. λ e : p = q. Sigma_intro _ _ (symm (Sigma_fst e)) (symm (Sigma_snd e))",
+                            //"∀ {A : U}. ∀ P : A → U. symm {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = Sigma_fst p. Sigma_snd q =[ap P e_fst] Sigma_snd p) (symm {_} {Sigma_fst p} {Sigma_fst q} (Sigma_fst {_} {λ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q} e)) (DepEq_symm {_} {_} {ap P {Sigma_fst p} {Sigma_fst q} (Sigma_fst {_} {λ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q} e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd {_} {λ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q} e))",
                         ],
                     },
                     DefInit {
                         sym: "trans : Π {A : U}. Π {a b c : A}. a = b → b = c → a = c",
                         red: &[
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {a} {b} (refl a) e :≡ e",
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans {_} {a} {b} {b} e (refl b) :≡ e",
-                            "trans {U} :≡ λ {A B C}. λ e f. Sigma_intro (SplitEquiv A C) B (SplitEquiv_trans {A} {B} {C} {middle {A} {B} e} {middle {B} {C} f} (split {A} {B} e) (split {B} {C} f))",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans (refl a) e :≡ e",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans e (refl b) :≡ e",
+                            "trans {U} :≡ λ {A B C}. λ e f. Sigma_intro (SplitEquiv A C) B (SplitEquiv_trans (split e) (split f))",
                             "trans {Unit} :≡ λ {_ _ _}. λ _ _. unit",
-                            "∀ {A : U}. ∀ P : A → U. trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans {_} {f a} {g a} {h a} (efg a) (egh a)",
+                            "∀ {A : U}. ∀ P : A → U. trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans (efg a) (egh a)",
                             // TODO
                         ],
                     },
@@ -149,12 +148,22 @@ pub fn get_mltt() -> MetaLogic {
             TypeInit {
                 ctor: DefInit {
                     sym: "DepEq : Π {A B : U}. A = B → A → B → U",
-                    red: &[
-                        "DepEq :≡ λ {A B}. λ e a b. QuasiEquiv_to {A} {middle {A} {B} e} (SplitEquiv_left {A} {B} {middle {A} {B} e} (split {A} {B} e)) a ={middle {A} {B} e} QuasiEquiv_to {B} {middle {A} {B} e} (SplitEquiv_right {A} {B} {middle {A} {B} e} (split {A} {B} e)) b"
-                    ],
+                    red: &["DepEq :≡ λ {A B}. λ eAB a b. QuasiEquiv_to (SplitEquiv_left (split eAB)) a = QuasiEquiv_to (SplitEquiv_right (split eAB)) b"],
                 },
                 defs: &[
-                    // TODO: symm, trans
+                    DefInit {
+                        sym: "DepEq_refl : Π {A : U}. Π a : A. a =[refl A] a",
+                        red: &["DepEq_refl :≡ refl"],
+                    },
+                    DefInit {
+                        sym: "DepEq_symm : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. a =[eAB] b → b =[symm eAB] a",
+                        red: &["DepEq_symm :≡ λ {A B eAB a b}. symm {middle eAB} {QuasiEquiv_to (SplitEquiv_left (split eAB)) a} {QuasiEquiv_to (SplitEquiv_right (split eAB)) b}"],
+                    },
+                    DefInit {
+                        sym: "DepEq_trans : Π {A B C : U}. Π {eAB : A = B}. Π {eBC : B = C}. Π {a : A}. Π {b : B}. Π {c : C}. a =[eAB] b → b =[eBC] c → a =[trans eAB eBC] c",
+                        // (Note that the middle will be b : B. So we need to shift both equalities to B)
+                        red: &[/*"DepEq_trans :≡ λ {A B C eAB eBC a b c}. _"*/],
+                    },
                 ],
             },
             TypeInit {
@@ -164,8 +173,8 @@ pub fn get_mltt() -> MetaLogic {
                 },
                 defs: &[
                     DefInit {
-                        sym: "QuasiEquiv_intro : Π A B : U. (A → B) → (B → A) → QuasiEquiv A B",
-                        red: &["QuasiEquiv_intro :≡ λ A B. Pair_intro (A → B) (B → A)"],
+                        sym: "QuasiEquiv_intro : Π {A B : U}. (A → B) → (B → A) → QuasiEquiv A B",
+                        red: &["QuasiEquiv_intro :≡ λ {A B}. Pair_intro (A → B) (B → A)"],
                     },
                     DefInit {
                         sym: "QuasiEquiv_to : Π {A B : U}. QuasiEquiv A B → A → B",
@@ -177,15 +186,15 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "QuasiEquiv_refl : Π A : U. QuasiEquiv A A",
-                        red: &["QuasiEquiv_refl :≡ λ A. QuasiEquiv_intro A A (id A) (id A)"],
+                        red: &["QuasiEquiv_refl :≡ λ A. QuasiEquiv_intro (id A) (id A)"],
                     },
                     DefInit {
                         sym: "QuasiEquiv_symm : Π {A B : U}. QuasiEquiv A B → QuasiEquiv B A",
-                        red: &["QuasiEquiv_symm :≡ λ {A B}. λ e. QuasiEquiv_intro B A (QuasiEquiv_inv {A} {B} e) (QuasiEquiv_to {A} {B} e)"],
+                        red: &["QuasiEquiv_symm :≡ λ {A B}. λ e. QuasiEquiv_intro (QuasiEquiv_inv e) (QuasiEquiv_to e)"],
                     },
                     DefInit {
                         sym: "QuasiEquiv_trans : Π {A B C : U}. QuasiEquiv A B → QuasiEquiv B C → QuasiEquiv A C",
-                        red: &["QuasiEquiv_trans :≡ λ {A B C}. λ e f. QuasiEquiv_intro A C (λ a. QuasiEquiv_to {B} {C} f (QuasiEquiv_to {A} {B} e a)) (λ c. QuasiEquiv_inv {A} {B} e (QuasiEquiv_inv {B} {C} f c))"],
+                        red: &["QuasiEquiv_trans :≡ λ {A B C}. λ e f. QuasiEquiv_intro (λ a. QuasiEquiv_to f (QuasiEquiv_to e a)) (λ c. QuasiEquiv_inv e (QuasiEquiv_inv f c))"],
                     },
                 ],
             },
@@ -196,8 +205,8 @@ pub fn get_mltt() -> MetaLogic {
                 },
                 defs: &[
                     DefInit {
-                        sym: "SplitEquiv_intro : Π A B X : U. QuasiEquiv A X → QuasiEquiv B X → SplitEquiv A B X",
-                        red: &["SplitEquiv_intro :≡ λ A B X. Pair_intro (QuasiEquiv A X) (QuasiEquiv B X)"],
+                        sym: "SplitEquiv_intro : Π {A B X : U}. QuasiEquiv A X → QuasiEquiv B X → SplitEquiv A B X",
+                        red: &["SplitEquiv_intro :≡ λ {A B X}. Pair_intro (QuasiEquiv A X) (QuasiEquiv B X)"],
                     },
                     DefInit {
                         sym: "SplitEquiv_left : Π {A B X : U}. SplitEquiv A B X → QuasiEquiv A X",
@@ -209,31 +218,31 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "SplitEquiv_to_QuasiEquiv : Π {A B X : U}. SplitEquiv A B X → QuasiEquiv A B",
-                        red: &["SplitEquiv_to_QuasiEquiv :≡ λ {A B X}. λ e. QuasiEquiv_trans {A} {X} {B} (SplitEquiv_left {A} {B} {X} e) (QuasiEquiv_symm {B} {X} (SplitEquiv_right {A} {B} {X} e))"],
+                        red: &["SplitEquiv_to_QuasiEquiv :≡ λ {A B X}. λ e. QuasiEquiv_trans (SplitEquiv_left e) (QuasiEquiv_symm (SplitEquiv_right e))"],
                     },
                     DefInit {
                         sym: "SplitEquiv_refl : Π A : U. SplitEquiv A A A",
-                        red: &["SplitEquiv_refl :≡ λ A. SplitEquiv_intro A A A (QuasiEquiv_refl A) (QuasiEquiv_refl A)"],
+                        red: &["SplitEquiv_refl :≡ λ A. SplitEquiv_intro (QuasiEquiv_refl A) (QuasiEquiv_refl A)"],
                     },
                     DefInit {
                         sym: "SplitEquiv_symm : Π {A B X : U}. SplitEquiv A B X → SplitEquiv B A X",
-                        red: &["SplitEquiv_symm :≡ λ {A B X}. λ e. SplitEquiv_intro B A X (SplitEquiv_right {A} {B} {X} e) (SplitEquiv_left {A} {B} {X} e)"],
+                        red: &["SplitEquiv_symm :≡ λ {A B X}. λ e. SplitEquiv_intro (SplitEquiv_right e) (SplitEquiv_left e)"],
                     },
                     DefInit {
                         sym: "SplitEquiv_trans : Π {A B C X Y : U}. SplitEquiv A B X → SplitEquiv B C Y → SplitEquiv A C B",
-                        red: &["SplitEquiv_trans :≡ λ {A B C X Y}. λ e f. SplitEquiv_intro A C B (SplitEquiv_to_QuasiEquiv {A} {B} {X} e) (SplitEquiv_to_QuasiEquiv {C} {B} {Y} (SplitEquiv_symm {B} {C} {Y} f))"],
+                        red: &["SplitEquiv_trans :≡ λ {A B C X Y}. λ e f. SplitEquiv_intro (SplitEquiv_to_QuasiEquiv e) (SplitEquiv_to_QuasiEquiv (SplitEquiv_symm f))"],
                     },
                 ],
             },
         ],
         &[
             DefInit {
-                sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a ={P a}[ap {A} {_} P {a} {a'} e]{P a'} f a'",
+                sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
                 red: &[
-                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd {A} {_} f {a} {a} (refl a) :≡ refl (f a)",
-                    "∀ {A : U}. apd {A} {_} (id A) :≡ λ {a a'}. λ e. e",
-                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd {A} {_} (const A b) :≡ λ {a a'}. λ e. refl b",
-                    "∀ A B : U. apd {B} {_} (const A {B}) :≡ λ {b b'}. λ e. λ a : A. e",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd f (refl a) :≡ DepEq_refl (f a)",
+                    "∀ {A : U}. apd (id A) :≡ λ {a a'}. λ e. e",
+                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd (const A b) :≡ λ {a a'}. λ e. DepEq_refl b",
+                    "∀ A B : U. apd (const A {B}) :≡ λ {b b'}. λ e. λ a : A. e",
                     // TODO: lots more
                 ],
             },
@@ -416,6 +425,10 @@ impl LambdaHandler for MLTTLambdaHandler {
     fn implicit_arg_max_depth(&self) -> u32 {
         1
     }
+
+    fn placeholder_max_reduction_depth(&self) -> u32 {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -428,7 +441,8 @@ mod tests {
 
     #[test]
     fn test_basics() -> Result<()> {
-        let mltt = get_mltt();
+        let mut mltt = get_mltt();
+        mltt.print_all_implicit_args = true;
 
         let univ = mltt.parse_expr("U")?;
 
@@ -448,6 +462,18 @@ mod tests {
         assert_eq!(
             mltt.print_expr(&subst_cmb.type_expr),
             "Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. (Π a : A. Pi {P a} (Q a)) → (Π f : Pi {A} P. Π a : A. Q a (f a))"
+        );
+
+        let refl = mltt.get_constant("refl").unwrap();
+        assert_eq!(
+            mltt.print_expr(&refl.type_expr),
+            "Π {A : U}. Π a : A. a ={A} a"
+        );
+
+        let symm = mltt.get_constant("symm").unwrap();
+        assert_eq!(
+            mltt.print_expr(&symm.type_expr),
+            "Π {A : U}. Π {a : A}. Π {b : A}. a ={A} b → b ={A} a"
         );
 
         let mut id_ctor = mltt.parse_expr("λ A : U. A")?;
