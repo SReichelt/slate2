@@ -1150,18 +1150,8 @@ impl PlaceholderFiller {
                 let arg = &mut app.param;
 
                 let initial_arg_type = self.try_fill_placeholders(&mut arg.expr, ctx)?;
-                let expected_param = Param {
-                    name: None,
-                    type_expr: initial_arg_type.clone(),
-                    implicit: arg.implicit,
-                };
-                let expected_fun_type = ctx.lambda_handler().get_dep_type(
-                    initial_arg_type,
-                    Expr::lambda(expected_param, Expr::Placeholder),
-                    DependentTypeCtorKind::Pi,
-                    ctx.as_minimal(),
-                )?;
-
+                let expected_fun_type =
+                    Self::get_expected_fun_type(initial_arg_type, arg.implicit, ctx)?;
                 self.fill_fun_placeholders(fun, arg, &expected_fun_type, ctx)?;
 
                 let mut fun_type = self.fill_placeholders(fun, expected_fun_type, ctx)?;
@@ -1214,6 +1204,24 @@ impl PlaceholderFiller {
         }
     }
 
+    fn get_expected_fun_type(
+        initial_arg_type: Expr,
+        implicit: bool,
+        ctx: &MetaLogicContext,
+    ) -> Result<Expr> {
+        let expected_param = Param {
+            name: None,
+            type_expr: initial_arg_type.clone(),
+            implicit,
+        };
+        ctx.lambda_handler().get_dep_type(
+            initial_arg_type,
+            Expr::lambda(expected_param, Expr::Placeholder),
+            DependentTypeCtorKind::Pi,
+            ctx.as_minimal(),
+        )
+    }
+
     fn fill_fun_placeholders(
         &self,
         fun: &mut Expr,
@@ -1230,7 +1238,8 @@ impl PlaceholderFiller {
                     //dbg!(
                     //    "apply",
                     //    fun.print(ctx),
-                    //    innermost_fun_type.print(ctx_with_params)
+                    //    innermost_fun_type.print(ctx_with_params),
+                    //    expected_fun_type.print(ctx)
                     //);
                     innermost_fun_type.substitute_and_compare(
                         ctx_with_params,
@@ -1239,12 +1248,39 @@ impl PlaceholderFiller {
                         ctx,
                     )
                 })? {
-                    self.apply_args(fun, fun_args);
+                    Self::apply_args(fun, fun_args);
                     //dbg!("applied", fun.print(ctx));
+                } else {
+                    //dbg!(
+                    //    "compare fail",
+                    //    fun.print(ctx),
+                    //    fun_params
+                    //        .iter()
+                    //        .map(|param| param.get_name_or_placeholder())
+                    //        .collect::<Vec<&str>>(),
+                    //    ctx.with_locals(&fun_params, |ctx_with_params| innermost_fun_type
+                    //        .print(ctx_with_params)),
+                    //    expected_fun_type.print(ctx)
+                    //);
+                    if self.max_reduction_depth > 0 {
+                        //dbg!("reduce");
+                        let mut initial_arg_type =
+                            self.try_fill_placeholders(&mut arg.expr, ctx)?;
+                        if initial_arg_type.apply_one_reduction_rule(ctx)? {
+                            //dbg!(initial_arg_type.print(ctx));
+                            let expected_fun_type =
+                                Self::get_expected_fun_type(initial_arg_type, arg.implicit, ctx)?;
+                            let sub_filler = PlaceholderFiller {
+                                max_reduction_depth: self.max_reduction_depth - 1,
+                                ..*self
+                            };
+                            sub_filler.fill_fun_placeholders(fun, arg, &expected_fun_type, ctx)?;
+                            //dbg!("result", fun.print(ctx), arg.expr.print(ctx));
+                        }
+                    }
                 }
             }
         }
-
         Ok(())
     }
 
@@ -1275,7 +1311,7 @@ impl PlaceholderFiller {
         }
     }
 
-    fn apply_args(&self, mut expr: &mut Expr, mut args: SmallVec<[Expr; INLINE_PARAMS]>) {
+    fn apply_args(mut expr: &mut Expr, mut args: SmallVec<[Expr; INLINE_PARAMS]>) {
         while let Expr::App(app) = expr {
             if let Some(value) = args.pop() {
                 app.param.expr = value;

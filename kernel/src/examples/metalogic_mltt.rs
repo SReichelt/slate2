@@ -127,8 +127,7 @@ pub fn get_mltt() -> MetaLogic {
                             "symm {Unit} :≡ λ {_ _}. λ _. unit",
                             "symm {U} :≡ λ {A B}. λ e. Sigma_intro (SplitEquiv B A) (middle e) (SplitEquiv_symm (split e))",
                             "∀ {A : U}. ∀ P : A → U. symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
-                            // TODO
-                            //"∀ {A : U}. ∀ P : A → U. symm {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = Sigma_fst p. Sigma_snd q =[ap P e_fst] Sigma_snd p) (symm {_} {Sigma_fst p} {Sigma_fst q} (Sigma_fst {_} {λ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q} e)) (DepEq_symm {_} {_} {ap P {Sigma_fst p} {Sigma_fst q} (Sigma_fst {_} {λ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q} e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd {_} {λ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q} e))",
+                            "∀ {A : U}. ∀ P : A → U. symm {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = Sigma_fst p. Sigma_snd q =[ap P e_fst] Sigma_snd p) (symm {_} {Sigma_fst p} {Sigma_fst q} (Sigma_fst e)) (DepEq_symm {_} {_} {ap P {Sigma_fst p} {Sigma_fst q} (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))",
                         ],
                     },
                     DefInit {
@@ -240,6 +239,7 @@ pub fn get_mltt() -> MetaLogic {
                 sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
                 red: &[
                     "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd f (refl a) :≡ DepEq_refl (f a)",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a a' : A}. ∀ e : a = a'. apd f (symm e) :≡ DepEq_symm (apd f e)",
                     "∀ {A : U}. apd (id A) :≡ λ {a a'}. λ e. e",
                     "∀ A : U. ∀ {B : U}. ∀ b : B. apd (const A b) :≡ λ {a a'}. λ e. DepEq_refl b",
                     "∀ A B : U. apd (const A {B}) :≡ λ {b b'}. λ e. λ a : A. e",
