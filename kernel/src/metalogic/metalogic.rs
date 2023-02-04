@@ -201,10 +201,16 @@ impl MetaLogic {
     }
 
     fn fill_placeholders(&mut self) -> Result<()> {
-        self.manipulate_exprs(&PlaceholderFiller {
-            force: true,
+        // Run two placeholder filling passes, to improve "unfilled placeholder" messages.
+        let mut placeholder_filler = PlaceholderFiller {
+            force: false,
             max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
-        })
+        };
+        self.manipulate_exprs(&placeholder_filler)?;
+
+        // TODO: The second pass should be really quick, but it currently isn't.
+        placeholder_filler.force = true;
+        self.manipulate_exprs(&placeholder_filler)
     }
 
     pub fn check_type_of_types(&self) -> Result<()> {

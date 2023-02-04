@@ -91,6 +91,10 @@ impl Expr {
         Self::lambda(param, body)
     }
 
+    pub fn let_binding(param: Param, arg: Arg, body: Expr) -> Self {
+        Expr::app(Expr::lambda(param, body), arg)
+    }
+
     pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
         ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
     }
@@ -130,9 +134,28 @@ impl Expr {
                 }
                 Expr::Lambda(lambda) => {
                     reduced |= lambda.param.type_expr.reduce(ctx, max_depth)?;
-                    reduced |= ctx.with_local(&lambda.param, |body_ctx| {
-                        lambda.body.reduce(&body_ctx, max_depth)
-                    })?;
+
+                    if let Some(eta_reduced) =
+                        ctx.with_local(&lambda.param, |body_ctx| -> Result<Option<Expr>> {
+                            reduced |= lambda.body.reduce(&body_ctx, max_depth)?;
+
+                            if let Expr::App(app) = &mut lambda.body {
+                                if let Expr::Var(Var(-1)) = app.param.expr {
+                                    if app.body.valid_in_superctx(body_ctx, ctx) {
+                                        let mut eta_reduced = take(&mut app.body);
+                                        eta_reduced.shift_to_supercontext(body_ctx, ctx);
+                                        reduced = true;
+                                        return Ok(Some(eta_reduced));
+                                    }
+                                }
+                            }
+
+                            Ok(None)
+                        })?
+                    {
+                        *self = eta_reduced;
+                        continue;
+                    }
                 }
             }
 
@@ -423,7 +446,7 @@ impl Expr {
             ) {
                 if lambda_1.param.implicit != lambda_2.param.implicit {
                     let name_1 = lambda_1.param.get_name_or_placeholder();
-                    let name_2 = lambda_1.param.get_name_or_placeholder();
+                    let name_2 = lambda_2.param.get_name_or_placeholder();
                     return Err(anyhow!(
                         "implicitness of «{name_1}» does not match implicitness of «{name_2}»"
                     ));

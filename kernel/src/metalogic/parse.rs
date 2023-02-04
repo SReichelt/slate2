@@ -115,6 +115,19 @@ impl ParsingContext<'_, '_, '_> {
             let expr = self.parse_expr()?;
             self.input.read_char(')')?;
             Ok(Some(expr))
+        } else if self.input.try_read_char('[') {
+            let param = self.parse_param()?;
+            self.input.read_char('⫽')?;
+            let arg = self.parse_delimited_arg()?;
+            self.input.read_char(']')?;
+            let body = self.context.with_local(&param, |body_ctx| {
+                let mut body_parsing_ctx = ParsingContext {
+                    input: self.input,
+                    context: body_ctx,
+                };
+                body_parsing_ctx.parse_expr()
+            })?;
+            Ok(Some(Expr::let_binding(param, arg, body)))
         } else if self.input.try_read_char('λ') {
             let (params, body) = self.parse_lambda()?;
             Ok(Some(Expr::multi_lambda(params, body)))
@@ -141,6 +154,24 @@ impl ParsingContext<'_, '_, '_> {
             }
         } else {
             Ok(None)
+        }
+    }
+
+    fn parse_delimited_arg(&mut self) -> Result<Arg> {
+        self.input.skip_whitespace();
+        if self.input.try_read_char('{') {
+            let expr = self.parse_expr()?;
+            self.input.read_char('}')?;
+            Ok(Arg {
+                expr,
+                implicit: true,
+            })
+        } else {
+            let expr = self.parse_expr()?;
+            Ok(Arg {
+                expr,
+                implicit: false,
+            })
         }
     }
 
