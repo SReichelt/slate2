@@ -303,7 +303,7 @@ pub fn get_mltt() -> MetaLogic {
                             "Equiv_symm {Unit} :≡ λ {_ _}. λ _. unit",
                             "Equiv_symm {U} :≡ λ {A B}. λ e. Equiv_U_intro (Equiv_U_inv e) (Equiv_U_to e)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
-                            "∀ {A : U}. ∀ P : A → U. Equiv_symm {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = Sigma_fst p. Sigma_snd q =[ap P e_fst] Sigma_snd p) (symm {A} {Sigma_fst p} {Sigma_fst q} (Sigma_fst e)) (DepEq_symm {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P {Sigma_fst p} {Sigma_fst q} (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))",
+                            "∀ {A : U}. ∀ P : A → U. Equiv_symm {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = Sigma_fst p. Sigma_snd q =[ap P e_fst] Sigma_snd p) (symm {A} {Sigma_fst p} {Sigma_fst q} (Sigma_fst e)) (DepEq_symm {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))",
                             "∀ {A : U}. ∀ a b : A. Equiv_symm {a = b} :≡ λ {e f}. symm {Equiv a b} {Eq_to_Equiv e} {Eq_to_Equiv f}",
                         ],
                     },
@@ -315,7 +315,7 @@ pub fn get_mltt() -> MetaLogic {
                             "Equiv_trans {U} :≡ λ {A B C}. λ e f. Equiv_U_intro (λ a. Equiv_U_to f (Equiv_U_to e a)) (λ c. Equiv_U_inv e (Equiv_U_inv f c))",
                             "Equiv_trans {Unit} :≡ λ {_ _ _}. λ _ _. unit",
                             "∀ {A : U}. ∀ P : A → U. Equiv_trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans (efg a) (egh a)",
-                            "∀ {A : U}. ∀ P : A → U. Equiv_trans {Sigma P} :≡ λ {p q r}. λ epq eqr. sorry _",
+                            "∀ {A : U}. ∀ P : A → U. Equiv_trans {Sigma P} :≡ λ {p q r}. λ epq eqr. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst r. Sigma_snd p =[ap P e_fst] Sigma_snd r) (trans {A} {Sigma_fst p} {Sigma_fst q} {Sigma_fst r} (Sigma_fst epq) (Sigma_fst eqr)) (DepEq_trans {P (Sigma_fst p)} {P (Sigma_fst q)} {P (Sigma_fst r)} {ap P (Sigma_fst epq)} {ap P (Sigma_fst eqr)} {Sigma_snd p} {Sigma_snd q} {Sigma_snd r} (Sigma_snd epq) (Sigma_snd eqr))",
                             "∀ {A : U}. ∀ a b : A. Equiv_trans {a = b} :≡ λ {e f g}. trans {Equiv a b} {Eq_to_Equiv e} {Eq_to_Equiv f} {Eq_to_Equiv g}",
                         ],
                     },
@@ -327,21 +327,61 @@ pub fn get_mltt() -> MetaLogic {
             DefInit {
                 sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
                 red: &[
-                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd f (refl a) :≡ refl (f a)",
-                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a a' : A}. ∀ e : a = a'. apd f (symm e) :≡ DepEq_symm (apd f e)",
+                    // We want to reduce application to `refl`, `symm`, and `trans` generically
+                    // because such terms frequently appear in types. As a consequence, we need to
+                    // restrict other reductions to `Equiv_to_Eq`, except where we expect the result
+                    // to be definitionally equal.
+                    // (At some point, we should check whether the restrictions are really
+                    // necessary in all cases.)
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd f (refl a) :≡ DepEq_refl (f a)",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a b : A}. ∀ e : a = b. apd f (symm e) :≡ DepEq_symm (apd f e)",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a b c : A}. ∀ eab : a = b. ∀ ebc : b = c. apd f (trans eab ebc) :≡ DepEq_trans (apd f eab) (apd f ebc)",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a b : A}. ∀ e : Equiv a b. apd f (Equiv_to_Eq e) :≡ apd' f (Equiv_to_Eq e)",
                     "∀ {A : U}. apd (id A) :≡ λ {a a'}. λ e. e",
                     "∀ A : U. ∀ {B : U}. ∀ b : B. apd (const A b) :≡ λ {a a'}. λ e. refl b",
-                    "∀ A B : U. apd (const A {B}) :≡ λ {b b'}. λ e. Equiv_to_Eq {A → B} {const A b} {const A b'} (λ a : A. e)",
-                    // TODO: lots more
                 ],
+            },
+            DefInit {
+                sym: "apd' : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
+                red: &[
+                    // Type constructors
+                    "∀ {A : U}. ∀ a : A. ∀ {b b' : A}. ∀ e : b = b'. apd' (Eq a) e :≡ Equiv_to_Eq (Equiv_U_intro (λ f : a = b. trans f e) (λ f : a = b'. trans f (symm e)))",
+                    // TODO
+                    // Combinators
+                    "∀ {A : U}. apd' (id A) :≡ λ {a a'}. λ e. e",
+                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd' (const A b) :≡ λ {a a'}. λ e. refl b",
+                    "∀ A B : U. ∀ {b b' : B}. ∀ e : b = b'. apd' (const A {B}) e :≡ Equiv_to_Eq {A → B} {const A b} {const A b'} (λ a : A. e)",
+                    // TODO subst
+                    // TODO other elimination functions
+                ],
+            },
+            DefInit {
+                sym: "apd'' : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap' P e] f a'",
+                red: &["apd'' :≡ λ {A P}. λ f. λ {a a'}. λ e. sorry _"],
+            },
+            DefInit {
+                sym: "apd_eq : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. apd f e = apd' f e",
+                red: &["apd_eq :≡ sorry _"],
             },
             DefInit {
                 sym: "ap : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
                 red: &["ap :≡ λ {A B}. apd {A} {λ _. B}"],
             },
             DefInit {
+                sym: "ap' : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
+                red: &["ap' :≡ λ {A B}. apd' {A} {λ _. B}"],
+            },
+            DefInit {
+                sym: "ap_eq : Π {A B : U}. Π f : A → B. Π {a a' : A}. Π e : a = a'. ap f e = ap' f e",
+                red: &["ap_eq :≡ λ {A B}. apd_eq {A} {λ _. B}"],
+            },
+            DefInit {
+                sym: "apj : Π {A : U}. Π {a a' : A}. Π P : (Π b : A. a = b → U). Π e : a = a'. P a (refl a) = P a' e",
+                red: &["apj :≡ λ {A a a'}. λ P e. sorry _"], // trans _ (trans (Eq_to_Equiv {_} {_} {_} (apd P e) e) _)
+            },
+            DefInit {
                 sym: "sorry : Π A : U. A", // TODO: remove once everything is filled
-                red: &[],
+                red: &["∀ {A : U}. ∀ a : A. sorry (a = a) :≡ refl a"], // to reduce temporary failures
             },
         ],
         |ctx| Box::new(MLTTLambdaHandler::new(ctx)),
@@ -533,170 +573,182 @@ mod tests {
     use anyhow::Result;
 
     #[test]
-    fn test_basics() -> Result<()> {
-        let mut mltt = get_mltt();
-        mltt.print_all_implicit_args = true;
+    fn test_mltt() -> Result<()> {
+        // Test everything in sequence so that errors during construction only appear once.
+        // (And because construction takes a while.)
+        let mltt = get_mltt();
 
-        let univ = mltt.parse_expr("U")?;
+        test_basics(&mltt)?;
+        test_type_errors(&mltt)?;
+        test_type_of_types(&mltt)?;
+        test_reduction_rule_types(&mltt)?;
+
+        Ok(())
+    }
+
+    fn test_basics(mltt: &MetaLogic) -> Result<()> {
+        let root_ctx = mltt.get_root_context_with_options(MetaLogicContextOptions {
+            print_all_implicit_args: true,
+            ..mltt.root_ctx_options
+        });
+
+        let univ = Expr::parse("U", &root_ctx)?;
 
         let pi = mltt.get_constant("Pi").unwrap();
-        assert_eq!(mltt.print_expr(&pi.type_expr), "Π {A : U}. (A → U) → U");
+        assert_eq!(pi.type_expr.print(&root_ctx), "Π {A : U}. (A → U) → U");
 
         let id_cmb = mltt.get_constant("id").unwrap();
-        assert_eq!(mltt.print_expr(&id_cmb.type_expr), "Π A : U. A → A");
+        assert_eq!(id_cmb.type_expr.print(&root_ctx), "Π A : U. A → A");
 
         let const_cmb = mltt.get_constant("const").unwrap();
         assert_eq!(
-            mltt.print_expr(&const_cmb.type_expr),
+            const_cmb.type_expr.print(&root_ctx),
             "Π A : U. Π {B : U}. B → A → B"
         );
 
         let subst_cmb = mltt.get_constant("subst").unwrap();
         assert_eq!(
-            mltt.print_expr(&subst_cmb.type_expr),
+            subst_cmb.type_expr.print(&root_ctx),
             "Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. (Π a : A. Pi {P a} (Q a)) → (Π f : Pi {A} P. Π a : A. Q a (f a))"
         );
 
         let refl = mltt.get_constant("refl").unwrap();
         assert_eq!(
-            mltt.print_expr(&refl.type_expr),
+            refl.type_expr.print(&root_ctx),
             "Π {A : U}. Π a : A. a ={A} a"
         );
 
         let symm = mltt.get_constant("symm").unwrap();
         assert_eq!(
-            mltt.print_expr(&symm.type_expr),
+            symm.type_expr.print(&root_ctx),
             "Π {A : U}. Π {a : A}. Π {b : A}. a ={A} b → b ={A} a"
         );
 
-        let mut id_ctor = mltt.parse_expr("λ A : U. A")?;
-        assert_eq!(mltt.print_expr(&id_ctor), "λ A : U. A");
-        let id_ctor_type = mltt.get_expr_type(&id_ctor)?;
-        assert_eq!(mltt.print_expr(&id_ctor_type), "U → U");
+        let mut id_ctor = Expr::parse("λ A : U. A", &root_ctx)?;
+        assert_eq!(id_ctor.print(&root_ctx), "λ A : U. A");
+        let id_ctor_type = id_ctor.get_type(&root_ctx)?;
+        assert_eq!(id_ctor_type.print(&root_ctx), "U → U");
 
-        let mut const_ctor = mltt.parse_expr("λ A B : U. A")?;
-        assert_eq!(mltt.print_expr(&const_ctor), "λ A : U. λ B : U. A");
-        let const_ctor_type = mltt.get_expr_type(&const_ctor)?;
-        assert_eq!(mltt.print_expr(&const_ctor_type), "U → U → U");
+        let mut const_ctor = Expr::parse("λ A B : U. A", &root_ctx)?;
+        assert_eq!(const_ctor.print(&root_ctx), "λ A : U. λ B : U. A");
+        let const_ctor_type = const_ctor.get_type(&root_ctx)?;
+        assert_eq!(const_ctor_type.print(&root_ctx), "U → U → U");
 
-        let const_ctor_occ = mltt.parse_expr("λ A A : U. A⁺")?;
-        assert_eq!(mltt.print_expr(&const_ctor_occ), "λ A : U. λ A : U. A⁺");
+        let const_ctor_occ = Expr::parse("λ A A : U. A⁺", &root_ctx)?;
+        assert_eq!(const_ctor_occ.print(&root_ctx), "λ A : U. λ A : U. A⁺");
         assert_eq!(const_ctor_occ, const_ctor);
 
-        let const_id_ctor_occ = mltt.parse_expr("λ A A : U. A")?;
-        assert_eq!(mltt.print_expr(&const_id_ctor_occ), "λ A : U. λ A : U. A");
+        let const_id_ctor_occ = Expr::parse("λ A A : U. A", &root_ctx)?;
+        assert_eq!(const_id_ctor_occ.print(&root_ctx), "λ A : U. λ A : U. A");
         assert_ne!(const_id_ctor_occ, const_ctor);
 
-        let mut app_u = mltt.parse_expr("λ F : U → U. F U")?;
-        let app_u_type = mltt.get_expr_type(&app_u)?;
-        assert_eq!(mltt.print_expr(&app_u_type), "(U → U) → U");
+        let mut app_u = Expr::parse("λ F : U → U. F U", &root_ctx)?;
+        let app_u_type = app_u.get_type(&root_ctx)?;
+        assert_eq!(app_u_type.print(&root_ctx), "(U → U) → U");
 
-        let mut id_fun = mltt.parse_expr("λ A : U. λ a : A. a")?;
-        let id_fun_type = mltt.get_expr_type(&id_fun)?;
-        assert_eq!(mltt.print_expr(&id_fun_type), "Π A : U. A → A");
+        let mut id_fun = Expr::parse("λ A : U. λ a : A. a", &root_ctx)?;
+        let id_fun_type = id_fun.get_type(&root_ctx)?;
+        assert_eq!(id_fun_type.print(&root_ctx), "Π A : U. A → A");
 
-        let inner_const_fun = mltt.parse_expr("λ A : U. λ a b : A. a")?;
+        let inner_const_fun = Expr::parse("λ A : U. λ a b : A. a", &root_ctx)?;
         assert_eq!(
-            mltt.print_expr(&inner_const_fun),
+            inner_const_fun.print(&root_ctx),
             "λ A : U. λ a : A. λ b : A. a"
         );
-        let inner_const_fun_type = mltt.get_expr_type(&inner_const_fun)?;
-        assert_eq!(mltt.print_expr(&inner_const_fun_type), "Π A : U. A → A → A");
+        let inner_const_fun_type = inner_const_fun.get_type(&root_ctx)?;
+        assert_eq!(inner_const_fun_type.print(&root_ctx), "Π A : U. A → A → A");
 
-        let pair_fun = mltt.parse_expr("λ A B : U. λ a : A. λ b : B. Pair_intro A B a b")?;
-        let pair_fun_type = mltt.get_expr_type(&pair_fun)?;
+        let pair_fun = Expr::parse("λ A B : U. λ a : A. λ b : B. Pair_intro A B a b", &root_ctx)?;
+        let pair_fun_type = pair_fun.get_type(&root_ctx)?;
         assert_eq!(
-            mltt.print_expr(&pair_fun_type),
+            pair_fun_type.print(&root_ctx),
             "Π A : U. Π B : U. A → B → (A × B)"
         );
 
-        let mut pair_fst_fun =
-            mltt.parse_expr("λ A B : U. λ a : A. λ b : B. Pair_fst A B (Pair_intro A B a b)")?;
-        let pair_fst_fun_type = mltt.get_expr_type(&pair_fst_fun)?;
+        let mut pair_fst_fun = Expr::parse(
+            "λ A B : U. λ a : A. λ b : B. Pair_fst A B (Pair_intro A B a b)",
+            &root_ctx,
+        )?;
+        let pair_fst_fun_type = pair_fst_fun.get_type(&root_ctx)?;
         assert_eq!(
-            mltt.print_expr(&pair_fst_fun_type),
+            pair_fst_fun_type.print(&root_ctx),
             "Π A : U. Π B : U. A → B → A"
         );
-        let pair_fst_fun_reduced = mltt.reduce_expr(&mut pair_fst_fun, -1)?;
+        let pair_fst_fun_reduced = pair_fst_fun.reduce(&root_ctx, -1)?;
         assert!(pair_fst_fun_reduced);
         assert_eq!(
-            mltt.print_expr(&pair_fst_fun),
+            pair_fst_fun.print(&root_ctx),
             "λ A : U. λ B : U. λ a : A. λ b : B. a"
         );
 
-        mltt.convert_expr_to_combinators(&mut id_ctor, -1)?;
-        assert_eq!(mltt.print_expr(&id_ctor), "id U");
+        id_ctor.convert_to_combinators(&root_ctx, -1)?;
+        assert_eq!(id_ctor.print(&root_ctx), "id U");
 
-        mltt.convert_expr_to_combinators(&mut const_ctor, -1)?;
-        assert_eq!(mltt.print_expr(&const_ctor), "const U {U}");
+        const_ctor.convert_to_combinators(&root_ctx, -1)?;
+        assert_eq!(const_ctor.print(&root_ctx), "const U {U}");
 
-        mltt.convert_expr_to_combinators(&mut app_u, -1)?;
+        app_u.convert_to_combinators(&root_ctx, -1)?;
         assert_eq!(
-            mltt.print_expr(&app_u),
+            app_u.print(&root_ctx),
             "subst {Pi {U} (const U {U} U)} {const (Pi {U} (const U {U} U)) {U} U} {const (Pi {U} (const U {U} U)) {Pi {U} (const U {U} U)} (const U {U} U)} (id (Pi {U} (const U {U} U))) (const (Pi {U} (const U {U} U)) {U} U)"
         );
-        let app_u_cmb_type = mltt.get_expr_type(&app_u)?;
+        let app_u_cmb_type = app_u.get_type(&root_ctx)?;
         assert!(app_u_cmb_type.compare(&app_u_type, &mltt.get_root_context())?);
 
-        mltt.convert_expr_to_combinators(&mut id_fun, -1)?;
-        assert_eq!(mltt.print_expr(&id_fun), "id");
+        id_fun.convert_to_combinators(&root_ctx, -1)?;
+        assert_eq!(id_fun.print(&root_ctx), "id");
 
         let mut pi_type = pi.type_expr.clone();
-        mltt.convert_expr_to_combinators(&mut pi_type, 2)?;
+        pi_type.convert_to_combinators(&root_ctx, 2)?;
         assert_eq!(
-            mltt.print_expr(&pi_type),
+            pi_type.print(&root_ctx),
             "Pi {U} (subst {U} {λ {A : U}. (A → U) → U} {λ {A : U}. λ _ : (A → U) → U. U} (λ {A : U}. Pi {A → U}) (λ {A : U}. λ _ : A → U. U))"
         );
 
         let mut id_cmb_type = id_cmb.type_expr.clone();
-        mltt.convert_expr_to_combinators(&mut id_cmb_type, 2)?;
+        id_cmb_type.convert_to_combinators(&root_ctx, 2)?;
         assert_eq!(
-            mltt.print_expr(&id_cmb_type),
+            id_cmb_type.print(&root_ctx),
             "Pi {U} (subst {U} {λ A : U. A → U} {λ A : U. λ _ : A → U. U} (λ A : U. Pi {A}) (λ A : U. λ _ : A. A))"
         );
-        assert_eq!(mltt.get_expr_type(&id_cmb_type)?, univ);
+        assert_eq!(id_cmb_type.get_type(&root_ctx)?, univ);
 
         let mut const_cmb_type = const_cmb.type_expr.clone();
-        mltt.convert_expr_to_combinators(&mut const_cmb_type, 2)?;
+        const_cmb_type.convert_to_combinators(&root_ctx, 2)?;
         assert_eq!(
-            mltt.print_expr(&const_cmb_type),
+            const_cmb_type.print(&root_ctx),
             "Pi {U} (subst {U} {λ A : U. U → U} {λ A : U. λ _ : U → U. U} (λ A : U. Pi {U}) (λ A : U. λ {B : U}. B → A → B))"
         );
-        assert_eq!(mltt.get_expr_type(&const_cmb_type)?, univ);
+        assert_eq!(const_cmb_type.get_type(&root_ctx)?, univ);
 
         let mut subst_cmb_type = subst_cmb.type_expr.clone();
-        mltt.convert_expr_to_combinators(&mut subst_cmb_type, 2)?;
+        subst_cmb_type.convert_to_combinators(&root_ctx, 2)?;
         assert_eq!(
-            mltt.print_expr(&subst_cmb_type),
+            subst_cmb_type.print(&root_ctx),
             "Pi {U} (subst {U} {λ {A : U}. (A → U) → U} {λ {A : U}. λ _ : (A → U) → U. U} (λ {A : U}. Pi {A → U}) (λ {A : U}. λ {P : A → U}. Π {Q : (Π a : A. P a → U)}. (Π a : A. Pi {P a} (Q a)) → (Π f : Pi {A} P. Π a : A. Q a (f a))))"
         );
-        assert_eq!(mltt.get_expr_type(&subst_cmb_type)?, univ);
+        assert_eq!(subst_cmb_type.get_type(&root_ctx)?, univ);
 
         Ok(())
     }
 
-    #[test]
-    fn test_type_errors() -> Result<()> {
-        let mltt = get_mltt();
+    fn test_type_errors(mltt: &MetaLogic) -> Result<()> {
+        let root_ctx = mltt.get_root_context();
 
-        let non_fun_app = mltt.parse_expr("λ A : U. A A")?;
-        assert!(mltt.get_expr_type(&non_fun_app).is_err());
+        let non_fun_app = Expr::parse("λ A : U. A A", &root_ctx)?;
+        assert!(non_fun_app.get_type(&root_ctx).is_err());
 
-        let app_mismatch = mltt.parse_expr("λ F : U → U. F F")?;
-        assert!(mltt.get_expr_type(&app_mismatch).is_err());
+        let app_mismatch = Expr::parse("λ F : U → U. F F", &root_ctx)?;
+        assert!(app_mismatch.get_type(&root_ctx).is_err());
 
         Ok(())
     }
 
-    #[test]
-    fn test_type_of_types() -> Result<()> {
-        let mltt = get_mltt();
+    fn test_type_of_types(mltt: &MetaLogic) -> Result<()> {
         mltt.check_type_of_types()
     }
 
-    #[test]
-    fn test_reduction_rule_types() -> Result<()> {
-        let mltt = get_mltt();
+    fn test_reduction_rule_types(mltt: &MetaLogic) -> Result<()> {
         mltt.check_reduction_rule_types()
     }
 

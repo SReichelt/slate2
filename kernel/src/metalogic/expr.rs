@@ -654,7 +654,7 @@ impl LambdaExpr {
 
     fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
         if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
-            if metalogic_ctx.initialized() {
+            if metalogic_ctx.use_combinators() {
                 let expr = self.convert_to_combinator(metalogic_ctx)?;
                 //dbg!(expr.print(metalogic_ctx));
                 return Ok(Some(expr));
@@ -1148,8 +1148,20 @@ impl PlaceholderFiller {
         match expr {
             Expr::Placeholder => {
                 if self.force {
-                    let type_str = expected_type.print(ctx);
-                    Err(anyhow!("unfilled placeholder of type «{type_str}»"))
+                    let type_str_options = MetaLogicContextOptions {
+                        reduce_with_combinators: true,
+                        print_all_implicit_args: false,
+                    };
+                    ctx.with_new_options(type_str_options, |type_str_ctx| {
+                        let type_str = expected_type.print(type_str_ctx);
+                        if let Ok(true) = expected_type.reduce(type_str_ctx, -1) {
+                            let reduced_type_str = expected_type.print(type_str_ctx);
+                            if reduced_type_str != type_str {
+                                return Err(anyhow!("unfilled placeholder of type «{type_str}» (reduced: «{reduced_type_str}»)"));
+                            }
+                        }
+                        Err(anyhow!("unfilled placeholder of type «{type_str}»"))
+                    })
                 } else {
                     Ok(Expr::Placeholder)
                 }
@@ -1163,7 +1175,13 @@ impl PlaceholderFiller {
                 let initial_fun_type =
                     self.fill_arg_placeholders_in_fun(fun, arg, initial_arg_type, ctx)?;
 
-                let mut fun_type = self.fill_inner_placeholders(fun, initial_fun_type, ctx)?;
+                let fun_type_result =
+                    self.fill_inner_placeholders(fun, initial_fun_type.clone(), ctx);
+                // Report errors in arguments first, to better support the "underscore trick".
+                let (mut fun_type, fun_type_err) = match fun_type_result {
+                    Ok(fun_type) => (fun_type, Ok(())),
+                    Err(err) => (self.try_fill_placeholders(fun, ctx)?, Err(err)),
+                };
                 //dbg!(
                 //    "start",
                 //    fun.print(ctx),
@@ -1187,6 +1205,7 @@ impl PlaceholderFiller {
                 //    fun_type.print(ctx),
                 //    arg_type.print(ctx),
                 //);
+                fun_type_err?;
                 Ok(lambda.apply(arg.clone(), ctx))
             }
             Expr::Lambda(lambda) => {
@@ -1215,13 +1234,16 @@ impl PlaceholderFiller {
         ctx: &MetaLogicContext,
     ) -> Result<bool> {
         if expected_type.is_empty() || !matches!(expr, Expr::App(_)) {
-            return Ok(false);
+            return Ok(true);
         }
 
         let mut params = SmallVec::new();
         let mut args = SmallVec::new();
-        let innermost_fun_type = self.analyze_app(expr, ctx, &mut params, &mut args)?;
-        if args.iter().any(|arg| arg.is_empty()) {
+        let mut has_unfilled_args = false;
+        let innermost_fun_type =
+            self.analyze_app(expr, ctx, &mut params, &mut args, &mut has_unfilled_args)?;
+
+        if has_unfilled_args {
             if ctx.with_locals(&params, |ctx_with_params| {
                 //dbg!(
                 //    "apply",
@@ -1323,19 +1345,27 @@ impl PlaceholderFiller {
         ctx: &MetaLogicContext,
         result_params: &mut SmallVec<[Param; INLINE_PARAMS]>,
         result_args: &mut SmallVec<[Expr; INLINE_PARAMS]>,
+        has_unfilled_args: &mut bool,
     ) -> Result<Expr> {
         if let Expr::App(app) = expr {
             let fun = &mut app.body;
             let arg = &mut app.param;
-            let mut fun_type = self.analyze_app(fun, ctx, result_params, result_args)?;
+            if arg.expr.is_empty() {
+                *has_unfilled_args = true;
+            }
+            let mut fun_type =
+                self.analyze_app(fun, ctx, result_params, result_args, has_unfilled_args)?;
             let lambda = ctx.with_locals(result_params, |fun_type_ctx| {
                 self.get_fun_type_lambda(&mut fun_type, arg.implicit, fun_type_ctx)
             })?;
             result_params.push(lambda.param);
             result_args.push(arg.expr.clone());
             Ok(lambda.body)
-        } else {
+        } else if *has_unfilled_args {
             self.try_fill_placeholders(expr, ctx)
+        } else {
+            // Skip unnecessary work if we don't have any arguments to fill.
+            Ok(Expr::Placeholder)
         }
     }
 

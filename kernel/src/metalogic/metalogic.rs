@@ -1,6 +1,6 @@
 use std::{fmt::Debug, rc::Rc};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Error, Result};
 
 use super::{expr::*, parse::*, print::*};
 
@@ -18,8 +18,7 @@ pub struct DefInit<'a> {
 pub struct MetaLogic {
     constants: Vec<Constant>,
     lambda_handler: Box<dyn LambdaHandler>,
-    initialized: bool,
-    pub print_all_implicit_args: bool,
+    pub root_ctx_options: MetaLogicContextOptions,
 }
 
 impl MetaLogic {
@@ -52,8 +51,10 @@ impl MetaLogic {
                 })
                 .collect(),
             lambda_handler,
-            initialized: false,
-            print_all_implicit_args: true,
+            root_ctx_options: MetaLogicContextOptions {
+                reduce_with_combinators: false,
+                print_all_implicit_args: true,
+            },
         };
 
         let mut idx = 0;
@@ -87,38 +88,28 @@ impl MetaLogic {
         metalogic.insert_implicit_args()?;
         metalogic.fill_placeholders()?;
 
-        metalogic.initialized = true;
-        metalogic.print_all_implicit_args = false;
+        metalogic.root_ctx_options.reduce_with_combinators = true;
+        metalogic.root_ctx_options.print_all_implicit_args = false;
         Ok(metalogic)
     }
 
     pub fn get_root_context(&self) -> MetaLogicContext {
-        MetaLogicContext::with_globals(self)
+        self.get_root_context_with_options(self.root_ctx_options)
+    }
+
+    pub fn get_root_context_with_options(
+        &self,
+        options: MetaLogicContextOptions,
+    ) -> MetaLogicContext {
+        MetaLogicContext::with_globals(MetaLogicContextGlobals {
+            metalogic: self,
+            options,
+        })
     }
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
         let var_idx = self.constants.get_var_index(name, 0)?;
         Some(&self.constants.get_var(var_idx).param)
-    }
-
-    pub fn parse_expr(&self, s: &str) -> Result<Expr> {
-        Expr::parse(s, &self.get_root_context())
-    }
-
-    pub fn print_expr(&self, expr: &Expr) -> String {
-        expr.print(&self.get_root_context())
-    }
-
-    pub fn reduce_expr(&self, expr: &mut Expr, max_depth: i32) -> Result<bool> {
-        expr.reduce(&self.get_root_context(), max_depth)
-    }
-
-    pub fn convert_expr_to_combinators(&self, expr: &mut Expr, max_depth: i32) -> Result<()> {
-        expr.convert_to_combinators(&self.get_root_context(), max_depth)
-    }
-
-    pub fn get_expr_type(&self, expr: &Expr) -> Result<Expr> {
-        expr.get_type(&self.get_root_context())
     }
 
     fn visit_exprs<Visitor: MetaLogicVisitor>(&self, visitor: &Visitor) -> Result<()> {
@@ -155,44 +146,44 @@ impl MetaLogic {
         &mut self,
         manipulator: &Manipulator,
     ) -> Result<()> {
-        let mut new_constants = Vec::with_capacity(self.constants.len());
-        let mut errors = Vec::new();
-        let root_ctx = self.get_root_context();
-
-        for constant in &self.constants {
-            let mut new_constant = Constant {
-                param: constant.param.clone(),
-                reduction_rules: Vec::with_capacity(constant.reduction_rules.len()),
-            };
-
+        // Manipulate all types first, then all reduction rules in a second step, as manipulation
+        // relies on accurate types.
+        self.manipulate_constants(|constant, root_ctx, errors| {
             if let Err(error) = manipulator
-                .param(&mut new_constant.param, &root_ctx)
+                .param(&mut constant.param, &root_ctx)
                 .with_prefix(|| {
-                    let name = new_constant.get_name_or_placeholder();
+                    let name = constant.get_name_or_placeholder();
                     manipulator.get_constant_error_prefix(name)
                 })
             {
                 errors.push(error);
             }
+        })?;
 
-            for rule in &constant.reduction_rules {
-                let mut new_rule = rule.clone();
+        self.manipulate_constants(|constant, root_ctx, errors| {
+            let name = constant.get_name_or_placeholder().to_owned();
 
-                if let Err(error) = manipulator
-                    .reduction_rule(&mut new_rule, &root_ctx)
-                    .with_prefix(|| {
-                        let name = constant.get_name_or_placeholder();
-                        let rule_str = new_rule.print(&root_ctx);
-                        manipulator.get_rule_error_prefix(name, &rule_str)
-                    })
-                {
+            for rule in &mut constant.reduction_rules {
+                if let Err(error) = manipulator.reduction_rule(rule, &root_ctx).with_prefix(|| {
+                    let rule_str = rule.print(&root_ctx);
+                    manipulator.get_rule_error_prefix(&name, &rule_str)
+                }) {
                     errors.push(error);
                 }
-
-                new_constant.reduction_rules.push(new_rule);
             }
+        })
+    }
 
-            new_constants.push(new_constant);
+    fn manipulate_constants(
+        &mut self,
+        mut f: impl FnMut(&mut Constant, &MetaLogicContext, &mut Vec<Error>),
+    ) -> Result<()> {
+        let mut errors = Vec::new();
+        let mut new_constants = self.constants.clone();
+        let root_ctx = self.get_root_context();
+
+        for constant in &mut new_constants {
+            f(constant, &root_ctx, &mut errors);
         }
 
         if errors.is_empty() {
@@ -302,30 +293,59 @@ pub struct ReductionBody {
     pub source_app_len: usize,
 }
 
-impl VarAccessor<Param> for MetaLogic {
+#[derive(Clone, Copy)]
+pub struct MetaLogicContextOptions {
+    pub reduce_with_combinators: bool,
+    pub print_all_implicit_args: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct MetaLogicContextGlobals<'a> {
+    metalogic: &'a MetaLogic,
+    options: MetaLogicContextOptions,
+}
+
+impl VarAccessor<Param> for MetaLogicContextGlobals<'_> {
     fn get_var(&self, idx: VarIndex) -> &Param {
-        &self.constants.get_var(idx).param
+        &self.metalogic.constants.get_var(idx).param
     }
 
     fn for_each_var<R>(&self, mut f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
-        self.constants
+        self.metalogic
+            .constants
             .for_each_var(|var_idx, constant| f(var_idx, &constant.param))
     }
 }
 
-pub type MetaLogicContext<'a> = ParamContextImpl<Param, &'a MetaLogic>;
+pub type MetaLogicContext<'a> = ParamContextImpl<Param, MetaLogicContextGlobals<'a>>;
 
 impl MetaLogicContext<'_> {
+    pub fn metalogic(&self) -> &MetaLogic {
+        self.globals().metalogic
+    }
+
+    pub fn options(&self) -> &MetaLogicContextOptions {
+        &self.globals().options
+    }
+
     pub fn constants(&self) -> &[Constant] {
-        &self.globals().constants
+        &self.metalogic().constants
     }
 
     pub fn lambda_handler(&self) -> &dyn LambdaHandler {
-        self.globals().lambda_handler.as_ref()
+        self.metalogic().lambda_handler.as_ref()
     }
 
-    pub fn print_all_implicit_args(&self) -> bool {
-        self.globals().print_all_implicit_args
+    pub fn with_new_options<R>(
+        &self,
+        options: MetaLogicContextOptions,
+        f: impl FnOnce(&Self) -> R,
+    ) -> R {
+        let globals = MetaLogicContextGlobals {
+            options,
+            ..*self.globals()
+        };
+        self.with_new_globals(globals, f)
     }
 }
 
@@ -334,7 +354,7 @@ impl MetaLogicContext<'_> {
 pub trait ComparisonContext: ParamContext<Param> {
     fn as_metalogic_context(&self) -> Option<&MetaLogicContext>;
 
-    fn initialized(&self) -> bool;
+    fn use_combinators(&self) -> bool;
 }
 
 // We need this so that with_reduction_options can take a single closure instead of two, which is
@@ -349,8 +369,8 @@ impl ComparisonContext for MinimalContext {
         None
     }
 
-    fn initialized(&self) -> bool {
-        true
+    fn use_combinators(&self) -> bool {
+        false
     }
 }
 
@@ -359,8 +379,8 @@ impl ComparisonContext for MetaLogicContext<'_> {
         Some(self)
     }
 
-    fn initialized(&self) -> bool {
-        self.globals().initialized
+    fn use_combinators(&self) -> bool {
+        self.globals().options.reduce_with_combinators
     }
 }
 

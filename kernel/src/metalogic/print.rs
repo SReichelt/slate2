@@ -19,7 +19,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         let mut printing_context = PrintingContext {
             output: result,
             context: ctx,
-            include_all_implicit_args: ctx.print_all_implicit_args(),
+            include_all_implicit_args: ctx.options().print_all_implicit_args,
         };
         f(&mut printing_context)
     }
