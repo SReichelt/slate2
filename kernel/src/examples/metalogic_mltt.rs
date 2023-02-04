@@ -440,34 +440,59 @@ pub fn get_mltt() -> MetaLogic {
         ],
         &[
             DefInit {
+                sym: "ap : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
+                red: &[
+                    // We could simply define `ap` as a special case of `apd`. However,
+                    // non-dependent application generally yields much simpler terms, and it often
+                    // appears in types, so we explicitly specify non-dependent variants of all
+                    // cases here.
+                    // For a similar reason, we want to reduce application to `refl`, `symm`, and
+                    // `trans` generically. As a consequence, we need to restrict other reductions
+                    // to `Equiv_to_Eq`, except where we expect the result to be definitionally
+                    // equal. (At some point, we should check whether the restrictions are really
+                    // necessary in all cases.)
+                    "∀ {A B : U}. ∀ f : A → B. ∀ {a b : A}. ∀ e : Equiv a b. ap f (Equiv_to_Eq e) :≡ ap' f (Equiv_to_Eq e)",
+                    "∀ {A B : U}. ∀ f : A → B. ∀ a : A. ap f (refl a) :≡ refl (f a)",
+                    "∀ {A B : U}. ∀ f : A → B. ∀ {a b : A}. ∀ e : a = b. ap f (symm e) :≡ symm (ap f e)",
+                    "∀ {A B : U}. ∀ f : A → B. ∀ {a b c : A}. ∀ eab : a = b. ∀ ebc : b = c. ap f (trans eab ebc) :≡ trans (ap f eab) (ap f ebc)",
+                    "∀ A : U. ap (id A) :≡ λ {a a'}. λ e. e",
+                    "∀ A : U. ∀ {B : U}. ∀ b : B. ap (const A b) :≡ λ {a a'}. λ e. refl b",
+                ],
+            },
+            DefInit {
+                sym: "ap' : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
+                red: &[
+                    // Type constructors
+                    "∀ {A : U}. ∀ a : A. ∀ {b b' : A}. ∀ e : b = b'. ap' (Eq a) e :≡ Equiv_to_Eq (Equiv_U_intro (λ f : a = b. trans f e) (λ f : a = b'. trans f (symm e)))",
+                    // TODO
+                    // Combinators
+                    "∀ A : U. ap' (id A) :≡ λ {a a'}. λ e. e",
+                    "∀ A : U. ∀ {B : U}. ∀ b : B. ap' (const A b) :≡ λ {a a'}. λ e. refl b",
+                    "∀ A B : U. ∀ {b b' : B}. ∀ e : b = b'. ap' (const A {B}) e :≡ Equiv_to_Eq (λ a : A. e)",
+                    // TODO subst
+                    // TODO other elimination functions
+                ],
+            },
+            DefInit {
+                sym: "ap_eq : Π {A B : U}. Π f : A → B. Π {a a' : A}. Π e : a = a'. ap f e = ap' f e",
+                red: &["ap_eq :≡ sorry _"],
+            },
+            DefInit {
                 sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
                 red: &[
-                    // We want to reduce application to `refl`, `symm`, and `trans` generically
-                    // because such terms frequently appear in types. As a consequence, we need to
-                    // restrict other reductions to `Equiv_to_Eq`, except where we expect the result
-                    // to be definitionally equal.
-                    // (At some point, we should check whether the restrictions are really
-                    // necessary in all cases.)
+                    // See above.
+                    "∀ A B : U. apd {A} {const A B} :≡ ap {A} {B}",
                     "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a b : A}. ∀ e : Equiv a b. apd f (Equiv_to_Eq e) :≡ apd' f (Equiv_to_Eq e)",
                     "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ a : A. apd f (refl a) :≡ DepEq_refl (f a)",
                     "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a b : A}. ∀ e : a = b. apd f (symm e) :≡ DepEq_symm (apd f e)",
                     "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a b c : A}. ∀ eab : a = b. ∀ ebc : b = c. apd f (trans eab ebc) :≡ DepEq_trans (apd f eab) (apd f ebc)",
-                    "∀ {A : U}. apd (id A) :≡ λ {a a'}. λ e. e",
-                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd (const A b) :≡ λ {a a'}. λ e. refl b",
                 ],
             },
             DefInit {
                 sym: "apd' : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
                 red: &[
-                    // Type constructors
-                    "∀ {A : U}. ∀ a : A. ∀ {b b' : A}. ∀ e : b = b'. apd' (Eq a) e :≡ Equiv_to_Eq (Equiv_U_intro (λ f : a = b. trans f e) (λ f : a = b'. trans f (symm e)))",
+                    "∀ A B : U. apd' {A} {const A B} :≡ ap' {A} {B}",
                     // TODO
-                    // Combinators
-                    "∀ {A : U}. apd' (id A) :≡ λ {a a'}. λ e. e",
-                    "∀ A : U. ∀ {B : U}. ∀ b : B. apd' (const A b) :≡ λ {a a'}. λ e. refl b",
-                    "∀ A B : U. ∀ {b b' : B}. ∀ e : b = b'. apd' (const A {B}) e :≡ Equiv_to_Eq {A → B} {const A b} {const A b'} (λ a : A. e)",
-                    // TODO subst
-                    // TODO other elimination functions
                 ],
             },
             DefInit {
@@ -477,18 +502,6 @@ pub fn get_mltt() -> MetaLogic {
             DefInit {
                 sym: "apd_eq : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. apd f e = apd' f e",
                 red: &["apd_eq :≡ sorry _"],
-            },
-            DefInit {
-                sym: "ap : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
-                red: &["ap :≡ λ {A B}. apd {A} {λ _. B}"],
-            },
-            DefInit {
-                sym: "ap' : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
-                red: &["ap' :≡ λ {A B}. apd' {A} {λ _. B}"],
-            },
-            DefInit {
-                sym: "ap_eq : Π {A B : U}. Π f : A → B. Π {a a' : A}. Π e : a = a'. ap f e = ap' f e",
-                red: &["ap_eq :≡ λ {A B}. apd_eq {A} {λ _. B}"],
             },
             DefInit {
                 sym: "mid_ap : Π {A : U}. Π P : A → U. Π {a a' : A}. Π e : a = a'. mid (ap P e) = P (mid e)",
