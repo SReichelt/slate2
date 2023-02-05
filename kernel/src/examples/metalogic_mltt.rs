@@ -459,7 +459,9 @@ pub fn get_mltt() -> MetaLogic {
                 ctor: DefInit {
                     // We define `IsEquiv f` as a primitive type instead of just `Sigma (IsInv f)`
                     // for several reasons:
-                    // * We want to avoid `Equiv A B` from blowing up when reducing.
+                    // * We want to avoid `Equiv A B` from blowing up when reducing. In fact, we
+                    //   need to go one step further and define `refl`, `symm`, and `trans` as
+                    //   constructors that only reduce when queried.
                     // * We can give `IsEquiv` a custom equality, and of course we will just use
                     //   `Unit` since `IsEquiv` is contractible (as shown in the HoTT book).
                     // * And finally, it makes us less dependent on the exact definition, for which
@@ -473,12 +475,39 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[],
                     },
                     DefInit {
+                        sym: "IsEquiv_refl : Π A : U. IsEquiv (id A)",
+                        red: &[],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_symm : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsEquiv (IsEquiv_inv h)",
+                        red: &[
+                            "∀ A : U. IsEquiv_symm (IsEquiv_refl A) :≡ IsEquiv_refl A",
+                        ],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_trans : Π {A B C : U}. Π {f : A → B}. Π {g : B → C}. Π hf : IsEquiv f. Π hg : IsEquiv g. IsEquiv {A} {C} (λ a. g (f a))",
+                        red: &[
+                            "∀ {A B : U}. ∀ {f : A → B}. ∀ h : IsEquiv f. IsEquiv_trans (IsEquiv_refl A) h :≡ h",
+                            "∀ {A B : U}. ∀ {f : A → B}. ∀ h : IsEquiv f. IsEquiv_trans h (IsEquiv_refl B) :≡ h",
+                        ],
+                    },
+                    DefInit {
                         sym: "IsEquiv_inv : Π {A B : U}. Π {f : A → B}. IsEquiv f → (B → A)",
-                        red: &["∀ {A B : U}. ∀ f : A → B. ∀ g : B → A. ∀ efg : IsInv f g. IsEquiv_inv (IsEquiv_intro f g efg) :≡ g"],
+                        red: &[
+                            "∀ {A B : U}. ∀ f : A → B. ∀ g : B → A. ∀ efg : IsInv f g. IsEquiv_inv (IsEquiv_intro f g efg) :≡ g",
+                            "∀ A : U. IsEquiv_inv (IsEquiv_refl A) :≡ id A",
+                            "∀ {A B : U}. ∀ {f : A → B}. ∀ h : IsEquiv f. IsEquiv_inv (IsEquiv_symm h) :≡ f",
+                            "∀ {A B C : U}. ∀ {f : A → B}. ∀ {g : B → C}. ∀ hf : IsEquiv f. ∀ hg : IsEquiv g. IsEquiv_inv (IsEquiv_trans hf hg) :≡ λ c : C. (IsEquiv_inv hf) (IsEquiv_inv hg c)",
+                        ],
                     },
                     DefInit {
                         sym: "IsEquiv_isInv : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsInv f (IsEquiv_inv h)",
-                        red: &["∀ {A B : U}. ∀ f : A → B. ∀ g : B → A. ∀ efg : IsInv f g. IsEquiv_isInv (IsEquiv_intro f g efg) :≡ efg"],
+                        red: &[
+                            "∀ {A B : U}. ∀ f : A → B. ∀ g : B → A. ∀ efg : IsInv f g. IsEquiv_isInv (IsEquiv_intro f g efg) :≡ efg",
+                            "∀ A : U. IsEquiv_isInv (IsEquiv_refl A) :≡ IsInv_refl A",
+                            "∀ {A B : U}. ∀ {f : A → B}. ∀ h : IsEquiv f. IsEquiv_isInv (IsEquiv_symm h) :≡ IsInv_symm (IsEquiv_isInv h)",
+                            "∀ {A B C : U}. ∀ {f : A → B}. ∀ {g : B → C}. ∀ hf : IsEquiv f. ∀ hg : IsEquiv g. IsEquiv_isInv (IsEquiv_trans hf hg) :≡ IsInv_trans (IsEquiv_isInv hf) (IsEquiv_isInv hg)",
+                        ],
                     },
                     DefInit {
                         sym: "IsEquiv_qInv : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsQuasiInv f (IsEquiv_inv h)",
@@ -495,18 +524,6 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "IsEquiv_adj : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsHalfAdjoint (IsEquiv_qInv h)",
                         red: &["IsEquiv_adj :≡ λ {A B f}. λ h. IsInv_adj (IsEquiv_isInv h)"],
-                    },
-                    DefInit {
-                        sym: "IsEquiv_refl : Π A : U. IsEquiv (id A)",
-                        red: &["IsEquiv_refl :≡ λ A. IsEquiv_intro (id A) (id A) (IsInv_refl A)"],
-                    },
-                    DefInit {
-                        sym: "IsEquiv_symm : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsEquiv (IsEquiv_inv h)",
-                        red: &["IsEquiv_symm :≡ λ {A B f}. λ h. IsEquiv_intro (IsEquiv_inv h) f (IsInv_symm (IsEquiv_isInv h))"],
-                    },
-                    DefInit {
-                        sym: "IsEquiv_trans : Π {A B C : U}. Π {f : A → B}. Π {g : B → C}. Π hf : IsEquiv f. Π hg : IsEquiv g. IsEquiv {A} {C} (λ a. g (f a))",
-                        red: &["IsEquiv_trans :≡ λ {A B C f g}. λ hf hg. IsEquiv_intro {A} {C} (λ a. g (f a)) (λ c. (IsEquiv_inv hf) (IsEquiv_inv hg c)) (IsInv_trans (IsEquiv_isInv hf) (IsEquiv_isInv hg))"],
                     },
                 ],
             },
@@ -1027,7 +1044,7 @@ mod tests {
         );
 
         let mut pair_fst_fun = Expr::parse(
-            "λ A B : U. λ a : A. λ b : B. Pair_fst A B (Pair_intro A B a b)",
+            "λ A B : U. λ a : A. λ b : B. Pair_fst {A} {B} (Pair_intro A B a b)",
             &root_ctx,
         )?;
         let pair_fst_fun_type = pair_fst_fun.get_type(&root_ctx)?;
@@ -1113,6 +1130,8 @@ mod tests {
         mltt.check_reduction_rule_types()
     }
 
+    // TODO: check that left sides of reduction rules are irreducible (without that reduction rule)
+    // TODO: check for superfluous variables in reduction rules
     // TODO: test that all declared types reduce uniquely (are confluent)
     // TODO: test that specific known terms with multiple reductions are confluent
 }

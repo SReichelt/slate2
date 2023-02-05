@@ -72,9 +72,6 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 }
             }
             Expr::App(app) => {
-                if parens_for_app {
-                    self.output.write_char('(')?;
-                }
                 let mut fun = &app.body;
                 let arg = &app.param;
                 if !arg.implicit && !self.context.options().print_all_implicit_args {
@@ -87,14 +84,23 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     }
                 }
                 if let Expr::Lambda(lambda) = fun {
+                    if parens_for_lambda {
+                        self.output.write_char('(')?;
+                    }
                     self.print_let_binding(lambda, arg)?;
+                    if parens_for_lambda {
+                        self.output.write_char(')')?;
+                    }
                 } else {
+                    if parens_for_app {
+                        self.output.write_char('(')?;
+                    }
                     self.print_expr_with_parens(fun, false, true, true, true, true)?;
                     self.output.write_char(' ')?;
                     self.print_arg(arg, true)?;
-                }
-                if parens_for_app {
-                    self.output.write_char(')')?;
+                    if parens_for_app {
+                        self.output.write_char(')')?;
+                    }
                 }
             }
             Expr::Lambda(lambda) => {

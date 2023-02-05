@@ -116,6 +116,8 @@ impl Expr {
             max_depth -= 1;
         }
 
+        let apply_reduction_rules = ctx.options().reduce_with_reduction_rules;
+
         let mut reduced = false;
 
         loop {
@@ -123,9 +125,35 @@ impl Expr {
                 Expr::Placeholder => {}
                 Expr::Var(_) => {}
                 Expr::App(app) => {
-                    reduced |= app.param.expr.reduce(ctx, max_depth)?;
-                    reduced |= app.body.reduce(ctx, max_depth)?;
+                    // Usually, we reduce inner expressions first. Note that this may enable beta
+                    // reduction in the first place, so we would need to repeat it afterwards
+                    // anyway.
+                    // However, as an exception for better performance, we skip reduction of the
+                    // argument if it is dropped.
+                    if let Expr::Lambda(lambda) = &mut app.body {
+                        if let Some(const_body) = lambda.extract_body_if_const(ctx) {
+                            *self = const_body;
+                            reduced = true;
+                            continue;
+                        } else {
+                            reduced |= app.body.reduce(ctx, max_depth)?;
+                        }
+                    } else {
+                        reduced |= app.body.reduce(ctx, max_depth)?;
 
+                        // Try again after reduction.
+                        if let Expr::Lambda(lambda) = &mut app.body {
+                            if let Some(const_body) = lambda.extract_body_if_const(ctx) {
+                                *self = const_body;
+                                reduced = true;
+                                continue;
+                            }
+                        }
+                    }
+
+                    reduced |= app.param.expr.reduce(ctx, max_depth)?;
+
+                    // Now always beta-reduce if possible.
                     if let Expr::Lambda(lambda) = &mut app.body {
                         *self = take(lambda).apply(take(&mut app.param), ctx);
                         reduced = true;
@@ -139,12 +167,13 @@ impl Expr {
                         ctx.with_local(&lambda.param, |body_ctx| -> Result<Option<Expr>> {
                             reduced |= lambda.body.reduce(&body_ctx, max_depth)?;
 
+                            // Eta-reduction isn't really important, but it makes printed
+                            // expressions easier to read.
                             if let Expr::App(app) = &mut lambda.body {
                                 if let Expr::Var(Var(-1)) = app.param.expr {
                                     if app.body.valid_in_superctx(body_ctx, ctx) {
                                         let mut eta_reduced = take(&mut app.body);
                                         eta_reduced.shift_to_supercontext(body_ctx, ctx);
-                                        reduced = true;
                                         return Ok(Some(eta_reduced));
                                     }
                                 }
@@ -154,12 +183,13 @@ impl Expr {
                         })?
                     {
                         *self = eta_reduced;
+                        reduced = true;
                         continue;
                     }
                 }
             }
 
-            if self.apply_reduction_rule(ctx)? {
+            if apply_reduction_rules && self.apply_reduction_rule(ctx)? {
                 reduced = true;
             } else {
                 break;
@@ -675,6 +705,18 @@ impl LambdaExpr {
         expr
     }
 
+    fn extract_body_if_const(&mut self, ctx: &impl ParamContext<Param>) -> Option<Expr> {
+        ctx.with_local(&self.param, |body_ctx| {
+            if self.body.valid_in_superctx(body_ctx, ctx) {
+                let mut const_body = take(&mut self.body);
+                const_body.shift_to_supercontext(body_ctx, ctx);
+                Some(const_body)
+            } else {
+                None
+            }
+        })
+    }
+
     fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
         if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
             if metalogic_ctx.use_combinators() {
@@ -1174,6 +1216,7 @@ impl PlaceholderFiller {
                 self.has_unfilled_placeholders = true;
                 if self.force {
                     let type_str_options = MetaLogicContextOptions {
+                        reduce_with_reduction_rules: true,
                         reduce_with_combinators: true,
                         print_all_implicit_args: false,
                     };

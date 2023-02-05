@@ -52,6 +52,7 @@ impl MetaLogic {
                 .collect(),
             lambda_handler,
             root_ctx_options: MetaLogicContextOptions {
+                reduce_with_reduction_rules: false,
                 reduce_with_combinators: false,
                 print_all_implicit_args: true,
             },
@@ -88,6 +89,7 @@ impl MetaLogic {
         metalogic.insert_implicit_args()?;
         metalogic.fill_placeholders()?;
 
+        metalogic.root_ctx_options.reduce_with_reduction_rules = true;
         metalogic.root_ctx_options.reduce_with_combinators = true;
         metalogic.root_ctx_options.print_all_implicit_args = false;
         Ok(metalogic)
@@ -306,6 +308,7 @@ pub struct ReductionBody {
 
 #[derive(Clone, Copy)]
 pub struct MetaLogicContextOptions {
+    pub reduce_with_reduction_rules: bool,
     pub reduce_with_combinators: bool,
     pub print_all_implicit_args: bool,
 }
