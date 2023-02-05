@@ -266,7 +266,7 @@ impl MetaLogic {
                 let source_type_str = source_type.print(rule_ctx);
                 let target_str = rule.body.target.print(rule_ctx);
                 let target_type_str = target_type.print(rule_ctx);
-                Err(anyhow!("type conflict between «{source_str} : {source_type_str}» and «{target_str} : {target_type_str}»"))
+                Err(anyhow!("type conflict between «{source_str} : {source_type_str}»\nand «{target_str} : {target_type_str}»"))
             }
         })
     }

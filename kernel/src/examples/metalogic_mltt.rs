@@ -126,12 +126,15 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "trans : Π {A : U}. Π {a b c : A}. a = b → b = c → a = c",
                         red: &[
-                            "∀ {A : U}. ∀ a : A. trans (refl a) (refl a) :≡ refl a",
+                            // We are only allowed to eliminate `refl` in the first argument due to
+                            // the definition of `mid`.
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans (refl a) e :≡ e",
                         ],
                     },
-                    // "Remembering" the structure of equalities lets us query a sort of "mid point"
-                    // that starts out simply as the right side but becomes nontrivial once `trans`
-                    // is involved.
+                    // "Remembering" the structure of equalities lets us query an "inflection point"
+                    // such that the part left of that point has a "forward" (or indeterminate)
+                    // direction and the part right of it has a "backward" direction (i.e. it is
+                    // surrounded by `symm`).
                     // This has two advantages:
                     // * Dependent equality (aka pathover) becomes symmetric. In addition to making
                     //   things simpler, this produces terms with fewer inverses, e.g. the standard
@@ -140,10 +143,6 @@ pub fn get_mltt() -> MetaLogic {
                     //   `Equiv` being defined like in HoTT), many instances of `symm (symm e)`
                     //   essentially reduce to `e` -- not literally, but as arguments to `mid`,
                     //   `left`, or `right`.
-                    // However, a disadvantage is that `trans (refl a) e` and `trans e (refl b)`
-                    // cannot be reduced to `e`, as that would change the mid point.
-                    // TODO: We should probably do this differently; equalities should only be
-                    // split if they change direction at the mid point.
                     // Note how the reduction rules are given four each of the four constructors
                     // above.
                     DefInit {
@@ -152,7 +151,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. mid (Equiv_to_Eq e) :≡ Equiv_mid e",
                             "∀ {A : U}. ∀ a : A. mid (refl a) :≡ a",
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. mid (symm e) :≡ mid e",
-                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. mid (trans e f) :≡ b",
+                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. mid (trans e f) :≡ mid f",
                         ],
                     },
                     DefInit {
@@ -161,7 +160,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. left (Equiv_to_Eq e) :≡ Equiv_to_Eq (Equiv_left e)",
                             "∀ {A : U}. ∀ a : A. left (refl a) :≡ refl a",
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. left (symm e) :≡ symm (right e)",
-                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. left (trans e f) :≡ e",
+                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. left (trans e f) :≡ trans e (left f)",
                         ],
                     },
                     DefInit {
@@ -170,7 +169,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. right (Equiv_to_Eq e) :≡ Equiv_to_Eq (Equiv_right e)",
                             "∀ {A : U}. ∀ a : A. right (refl a) :≡ refl a",
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. right (symm e) :≡ symm (left e)",
-                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. right (trans e f) :≡ f",
+                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. right (trans e f) :≡ right f",
                         ],
                     },
                     DefInit {
@@ -178,8 +177,8 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. trans_left_right (Equiv_to_Eq e) :≡ Equiv_to_Eq (Equiv_trans_left_right e)",
                             "∀ {A : U}. ∀ a : A. trans_left_right (refl a) :≡ refl (refl a)",
-                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans_left_right (symm e) :≡ trans (symm (compInv (left e) (right e))) (ap (symm {A} {a} {b}) (trans_left_right e))",
-                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. trans_left_right (trans e f) :≡ refl (trans e f)",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans_left_right (symm e) :≡ trans (symm (compInv (left e) (right e))) (ap_symm (trans_left_right e))",
+                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. trans_left_right (trans e f) :≡ trans (symm (assoc e (left f) (right f))) (ap_trans_2 e (trans_left_right f))",
                         ],
                     },
                     DefInit {
@@ -206,10 +205,6 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "invInv: Π {A : U}. Π {a b : A}. Π e : a = b. symm (symm e) = e",
                         red: &["invInv :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_invInv (Eq_to_Equiv e))"],
-                    },
-                    DefInit {
-                        sym: "rightId: Π {A : U}. Π {a b : A}. Π e : a = b. trans (refl a) e = e",
-                        red: &["rightId :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_rightId (Eq_to_Equiv e))"],
                     },
                     DefInit {
                         sym: "leftId: Π {A : U}. Π {a b : A}. Π e : a = b. trans e (refl b) = e",
@@ -286,19 +281,19 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "DepEq_symm : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. a =[eAB] b → b =[symm eAB] a",
-                        red: &["DepEq_symm :≡ λ {A B eAB a b}. λ e. symm e"],
+                        red: &["DepEq_symm :≡ λ {A B eAB a b}. symm {mid eAB} {to (left eAB) a} {inv (right eAB) b}"],
                     },
                     DefInit {
                         sym: "DepEq_trans : Π {A B C : U}. Π {eAB : A = B}. Π {eBC : B = C}. Π {a : A}. Π {b : B}. Π {c : C}. a =[eAB] b → b =[eBC] c → a =[trans eAB eBC] c",
-                        red: &["DepEq_trans :≡ λ {A B C eAB eBC a b c}. λ e f. trans (DepEq_to e) (DepEq_inv f)"],
+                        red: &["DepEq_trans :≡ λ {A B C eAB eBC a b c}. λ e. trans {mid eBC} {to (left eBC) (to eAB a)} {to (left eBC) b} {inv (right eBC) c} (ap (to (left eBC)) (DepEq_to e))"],
                     },
                     DefInit {
                         sym: "DepEq_mid : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. a =[eAB] b → mid eAB",
-                        red: &["DepEq_mid :≡ λ {A B eAB a b}. λ e. mid e"],
+                        red: &["DepEq_mid :≡ λ {A B eAB a b}. mid {mid eAB} {to (left eAB) a} {inv (right eAB) b}"],
                     },
                     DefInit {
                         sym: "DepEq_left_to : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. Π e : a =[eAB] b. to (left eAB) a = DepEq_mid e",
-                        red: &["DepEq_left_to :≡ λ {A B eAB a b}. λ e. left e"],
+                        red: &["DepEq_left_to :≡ λ {A B eAB a b}. left {mid eAB} {to (left eAB) a} {inv (right eAB) b}"],
                     },
                     DefInit {
                         sym: "DepEq_left : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. Π e : a =[eAB] b. a =[left eAB] DepEq_mid e",
@@ -306,7 +301,7 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "DepEq_right_inv : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. Π e : a =[eAB] b. DepEq_mid e = inv (right eAB) b",
-                        red: &["DepEq_right_inv :≡ λ {A B eAB a b}. λ e. right e"],
+                        red: &["DepEq_right_inv :≡ λ {A B eAB a b}. right {mid eAB} {to (left eAB) a} {inv (right eAB) b}"],
                     },
                     DefInit {
                         sym: "DepEq_right : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. Π e : a =[eAB] b. DepEq_mid e =[right eAB] b",
@@ -350,7 +345,7 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "Equiv_trans : Π {A : U}. Π {a b c : A}. Equiv a b → Equiv b c → Equiv a c",
                         red: &[
-                            "∀ {A : U}. ∀ a : A. Equiv_trans (Equiv_refl a) (Equiv_refl a) :≡ Equiv_refl a",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. Equiv_trans (Equiv_refl a) e :≡ e",
                             "Equiv_trans {U} :≡ λ {A B C}. λ e f. Equiv_U_intro (λ a. Equiv_U_to f (Equiv_U_to e a)) (λ c. Equiv_U_inv e (Equiv_U_inv f c))",
                             "Equiv_trans {Unit} :≡ λ {_ _ _}. λ _ _. unit",
                             "∀ {A : U}. ∀ P : A → U. Equiv_trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans (efg a) (egh a)",
@@ -400,10 +395,6 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "Equiv_invInv: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_symm (Equiv_symm e) = e",
                         red: &["Equiv_invInv :≡ λ {A a b}. λ e. sorry _"],
-                    },
-                    DefInit {
-                        sym: "Equiv_rightId: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans (Equiv_refl a) e = e",
-                        red: &["Equiv_rightId :≡ λ {A a b}. λ e. sorry _"],
                     },
                     DefInit {
                         sym: "Equiv_leftId: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans e (Equiv_refl b) = e",
@@ -606,9 +597,6 @@ pub fn get_mltt() -> MetaLogic {
                     "∀ {A B : U}. ∀ f : A → B. ∀ {a b c : A}. ∀ eab : a = b. ∀ ebc : b = c. ap f (trans eab ebc) :≡ trans (ap f eab) (ap f ebc)",
                     "∀ A : U. ap (id A) :≡ λ {a a'}. λ e. e",
                     "∀ A : U. ∀ {B : U}. ∀ b : B. ap (const A b) :≡ λ {a a'}. λ e. refl b",
-                    // TODO: This violates confluence; need to add specialized combinators.
-                    // Or maybe we should have a "flattened" version of `trans` that does eliminate
-                    // `refl`?
                     "∀ {A B C : U}. ∀ g : B → C. ∀ f : A → B. ap {A} {C} (subst {A} {const A B} {const A (const B C)} (const A g) f) :≡ λ {a a'}. λ e. ap g (ap f e)",
                 ],
             },
@@ -622,6 +610,8 @@ pub fn get_mltt() -> MetaLogic {
                     "∀ A : U. ap' (id A) :≡ λ {a a'}. λ e. e",
                     "∀ A : U. ∀ {B : U}. ∀ b : B. ap' (const A b) :≡ λ {a a'}. λ e. refl b",
                     "∀ A B : U. ∀ {b b' : B}. ∀ e : b = b'. ap' (const A {B}) e :≡ Equiv_to_Eq (λ a : A. e)",
+                    // Note: Due to the reduction rule of `trans`, it is important that the first
+                    // argument of `subst` becomes `refl` when `g` is constant on `A`.
                     "∀ {A B C : U}. ∀ g : A → B → C. ∀ f : A → B. ap' {A} {C} (subst {A} {const A B} {const A (const B C)} g f) :≡ λ {a a'}. λ e. trans {C} {g a (f a)} {g a' (f a)} {g a' (f a')} (Eq_to_Equiv (ap g e) (f a)) (ap (g a') (ap f e))",
                     //"∀ {A : U}. ∀ {P : A → U}. ∀ {C : U}. ∀ g : (Π a : A. P a → C). ∀ f : Pi P. ap' {A} {C} (subst {A} {P} {λ a b. C} g f) :≡ λ {a a'}. λ e. trans {C} {g a (f a)} {g a' (f a)} {g a' (f a')} (Eq_to_Equiv (apd g e) (f a)) (ap (g a') (apd f e))",
                     // TODO other elimination functions

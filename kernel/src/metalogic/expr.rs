@@ -343,7 +343,7 @@ impl Expr {
                     let arg_str = arg.expr.print(ctx);
                     let arg_type = arg.expr.get_type(ctx)?;
                     let arg_type_str = arg_type.print(ctx);
-                    Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}» cannot be applied to «{arg_str} : {arg_type_str}»"))
+                    Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
                 }
             }
             Expr::Lambda(lambda) => ctx.with_local(&lambda.param, |body_ctx| {
@@ -759,7 +759,7 @@ impl LambdaExpr {
             let fun_type_str = fun_type.print(body_ctx);
             let arg_str = arg.print(body_ctx);
             let arg_type_str = arg_type.print(body_ctx);
-            Err(anyhow!("application type mismatch when converting to combinator: «{fun_str} : {fun_type_str}» cannot be applied to «{arg_str} : {arg_type_str}»"))
+            Err(anyhow!("application type mismatch when converting to combinator: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
         }
     }
 }
