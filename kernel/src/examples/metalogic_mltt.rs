@@ -142,6 +142,8 @@ pub fn get_mltt() -> MetaLogic {
                     //   `left`, or `right`.
                     // However, a disadvantage is that `trans (refl a) e` and `trans e (refl b)`
                     // cannot be reduced to `e`, as that would change the mid point.
+                    // TODO: We should probably do this differently; equalities should only be
+                    // split if they change direction at the mid point.
                     // Note how the reduction rules are given four each of the four constructors
                     // above.
                     DefInit {
@@ -443,6 +445,14 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "Equiv_U_to_inv : Π {A B : U}. Π e : Equiv A B. Π b : B. Equiv_U_to e (Equiv_U_inv e b) = b",
                         red: &["Equiv_U_to_inv :≡ λ {A B}. λ e b. sorry _"],
                     },
+                    DefInit {
+                        sym: "Equiv_Fun_nat : Π {A B : U}. Π {f g : A → B}. Π efg : Equiv f g. Π {a a' : A}. Π ea : a = a'. trans (efg a) (ap g ea) = trans (ap f ea) (efg a')",
+                        red: &["Equiv_Fun_nat :≡ λ {A B f g}. λ efg. λ {a a'}. λ ea. sorry _"], // apd efg ea
+                    },
+                    DefInit {
+                        sym: "Equiv_id_nat : Π {A : U}. Π {f : A → A}. Π ef : (Π a : A. f a = a). Π {a a' : A}. Π ea : a = a'. trans (ef a) ea = trans (ap f ea) (ef a')",
+                        red: &["Equiv_id_nat :≡ λ {A f}. Equiv_Fun_nat {A} {A} {f} {id A}"],
+                    },
                 ],
             },
             TypeInit {
@@ -563,12 +573,12 @@ pub fn get_mltt() -> MetaLogic {
                                                        λ efAB : (Π a : A. ap fAB (eABA a) = eBAB (fAB a)). \
                                                        λ efBC : (Π b : B. ap fBC (eBCB b) = eCBC (fBC b)). \
                                                        λ a : A. \
-                                                       [h1 : ap fAB (trans (ap fBA (eBCB (fAB a))) (eABA a)) = \
+                                                       [h1 : trans (ap fAB (ap fBA (eBCB (fAB a)))) (ap fAB (eABA a)) = \
                                                              trans (ap fAB (ap fBA (eBCB (fAB a)))) (eBAB (fAB a)) \
                                                            ⫽ ap_trans_2 (ap fAB (ap fBA (eBCB (fAB a)))) (efAB a)] \
                                                        [h2 : trans (ap fAB (ap fBA (eBCB (fAB a)))) (eBAB (fAB a)) = \
                                                              trans (eBAB (fCB (fBC (fAB a)))) (eBCB (fAB a)) \
-                                                           ⫽ sorry _] \
+                                                           ⫽ symm (Equiv_id_nat {B} {λ b. fAB (fBA b)} eBAB (eBCB (fAB a)))] \
                                                        [h3 : ap fBC (trans (eBAB (fCB (fBC (fAB a)))) (eBCB (fAB a))) = \
                                                              trans (ap fBC (eBAB (fCB (fBC (fAB a))))) (eCBC (fBC (fAB a))) \
                                                            ⫽ ap_trans_2 (ap fBC (eBAB (fCB (fBC (fAB a))))) (efBC (fAB a))] \
@@ -597,6 +607,8 @@ pub fn get_mltt() -> MetaLogic {
                     "∀ A : U. ap (id A) :≡ λ {a a'}. λ e. e",
                     "∀ A : U. ∀ {B : U}. ∀ b : B. ap (const A b) :≡ λ {a a'}. λ e. refl b",
                     // TODO: This violates confluence; need to add specialized combinators.
+                    // Or maybe we should have a "flattened" version of `trans` that does eliminate
+                    // `refl`?
                     "∀ {A B C : U}. ∀ g : B → C. ∀ f : A → B. ap {A} {C} (subst {A} {const A B} {const A (const B C)} (const A g) f) :≡ λ {a a'}. λ e. ap g (ap f e)",
                 ],
             },
@@ -610,8 +622,8 @@ pub fn get_mltt() -> MetaLogic {
                     "∀ A : U. ap' (id A) :≡ λ {a a'}. λ e. e",
                     "∀ A : U. ∀ {B : U}. ∀ b : B. ap' (const A b) :≡ λ {a a'}. λ e. refl b",
                     "∀ A B : U. ∀ {b b' : B}. ∀ e : b = b'. ap' (const A {B}) e :≡ Equiv_to_Eq (λ a : A. e)",
-                    "∀ {A B C : U}. ∀ g : A → B → C. ∀ f : A → B. ap' {A} {C} (subst {A} {const A B} {const A (const B C)} g f) :≡ λ {a a'}. λ e. trans {C} {g a (f a)} {g a (f a')} {g a' (f a')} (ap (g a) (ap f e)) (Eq_to_Equiv (ap g e) (f a'))",
-                    //"∀ {A : U}. ∀ {P : A → U}. ∀ {C : U}. ∀ g : (Π a : A. P a → C). ∀ f : Pi P. ap' {A} {C} (subst {A} {P} {λ a b. C} g f) :≡ λ {a a'}. λ e. trans {C} {g a (f a)} {g a (f a')} {g a' (f a')} (ap (g a) (apd f e)) (Eq_to_Equiv (apd g e) (f a'))",
+                    "∀ {A B C : U}. ∀ g : A → B → C. ∀ f : A → B. ap' {A} {C} (subst {A} {const A B} {const A (const B C)} g f) :≡ λ {a a'}. λ e. trans {C} {g a (f a)} {g a' (f a)} {g a' (f a')} (Eq_to_Equiv (ap g e) (f a)) (ap (g a') (ap f e))",
+                    //"∀ {A : U}. ∀ {P : A → U}. ∀ {C : U}. ∀ g : (Π a : A. P a → C). ∀ f : Pi P. ap' {A} {C} (subst {A} {P} {λ a b. C} g f) :≡ λ {a a'}. λ e. trans {C} {g a (f a)} {g a' (f a)} {g a' (f a')} (Eq_to_Equiv (apd g e) (f a)) (ap (g a') (apd f e))",
                     // TODO other elimination functions
                 ],
             },
@@ -673,6 +685,10 @@ pub fn get_mltt() -> MetaLogic {
             DefInit {
                 sym: "ap_trans_2 : Π {A : U}. Π {a b c : A}. Π e : a = b. Π {f f' : b = c}. f = f' → trans e f = trans e f'",
                 red: &["ap_trans_2 :≡ λ {A a b c}. λ e. λ {f f'}. λ hf. ap (trans {A} {a} {b} {c} e) hf"],
+            },
+            DefInit {
+                sym: "ap_trans : Π {A : U}. Π {a b c : A}. Π {e e' : a = b}. e = e' → Π {f f' : b = c}. f = f' → trans e f = trans e' f'",
+                red: &["ap_trans :≡ λ {A a b c e e'}. λ he. λ {f f'}. λ hf. trans (ap_trans_1 he f) (ap_trans_2 e' hf)"],
             },
             DefInit {
                 sym: "apj : Π {A : U}. Π {a a' : A}. Π P : (Π b : A. a = b → U). Π e : a = a'. P a (refl a) = P a' e",
