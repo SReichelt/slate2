@@ -1034,15 +1034,15 @@ impl ExprVisitor for ParamTypeChecker {
 }
 
 pub trait ExprManipulator {
-    fn expr(&self, _expr: &mut Expr, _ctx: &MetaLogicContext) -> Result<()> {
+    fn expr(&mut self, _expr: &mut Expr, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn param(&self, _param: &mut Param, _ctx: &MetaLogicContext) -> Result<()> {
+    fn param(&mut self, _param: &mut Param, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn params(&self, params: &mut [Param], ctx: &MetaLogicContext) -> Result<()> {
+    fn params(&mut self, params: &mut [Param], ctx: &MetaLogicContext) -> Result<()> {
         for param_idx in 0..params.len() {
             let (prev, next) = params.split_at_mut(param_idx);
             let param = &mut next[0];
@@ -1051,7 +1051,7 @@ pub trait ExprManipulator {
         Ok(())
     }
 
-    fn arg(&self, _arg: &mut Arg, _ctx: &MetaLogicContext) -> Result<()> {
+    fn arg(&mut self, _arg: &mut Arg, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 }
@@ -1062,13 +1062,13 @@ pub struct ImplicitArgInserter {
 
 impl ImplicitArgInserter {
     pub fn insert_implicit_args_and_get_type(
-        &self,
+        &mut self,
         expr: &mut Expr,
         ctx: &MetaLogicContext,
     ) -> Result<Expr> {
         let mut expr_type = self.insert_implicit_args(expr, ctx)?;
         if self.max_depth > 0 && expr_type != Expr::Placeholder {
-            let type_arg_inserter = ImplicitArgInserter {
+            let mut type_arg_inserter = ImplicitArgInserter {
                 max_depth: self.max_depth - 1,
             };
             type_arg_inserter.insert_implicit_args(&mut expr_type, ctx)?;
@@ -1077,7 +1077,11 @@ impl ImplicitArgInserter {
         Ok(Expr::Placeholder)
     }
 
-    pub fn insert_implicit_args(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<Expr> {
+    pub fn insert_implicit_args(
+        &mut self,
+        expr: &mut Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Expr> {
         match expr {
             Expr::Placeholder => Ok(Expr::Placeholder),
             Expr::Var(var) => Ok(var.get_type(ctx)),
@@ -1120,40 +1124,37 @@ impl ImplicitArgInserter {
 }
 
 impl ExprManipulator for ImplicitArgInserter {
-    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
+    fn expr(&mut self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
         self.insert_implicit_args(expr, ctx)?;
         Ok(())
     }
 
-    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
+    fn param(&mut self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
         self.expr(&mut param.type_expr, ctx)
     }
 
-    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
+    fn arg(&mut self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
         self.expr(&mut arg.expr, ctx)
     }
 }
 
 pub struct PlaceholderFiller {
-    pub force: bool,
     pub max_reduction_depth: u32,
+    pub force: bool,
+    pub has_unfilled_placeholders: bool,
 }
 
 impl PlaceholderFiller {
     pub fn try_fill_placeholders(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<Expr> {
-        if self.force {
-            let weak_filler = PlaceholderFiller {
-                force: false,
-                ..*self
-            };
-            weak_filler.fill_placeholders(expr, Expr::Placeholder, ctx)
-        } else {
-            self.fill_placeholders(expr, Expr::Placeholder, ctx)
-        }
+        let mut sub_filler = PlaceholderFiller {
+            force: false,
+            ..*self
+        };
+        sub_filler.fill_placeholders(expr, Expr::Placeholder, ctx)
     }
 
     pub fn fill_placeholders(
-        &self,
+        &mut self,
         expr: &mut Expr,
         mut expected_type: Expr,
         ctx: &MetaLogicContext,
@@ -1163,13 +1164,14 @@ impl PlaceholderFiller {
     }
 
     fn fill_inner_placeholders(
-        &self,
+        &mut self,
         expr: &mut Expr,
         mut expected_type: Expr,
         ctx: &MetaLogicContext,
     ) -> Result<Expr> {
         match expr {
             Expr::Placeholder => {
+                self.has_unfilled_placeholders = true;
                 if self.force {
                     let type_str_options = MetaLogicContextOptions {
                         reduce_with_combinators: true,
@@ -1186,7 +1188,7 @@ impl PlaceholderFiller {
                         Err(anyhow!("unfilled placeholder of type «{type_str}»"))
                     })
                 } else {
-                    Ok(Expr::Placeholder)
+                    Ok(expected_type)
                 }
             }
             Expr::Var(var) => Ok(var.get_type(ctx)),
@@ -1436,18 +1438,18 @@ impl PlaceholderFiller {
 }
 
 impl ExprManipulator for PlaceholderFiller {
-    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
+    fn expr(&mut self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
         self.fill_placeholders(expr, Expr::Placeholder, ctx)?;
         Ok(())
     }
 
-    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
+    fn param(&mut self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
         let expected_type = ctx.lambda_handler().get_universe_type()?;
         self.fill_placeholders(&mut param.type_expr, expected_type, ctx)?;
         Ok(())
     }
 
-    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
+    fn arg(&mut self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
         self.expr(&mut arg.expr, ctx)
     }
 }

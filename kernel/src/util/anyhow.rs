@@ -22,7 +22,7 @@ impl CombineErrors for Vec<Error> {
                     err.chain()
                         .map(|cause| cause.to_string())
                         .collect::<Vec<String>>()
-                        .join(": ")
+                        .join(":\n")
                 })
                 .collect::<Vec<String>>()
                 .join("\n\n"),
