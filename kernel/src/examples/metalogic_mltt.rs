@@ -317,22 +317,24 @@ pub fn get_mltt() -> MetaLogic {
                 ctor: DefInit {
                     sym: "Equiv : Π {A : U}. A → A → U",
                     red: &[
-                        "Equiv {U} :≡ λ A B. ((A → B) × (B → A))", // TODO
+                        "Equiv {U} :≡ λ A B. Sigma (IsEquiv {A} {B})",
                         "Equiv {Unit} :≡ λ _ _. Unit",
                         "∀ {A : U}. ∀ P : A → U. Equiv {Pi P} :≡ λ f g. Π a : A. f a = g a",
                         "∀ {A : U}. ∀ P : A → U. Equiv {Sigma P} :≡ λ p q. Σ e_fst : Sigma_fst p = Sigma_fst q. Sigma_snd p =[ap P e_fst] Sigma_snd q",
                         "∀ {A : U}. ∀ a b : A. Equiv {a = b} :≡ λ e f. Eq_to_Equiv e = Eq_to_Equiv f",
+                        "∀ {A B : U}. ∀ f : A → B. Equiv {IsEquiv f} :≡ λ _ _. Unit",
                     ],
                 },
                 defs: &[
                     DefInit {
                         sym: "Equiv_refl : Π {A : U}. Π a : A. Equiv a a",
                         red: &[
-                            "Equiv_refl {U} :≡ λ A. Equiv_U_intro (id A) (id A)",
+                            "Equiv_refl {U} :≡ λ A. Sigma_intro (IsEquiv {A} {A}) (id A) (IsEquiv_refl A)",
                             "Equiv_refl {Unit} :≡ λ _. unit",
                             "∀ {A : U}. ∀ P : A → U. Equiv_refl {Pi P} :≡ λ f. λ a : A. refl (f a)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_refl {Sigma P} :≡ λ p. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst p. Sigma_snd p =[ap P e_fst] Sigma_snd p) (refl (Sigma_fst p)) (DepEq_refl (Sigma_snd p))",
                             "∀ {A : U}. ∀ a b : A. Equiv_refl {a = b} :≡ λ e. refl (Eq_to_Equiv e)",
+                            "∀ {A B : U}. ∀ f : A → B. Equiv_refl {IsEquiv f} :≡ λ _. unit",
                         ],
                     },
                     DefInit {
@@ -340,21 +342,23 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[
                             "∀ {A : U}. ∀ a : A. Equiv_symm (Equiv_refl a) :≡ Equiv_refl a",
                             "Equiv_symm {Unit} :≡ λ {_ _}. λ _. unit",
-                            "Equiv_symm {U} :≡ λ {A B}. λ e. Equiv_U_intro (Equiv_U_inv e) (Equiv_U_to e)",
+                            "Equiv_symm {U} :≡ λ {A B}. λ e. Sigma_intro (IsEquiv {B} {A}) (Equiv_U_inv e) (IsEquiv_symm (Sigma_snd e))",
                             "∀ {A : U}. ∀ P : A → U. Equiv_symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_symm {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = Sigma_fst p. Sigma_snd q =[ap P e_fst] Sigma_snd p) (symm {A} {Sigma_fst p} {Sigma_fst q} (Sigma_fst e)) (DepEq_symm {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))",
                             "∀ {A : U}. ∀ a b : A. Equiv_symm {a = b} :≡ λ {e f}. symm {Equiv a b} {Eq_to_Equiv e} {Eq_to_Equiv f}",
+                            "∀ {A B : U}. ∀ f : A → B. Equiv_symm {IsEquiv f} :≡ λ {_ _}. λ _. unit",
                         ],
                     },
                     DefInit {
                         sym: "Equiv_trans : Π {A : U}. Π {a b c : A}. Equiv a b → Equiv b c → Equiv a c",
                         red: &[
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. Equiv_trans (Equiv_refl a) e :≡ e",
-                            "Equiv_trans {U} :≡ λ {A B C}. λ e f. Equiv_U_intro (λ a. Equiv_U_to f (Equiv_U_to e a)) (λ c. Equiv_U_inv e (Equiv_U_inv f c))",
+                            "Equiv_trans {U} :≡ λ {A B C}. λ e f. Sigma_intro {A → C} (IsEquiv {A} {C}) (λ a. Equiv_U_to f (Equiv_U_to e a)) (IsEquiv_trans (Sigma_snd e) (Sigma_snd f))",
                             "Equiv_trans {Unit} :≡ λ {_ _ _}. λ _ _. unit",
                             "∀ {A : U}. ∀ P : A → U. Equiv_trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans (efg a) (egh a)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_trans {Sigma P} :≡ λ {p q r}. λ epq eqr. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst r. Sigma_snd p =[ap P e_fst] Sigma_snd r) (trans {A} {Sigma_fst p} {Sigma_fst q} {Sigma_fst r} (Sigma_fst epq) (Sigma_fst eqr)) (DepEq_trans {P (Sigma_fst p)} {P (Sigma_fst q)} {P (Sigma_fst r)} {ap P (Sigma_fst epq)} {ap P (Sigma_fst eqr)} {Sigma_snd p} {Sigma_snd q} {Sigma_snd r} (Sigma_snd epq) (Sigma_snd eqr))",
                             "∀ {A : U}. ∀ a b : A. Equiv_trans {a = b} :≡ λ {e f g}. trans {Equiv a b} {Eq_to_Equiv e} {Eq_to_Equiv f} {Eq_to_Equiv g}",
+                            "∀ {A B : U}. ∀ f : A → B. Equiv_trans {IsEquiv f} :≡ λ {_ _ _}. λ _ _. unit",
                         ],
                     },
                     DefInit {
@@ -363,11 +367,12 @@ pub fn get_mltt() -> MetaLogic {
                             // We can propagate the mid point from the contents of each equivalence,
                             // except that type equivalences don't actually have any obvious mid
                             // point, so we just place them completely on the left side.
-                            "Equiv_mid {U} :≡ λ {A B}. λ e. B",
-                            "Equiv_mid {Unit} :≡ λ {_ _}. λ _. unit",
+                            "Equiv_mid {U} :≡ λ {A B}. λ _. B",
+                            "Equiv_mid {Unit} :≡ λ {a b}. λ _. b",
                             "∀ {A : U}. ∀ P : A → U. Equiv_mid {Pi P} :≡ λ {f g}. λ e. λ a : A. mid (e a)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_mid {Sigma P} :≡ λ {p q}. λ e. Sigma_intro P (mid (Sigma_fst e)) (to (mid_ap P (Sigma_fst e)) (DepEq_mid {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e)))",
                             "∀ {A : U}. ∀ a b : A. Equiv_mid {a = b} :≡ λ {e f}. λ eef. Equiv_to_Eq (mid eef)",
+                            "∀ {A B : U}. ∀ f : A → B. Equiv_mid {IsEquiv f} :≡ λ {h i}. λ _. i",
                         ],
                     },
                     DefInit {
@@ -378,6 +383,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ P : A → U. Equiv_left {Pi P} :≡ λ {f g}. λ e. λ a : A. left (e a)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_left {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst p = mid (Sigma_fst e). Sigma_snd p =[ap P e_fst] to (mid_ap P (Sigma_fst e)) (DepEq_mid {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))) (left (Sigma_fst e)) (sorry _)", // (DepEq_left {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))
                             "∀ {A : U}. ∀ a b : A. Equiv_left {a = b} :≡ λ {e f}. λ eef. left eef",
+                            "∀ {A B : U}. ∀ f : A → B. Equiv_left {IsEquiv f} :≡ λ {_ _}. λ _. unit",
                         ],
                     },
                     DefInit {
@@ -388,6 +394,7 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ P : A → U. Equiv_right {Pi P} :≡ λ {f g}. λ e. λ a : A. right (e a)",
                             "∀ {A : U}. ∀ P : A → U. Equiv_right {Sigma P} :≡ λ {p q}. λ e. Sigma_intro (λ e_fst : Sigma_fst q = mid (Sigma_fst e). Sigma_snd q =[ap P e_fst] to (mid_ap P (Sigma_fst e)) (DepEq_mid {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))) (right (Sigma_fst e)) (sorry _)",
                             "∀ {A : U}. ∀ a b : A. Equiv_right {a = b} :≡ λ {e f}. λ eef. right eef",
+                            "∀ {A B : U}. ∀ f : A → B. Equiv_right {IsEquiv f} :≡ λ {_ _}. λ _. unit",
                         ],
                     },
                     DefInit {
@@ -419,16 +426,16 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["Equiv_assoc :≡ λ {A a b c d}. λ e f g. sorry _"],
                     },
                     DefInit {
-                        sym: "Equiv_U_intro : Π {A B : U}. (A → B) → (B → A) → Equiv A B",
-                        red: &["Equiv_U_intro :≡ λ {A B}. Pair_intro (A → B) (B → A)"],
+                        sym: "Equiv_U_intro : Π {A B : U}. Π f : A → B. Π g : B → A. IsInv f g → Equiv A B",
+                        red: &["Equiv_U_intro :≡ λ {A B}. λ f g e. Sigma_intro {A → B} (IsEquiv {A} {B}) f (IsEquiv_intro f g e)"],
                     },
                     DefInit {
                         sym: "Equiv_U_to : Π {A B : U}. Equiv A B → A → B",
-                        red: &["Equiv_U_to :≡ λ {A B}. Pair_fst {A → B} {B → A}"],
+                        red: &["Equiv_U_to :≡ λ {A B}. Sigma_fst {A → B} {IsEquiv {A} {B}}"],
                     },
                     DefInit {
                         sym: "Equiv_U_inv : Π {A B : U}. Equiv A B → B → A",
-                        red: &["Equiv_U_inv :≡ λ {A B}. Pair_snd {A → B} {B → A}"],
+                        red: &["Equiv_U_inv :≡ λ {A B}. λ e. IsEquiv_inv (Sigma_snd e)"],
                     },
                     DefInit {
                         sym: "Equiv_U_inv_to : Π {A B : U}. Π e : Equiv A B. Π a : A. Equiv_U_inv e (Equiv_U_to e a) = a",
@@ -450,10 +457,57 @@ pub fn get_mltt() -> MetaLogic {
             },
             TypeInit {
                 ctor: DefInit {
+                    // We define `IsEquiv f` as a primitive type instead of just `Sigma (IsInv f)`
+                    // for several reasons:
+                    // * We want to avoid `Equiv A B` from blowing up when reducing.
+                    // * We can give `IsEquiv` a custom equality, and of course we will just use
+                    //   `Unit` since `IsEquiv` is contractible (as shown in the HoTT book).
+                    // * And finally, it makes us less dependent on the exact definition, for which
+                    //   there are different possibilities.
                     sym: "IsEquiv : Π {A B : U}. (A → B) → U",
-                    red: &["IsEquiv :≡ λ {A B}. λ f. Sigma (IsInv f)"],
+                    red: &[],
                 },
                 defs: &[
+                    DefInit {
+                        sym: "IsEquiv_intro : Π {A B : U}. Π f : A → B. Π g : B → A. IsInv f g → IsEquiv f",
+                        red: &[],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_inv : Π {A B : U}. Π {f : A → B}. IsEquiv f → (B → A)",
+                        red: &["∀ {A B : U}. ∀ f : A → B. ∀ g : B → A. ∀ efg : IsInv f g. IsEquiv_inv (IsEquiv_intro f g efg) :≡ g"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_isInv : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsInv f (IsEquiv_inv h)",
+                        red: &["∀ {A B : U}. ∀ f : A → B. ∀ g : B → A. ∀ efg : IsInv f g. IsEquiv_isInv (IsEquiv_intro f g efg) :≡ efg"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_qInv : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsQuasiInv f (IsEquiv_inv h)",
+                        red: &["IsEquiv_qInv :≡ λ {A B f}. λ h. IsInv_qInv (IsEquiv_isInv h)"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_leftInv : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsLeftInv f (IsEquiv_inv h)",
+                        red: &["IsEquiv_leftInv :≡ λ {A B f}. λ h. IsInv_leftInv (IsEquiv_isInv h)"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_rightInv : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsLeftInv (IsEquiv_inv h) f",
+                        red: &["IsEquiv_rightInv :≡ λ {A B f}. λ h. IsInv_rightInv (IsEquiv_isInv h)"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_adj : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsHalfAdjoint (IsEquiv_qInv h)",
+                        red: &["IsEquiv_adj :≡ λ {A B f}. λ h. IsInv_adj (IsEquiv_isInv h)"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_refl : Π A : U. IsEquiv (id A)",
+                        red: &["IsEquiv_refl :≡ λ A. IsEquiv_intro (id A) (id A) (IsInv_refl A)"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_symm : Π {A B : U}. Π {f : A → B}. Π h : IsEquiv f. IsEquiv (IsEquiv_inv h)",
+                        red: &["IsEquiv_symm :≡ λ {A B f}. λ h. IsEquiv_intro (IsEquiv_inv h) f (IsInv_symm (IsEquiv_isInv h))"],
+                    },
+                    DefInit {
+                        sym: "IsEquiv_trans : Π {A B C : U}. Π {f : A → B}. Π {g : B → C}. Π hf : IsEquiv f. Π hg : IsEquiv g. IsEquiv {A} {C} (λ a. g (f a))",
+                        red: &["IsEquiv_trans :≡ λ {A B C f g}. λ hf hg. IsEquiv_intro {A} {C} (λ a. g (f a)) (λ c. (IsEquiv_inv hf) (IsEquiv_inv hg c)) (IsInv_trans (IsEquiv_isInv hf) (IsEquiv_isInv hg))"],
+                    },
                 ],
             },
             TypeInit {
@@ -606,7 +660,7 @@ pub fn get_mltt() -> MetaLogic {
                 sym: "ap' : Π {A B : U}. Π f : A → B. Π {a a' : A}. a = a' → f a = f a'",
                 red: &[
                     // Type constructors
-                    "∀ {A : U}. ∀ a : A. ∀ {b b' : A}. ∀ e : b = b'. ap' (Eq a) e :≡ Equiv_to_Eq (Equiv_U_intro (λ f : a = b. trans f e) (λ f : a = b'. trans f (symm e)))",
+                    "∀ {A : U}. ∀ a : A. ∀ {b b' : A}. ∀ e : b = b'. ap' (Eq a) e :≡ Equiv_to_Eq (Equiv_U_intro (λ f : a = b. trans f e) (λ f : a = b'. trans f (symm e)) (sorry _))",
                     // TODO
                     // Combinators
                     "∀ A : U. ap' (id A) :≡ λ {a a'}. λ e. e",
