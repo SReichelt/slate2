@@ -490,7 +490,6 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "IsEquiv_trans : Π {A B C : U}. Π {f : A → B}. Π {g : B → C}. Π hf : IsEquiv f. Π hg : IsEquiv g. IsEquiv {A} {C} (λ a. g (f a))",
                         red: &[
                             "∀ {A B : U}. ∀ {f : A → B}. ∀ h : IsEquiv f. IsEquiv_trans (IsEquiv_refl A) h :≡ h",
-                            "∀ {A B : U}. ∀ {f : A → B}. ∀ h : IsEquiv f. IsEquiv_trans h (IsEquiv_refl B) :≡ h",
                         ],
                     },
                     DefInit {
