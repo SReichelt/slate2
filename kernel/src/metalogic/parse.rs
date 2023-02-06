@@ -1,7 +1,8 @@
-use std::{mem::take, rc::Rc};
+use std::mem::take;
 
 use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
+use string_interner::DefaultSymbol;
 
 use super::{expr::*, metalogic::*};
 
@@ -145,7 +146,7 @@ impl ParsingContext<'_, '_, '_> {
                 while self.input.try_read_char('⁺') {
                     occurrence += 1;
                 }
-                if let Some(var_idx) = self.context.get_var_index(name, occurrence) {
+                if let Some(var_idx) = self.context.get_named_var_index(name, occurrence) {
                     Ok(Some(Expr::var(var_idx)))
                 } else {
                     let err = anyhow!("variable '{name}' not found");
@@ -194,11 +195,11 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn get_param_name(param_name_str: &str) -> Option<Rc<String>> {
+    fn get_param_name(&mut self, param_name_str: &str) -> Option<DefaultSymbol> {
         if param_name_str == "_" {
             None
         } else {
-            Some(Rc::new(param_name_str.into()))
+            Some(self.context.intern_name(param_name_str))
         }
     }
 
@@ -209,7 +210,7 @@ impl ParsingContext<'_, '_, '_> {
             implicit = true;
         }
         if let Some(param_name_str) = self.input.try_read_name() {
-            let param_name = Self::get_param_name(param_name_str);
+            let param_name = self.get_param_name(param_name_str);
             self.input.skip_whitespace();
             let param_type = if self.input.try_read_char(':') {
                 self.parse_expr()?
@@ -248,11 +249,11 @@ impl ParsingContext<'_, '_, '_> {
             implicit = true;
         }
         if let Some(param_name_str) = self.input.try_read_name() {
-            let mut param_names: SmallVec<[Option<Rc<String>>; INLINE_PARAMS]> =
-                smallvec![Self::get_param_name(param_name_str)];
+            let mut param_names: SmallVec<[Option<DefaultSymbol>; INLINE_PARAMS]> =
+                smallvec![self.get_param_name(param_name_str)];
             self.input.skip_whitespace();
             while let Some(param_name_str) = self.input.try_read_name() {
-                param_names.push(Self::get_param_name(param_name_str));
+                param_names.push(self.get_param_name(param_name_str));
                 self.input.skip_whitespace();
             }
             let param_type = if self.input.try_read_char(':') {

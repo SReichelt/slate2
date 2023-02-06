@@ -1,11 +1,11 @@
 use std::{
     fmt::{self, Debug},
     mem::take,
-    rc::Rc,
 };
 
 use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
+use string_interner::symbol::DefaultSymbol;
 
 use super::{metalogic::*, parse::*, print::*};
 
@@ -475,8 +475,8 @@ impl Expr {
                 type_2.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx),
             ) {
                 if lambda_1.param.implicit != lambda_2.param.implicit {
-                    let name_1 = lambda_1.param.get_name_or_placeholder();
-                    let name_2 = lambda_2.param.get_name_or_placeholder();
+                    let name_1 = ctx.get_display_name(&lambda_1.param);
+                    let name_2 = ctx.get_display_name(&lambda_2.param);
                     return Err(anyhow!(
                         "implicitness of «{name_1}» does not match implicitness of «{name_2}»"
                     ));
@@ -808,18 +808,14 @@ impl LambdaExpr {
 
 #[derive(Clone, Default)]
 pub struct Param {
-    pub name: Option<Rc<String>>,
+    pub name: Option<DefaultSymbol>,
     pub type_expr: Expr,
     pub implicit: bool,
 }
 
-impl NamedObject for Param {
-    fn get_name(&self) -> Option<&str> {
-        if let Some(name) = &self.name {
-            Some(name)
-        } else {
-            None
-        }
+impl NamedObject<DefaultSymbol> for Param {
+    fn get_name(&self) -> Option<DefaultSymbol> {
+        self.name
     }
 }
 
@@ -834,7 +830,7 @@ impl Debug for Param {
         if self.implicit {
             f.write_str("{")?;
         }
-        f.write_str(self.get_name_or_placeholder())?;
+        self.name.fmt(f)?;
         f.write_str(":")?;
         self.type_expr.fmt(f)?;
         if self.implicit {
@@ -1145,7 +1141,7 @@ impl ImplicitArgInserter {
                         );
                         fun_type = lambda.apply(arg.clone(), ctx);
                     } else if arg.implicit && !lambda.param.implicit {
-                        let name = lambda.param.get_name_or_placeholder();
+                        let name = ctx.get_display_name(&lambda.param);
                         return Err(anyhow!("expected explicit argument for «{name}»"));
                     } else {
                         return Ok(lambda.apply(arg.clone(), ctx));

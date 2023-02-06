@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
-use super::{expr::*, metalogic::*};
+use crate::generic::context::*;
+
+use super::metalogic::*;
 
 pub struct TypeInit<'a> {
     pub ctor: DefInit<'a>,
@@ -14,7 +18,7 @@ impl MetaLogic {
         create_lambda_handler: F,
     ) -> Result<Self>
     where
-        F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
+        F: FnOnce(&HashMap<&str, VarIndex>) -> Box<dyn LambdaHandler>,
     {
         let mut constants_init: Vec<DefInit> = Vec::new();
 

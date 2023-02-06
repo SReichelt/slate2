@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use smallvec::smallvec;
 
@@ -762,7 +764,7 @@ pub fn get_mltt() -> MetaLogic {
                 red: &["∀ {A : U}. ∀ a : A. sorry (a = a) :≡ refl a"], // to reduce temporary failures
             },
         ],
-        |ctx| Box::new(MLTTLambdaHandler::new(ctx)),
+        |constants| Box::new(MLTTLambdaHandler::new(constants)),
     )
     .unwrap()
 }
@@ -779,16 +781,16 @@ struct MLTTLambdaHandler {
 }
 
 impl MLTTLambdaHandler {
-    fn new(ctx: &[Param]) -> Self {
+    fn new(constants: &HashMap<&str, VarIndex>) -> Self {
         MLTTLambdaHandler {
-            u_idx: ctx.get_var_index("U", 0).unwrap(),
-            pi_idx: ctx.get_var_index("Pi", 0).unwrap(),
-            sigma_idx: ctx.get_var_index("Sigma", 0).unwrap(),
-            id_idx: ctx.get_var_index("id", 0).unwrap(),
-            const_idx: ctx.get_var_index("const", 0).unwrap(),
-            subst_idx: ctx.get_var_index("subst", 0).unwrap(),
-            eq_idx: ctx.get_var_index("Eq", 0).unwrap(),
-            dep_eq_idx: ctx.get_var_index("DepEq", 0).unwrap(),
+            u_idx: *constants.get("U").unwrap(),
+            pi_idx: *constants.get("Pi").unwrap(),
+            sigma_idx: *constants.get("Sigma").unwrap(),
+            id_idx: *constants.get("id").unwrap(),
+            const_idx: *constants.get("const").unwrap(),
+            subst_idx: *constants.get("subst").unwrap(),
+            eq_idx: *constants.get("Eq").unwrap(),
+            dep_eq_idx: *constants.get("DepEq").unwrap(),
         }
     }
 }

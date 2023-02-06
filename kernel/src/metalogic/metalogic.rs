@@ -1,6 +1,7 @@
-use std::{fmt::Debug, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Debug};
 
 use anyhow::{anyhow, Error, Result};
+use string_interner::{symbol::DefaultSymbol, StringInterner};
 
 use super::{expr::*, parse::*, print::*};
 
@@ -16,6 +17,7 @@ pub struct DefInit<'a> {
 }
 
 pub struct MetaLogic {
+    string_interner: RefCell<StringInterner>,
     constants: Vec<Constant>,
     lambda_handler: Box<dyn LambdaHandler>,
     pub root_ctx_options: MetaLogicContextOptions,
@@ -24,25 +26,32 @@ pub struct MetaLogic {
 impl MetaLogic {
     pub fn construct<F>(constants_init: &[DefInit], create_lambda_handler: F) -> Result<Self>
     where
-        F: FnOnce(&[Param]) -> Box<dyn LambdaHandler>,
+        F: FnOnce(&HashMap<&str, VarIndex>) -> Box<dyn LambdaHandler>,
     {
+        let mut string_interner = StringInterner::with_capacity(constants_init.len() * 4);
+
         let mut constants = Vec::with_capacity(constants_init.len());
+        let mut constants_map = HashMap::with_capacity(constants_init.len());
+        let mut idx = 0;
         for constant_init in constants_init {
             let mut parser_input = ParserInput(constant_init.sym);
             if let Some(name) = parser_input.try_read_name() {
                 constants.push(Param {
-                    name: Some(Rc::new(name.into())),
+                    name: Some(string_interner.get_or_intern(name)),
                     type_expr: Expr::default(),
                     implicit: false,
                 });
+                constants_map.insert(name, idx);
+                idx += 1;
             } else {
                 return parser_input.expected("identifier");
             }
         }
 
-        let lambda_handler = create_lambda_handler(&constants);
+        let lambda_handler = create_lambda_handler(&constants_map);
 
         let mut metalogic = MetaLogic {
+            string_interner: RefCell::new(string_interner),
             constants: constants
                 .into_iter()
                 .map(|param| Constant {
@@ -78,7 +87,7 @@ impl MetaLogic {
                     |parsing_context| parsing_context.parse_reduction_rule(idx as VarIndex),
                 )
                 .with_prefix(|| {
-                    let name = metalogic.constants[idx].get_name_or_placeholder();
+                    let name = metalogic.get_display_name(&metalogic.constants[idx]);
                     format!("failed to parse reduction rule for «{name}»")
                 })?;
                 metalogic.constants[idx].reduction_rules.push(rule);
@@ -110,8 +119,17 @@ impl MetaLogic {
     }
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
-        let var_idx = self.constants.get_var_index(name, 0)?;
+        let symbol = self.string_interner.borrow().get(name)?;
+        let var_idx = self.constants.get_var_index(symbol, 0)?;
         Some(&self.constants.get_var(var_idx).param)
+    }
+
+    pub fn get_display_name(&self, obj: &impl NamedObject<DefaultSymbol>) -> String {
+        if let Some(name) = obj.get_name() {
+            self.string_interner.borrow().resolve(name).unwrap().into()
+        } else {
+            "_".into()
+        }
     }
 
     fn visit_exprs<Visitor: MetaLogicVisitor>(&self, visitor: &Visitor) -> Result<()> {
@@ -120,17 +138,17 @@ impl MetaLogic {
 
         for constant in &self.constants {
             if let Err(error) = visitor.param(&constant.param, &root_ctx).with_prefix(|| {
-                let name = constant.get_name_or_placeholder();
-                visitor.get_constant_error_prefix(name)
+                let name = self.get_display_name(constant);
+                visitor.get_constant_error_prefix(&name)
             }) {
                 errors.push(error);
             }
 
             for rule in &constant.reduction_rules {
                 if let Err(error) = visitor.reduction_rule(rule, &root_ctx).with_prefix(|| {
-                    let name = constant.get_name_or_placeholder();
+                    let name = self.get_display_name(constant);
                     let rule_str = rule.print(&root_ctx);
-                    visitor.get_rule_error_prefix(name, &rule_str)
+                    visitor.get_rule_error_prefix(&name, &rule_str)
                 }) {
                     errors.push(error);
                 }
@@ -150,20 +168,20 @@ impl MetaLogic {
     ) -> Result<()> {
         // Manipulate all types first, then all reduction rules in a second step, as manipulation
         // relies on accurate types.
-        self.manipulate_constants(|constant, root_ctx, errors| {
+        self.constants = self.manipulate_constants(|constant, root_ctx, errors| {
             if let Err(error) = manipulator
                 .param(&mut constant.param, &root_ctx)
                 .with_prefix(|| {
-                    let name = constant.get_name_or_placeholder();
-                    manipulator.get_constant_error_prefix(name)
+                    let name = self.get_display_name(constant);
+                    manipulator.get_constant_error_prefix(&name)
                 })
             {
                 errors.push(error);
             }
         })?;
 
-        self.manipulate_constants(|constant, root_ctx, errors| {
-            let name = constant.get_name_or_placeholder().to_owned();
+        self.constants = self.manipulate_constants(|constant, root_ctx, errors| {
+            let name = self.get_display_name(constant).to_owned();
 
             for rule in &mut constant.reduction_rules {
                 if let Err(error) = manipulator.reduction_rule(rule, &root_ctx).with_prefix(|| {
@@ -173,13 +191,15 @@ impl MetaLogic {
                     errors.push(error);
                 }
             }
-        })
+        })?;
+
+        Ok(())
     }
 
     fn manipulate_constants(
-        &mut self,
+        &self,
         mut f: impl FnMut(&mut Constant, &MetaLogicContext, &mut Vec<Error>),
-    ) -> Result<()> {
+    ) -> Result<Vec<Constant>> {
         let mut errors = Vec::new();
         let mut new_constants = self.constants.clone();
         let root_ctx = self.get_root_context();
@@ -189,8 +209,7 @@ impl MetaLogic {
         }
 
         if errors.is_empty() {
-            self.constants = new_constants;
-            Ok(())
+            Ok(new_constants)
         } else {
             Err(errors.combine())
         }
@@ -233,7 +252,7 @@ impl MetaLogic {
                 if let Err(error) =
                     self.check_reduction_rule_type(rule, &root_ctx)
                         .with_prefix(|| {
-                            let name = constant.param.get_name_or_placeholder();
+                            let name = self.get_display_name(constant);
                             let rule_str = rule.print(&root_ctx);
                             format!("error in reduction rule for «{name}» («{rule_str}»)")
                         })
@@ -280,8 +299,8 @@ pub struct Constant {
     pub reduction_rules: Vec<ReductionRule>,
 }
 
-impl NamedObject for Constant {
-    fn get_name(&self) -> Option<&str> {
+impl NamedObject<DefaultSymbol> for Constant {
+    fn get_name(&self) -> Option<DefaultSymbol> {
         self.param.get_name()
     }
 }
@@ -360,6 +379,22 @@ impl MetaLogicContext<'_> {
             ..*self.globals()
         };
         self.with_new_globals(globals, f)
+    }
+
+    pub fn get_named_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex> {
+        let symbol = self.metalogic().string_interner.borrow().get(name)?;
+        self.get_var_index(symbol, occurrence)
+    }
+
+    pub fn get_display_name(&self, param: &Param) -> String {
+        self.metalogic().get_display_name(param)
+    }
+
+    pub fn intern_name(&self, name: &str) -> DefaultSymbol {
+        self.metalogic()
+            .string_interner
+            .borrow_mut()
+            .get_or_intern(name)
     }
 }
 

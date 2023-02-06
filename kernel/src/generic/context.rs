@@ -253,21 +253,19 @@ impl<ParamType, GlobalsType: VarAccessor<ParamType>> VarAccessor<ParamType>
     }
 }
 
-pub trait NamedObject {
-    fn get_name(&self) -> Option<&str>;
-
-    fn get_name_or_placeholder(&self) -> &str {
-        self.get_name().unwrap_or("_")
-    }
+pub trait NamedObject<Name> {
+    fn get_name(&self) -> Option<Name>;
 }
 
-pub trait NamedVarAccessor<ParamType: NamedObject>: VarAccessor<ParamType> {
-    fn get_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex>;
+pub trait NamedVarAccessor<Name, ParamType: NamedObject<Name>>: VarAccessor<ParamType> {
+    fn get_var_index(&self, name: Name, occurrence: usize) -> Option<VarIndex>;
     fn get_name_occurrence(&self, idx: VarIndex, param: &ParamType) -> usize;
 }
 
-impl<ParamType: NamedObject, T: VarAccessor<ParamType> + ?Sized> NamedVarAccessor<ParamType> for T {
-    fn get_var_index(&self, name: &str, mut occurrence: usize) -> Option<VarIndex> {
+impl<Name: Copy + PartialEq, ParamType: NamedObject<Name>, T: VarAccessor<ParamType> + ?Sized>
+    NamedVarAccessor<Name, ParamType> for T
+{
+    fn get_var_index(&self, name: Name, mut occurrence: usize) -> Option<VarIndex> {
         self.for_each_var(|idx, param| {
             if param.get_name() == Some(name) {
                 if occurrence == 0 {
