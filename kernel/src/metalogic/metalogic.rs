@@ -1,6 +1,14 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Debug};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+};
 
 use anyhow::{anyhow, Error, Result};
+use rayon::prelude::*;
 use string_interner::{symbol::DefaultSymbol, StringInterner};
 
 use super::{expr::*, parse::*, print::*};
@@ -17,7 +25,7 @@ pub struct DefInit<'a> {
 }
 
 pub struct MetaLogic {
-    string_interner: RefCell<StringInterner>,
+    string_interner: Mutex<StringInterner>,
     constants: Vec<Constant>,
     lambda_handler: Box<dyn LambdaHandler>,
     pub root_ctx_options: MetaLogicContextOptions,
@@ -51,7 +59,7 @@ impl MetaLogic {
         let lambda_handler = create_lambda_handler(&constants_map);
 
         let mut metalogic = MetaLogic {
-            string_interner: RefCell::new(string_interner),
+            string_interner: Mutex::new(string_interner),
             constants: constants
                 .into_iter()
                 .map(|param| Constant {
@@ -119,41 +127,53 @@ impl MetaLogic {
     }
 
     pub fn get_constant(&self, name: &str) -> Option<&Param> {
-        let symbol = self.string_interner.borrow().get(name)?;
+        let symbol = self.string_interner.lock().unwrap().get(name)?;
         let var_idx = self.constants.get_var_index(symbol, 0)?;
         Some(&self.constants.get_var(var_idx).param)
     }
 
     pub fn get_display_name(&self, obj: &impl NamedObject<DefaultSymbol>) -> String {
         if let Some(name) = obj.get_name() {
-            self.string_interner.borrow().resolve(name).unwrap().into()
+            self.string_interner
+                .lock()
+                .unwrap()
+                .resolve(name)
+                .unwrap()
+                .into()
         } else {
             "_".into()
         }
     }
 
     fn visit_exprs<Visitor: MetaLogicVisitor>(&self, visitor: &Visitor) -> Result<()> {
-        let mut errors = Vec::new();
         let root_ctx = self.get_root_context();
 
-        for constant in &self.constants {
-            if let Err(error) = visitor.param(&constant.param, &root_ctx).with_prefix(|| {
-                let name = self.get_display_name(constant);
-                visitor.get_constant_error_prefix(&name)
-            }) {
-                errors.push(error);
-            }
+        let errors: Vec<Error> = self
+            .constants
+            .par_iter()
+            .flat_map(|constant| {
+                let mut errors = Vec::new();
 
-            for rule in &constant.reduction_rules {
-                if let Err(error) = visitor.reduction_rule(rule, &root_ctx).with_prefix(|| {
+                if let Err(error) = visitor.param(&constant.param, &root_ctx).with_prefix(|| {
                     let name = self.get_display_name(constant);
-                    let rule_str = rule.print(&root_ctx);
-                    visitor.get_rule_error_prefix(&name, &rule_str)
+                    visitor.get_constant_error_prefix(&name)
                 }) {
                     errors.push(error);
                 }
-            }
-        }
+
+                for rule in &constant.reduction_rules {
+                    if let Err(error) = visitor.reduction_rule(rule, &root_ctx).with_prefix(|| {
+                        let name = self.get_display_name(constant);
+                        let rule_str = rule.print(&root_ctx);
+                        visitor.get_rule_error_prefix(&name, &rule_str)
+                    }) {
+                        errors.push(error);
+                    }
+                }
+
+                errors
+            })
+            .collect();
 
         if errors.is_empty() {
             Ok(())
@@ -164,7 +184,7 @@ impl MetaLogic {
 
     fn manipulate_exprs<Manipulator: MetaLogicManipulator>(
         &mut self,
-        manipulator: &mut Manipulator,
+        manipulator: &Manipulator,
     ) -> Result<()> {
         // Manipulate all types first, then all reduction rules in a second step, as manipulation
         // relies on accurate types.
@@ -198,15 +218,19 @@ impl MetaLogic {
 
     fn manipulate_constants(
         &self,
-        mut f: impl FnMut(&mut Constant, &MetaLogicContext, &mut Vec<Error>),
+        f: impl Fn(&mut Constant, &MetaLogicContext, &mut Vec<Error>) + Sync,
     ) -> Result<Vec<Constant>> {
-        let mut errors = Vec::new();
         let mut new_constants = self.constants.clone();
         let root_ctx = self.get_root_context();
 
-        for constant in &mut new_constants {
-            f(constant, &root_ctx, &mut errors);
-        }
+        let errors: Vec<Error> = new_constants
+            .par_iter_mut()
+            .flat_map(|constant| {
+                let mut errors = Vec::new();
+                f(constant, &root_ctx, &mut errors);
+                errors
+            })
+            .collect();
 
         if errors.is_empty() {
             Ok(new_constants)
@@ -226,13 +250,18 @@ impl MetaLogic {
         let mut placeholder_filler = PlaceholderFiller {
             max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
             force: false,
-            has_unfilled_placeholders: false,
+            has_unfilled_placeholders: AtomicBool::new(false),
         };
         self.manipulate_exprs(&mut placeholder_filler)?;
 
-        if placeholder_filler.has_unfilled_placeholders {
+        if placeholder_filler
+            .has_unfilled_placeholders
+            .load(Ordering::Relaxed)
+        {
             placeholder_filler.force = true;
-            placeholder_filler.has_unfilled_placeholders = false;
+            placeholder_filler
+                .has_unfilled_placeholders
+                .store(false, Ordering::Relaxed);
             self.manipulate_exprs(&mut placeholder_filler)?;
         }
 
@@ -382,7 +411,7 @@ impl MetaLogicContext<'_> {
     }
 
     pub fn get_named_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex> {
-        let symbol = self.metalogic().string_interner.borrow().get(name)?;
+        let symbol = self.metalogic().string_interner.lock().unwrap().get(name)?;
         self.get_var_index(symbol, occurrence)
     }
 
@@ -393,7 +422,8 @@ impl MetaLogicContext<'_> {
     pub fn intern_name(&self, name: &str) -> DefaultSymbol {
         self.metalogic()
             .string_interner
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .get_or_intern(name)
     }
 }
@@ -439,7 +469,7 @@ pub enum DependentTypeCtorKind {
     Sigma,
 }
 
-pub trait LambdaHandler {
+pub trait LambdaHandler: Sync {
     fn get_universe_type(&self) -> Result<Expr>;
 
     fn get_indep_type(
@@ -709,7 +739,7 @@ pub trait LambdaHandler {
     fn placeholder_max_reduction_depth(&self) -> u32;
 }
 
-pub trait MetaLogicVisitorBase {
+pub trait MetaLogicVisitorBase: Sync {
     fn get_constant_error_prefix(&self, name: &str) -> String;
     fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String;
 }
@@ -779,24 +809,24 @@ impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitor for DeepExprV
 }
 
 pub trait MetaLogicManipulator: MetaLogicVisitorBase + ExprManipulator {
-    fn reduction_rule(&mut self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 
-    fn reduction_body(&mut self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_body(&self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
     }
 }
 
 impl MetaLogicManipulator for ImplicitArgInserter {
-    fn reduction_rule(&mut self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
         self.params(&mut rule.params, ctx)?;
         ctx.with_locals(&rule.params, |body| {
             self.reduction_body(&mut rule.body, body)
         })
     }
 
-    fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
         let source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
         let target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
 
@@ -808,14 +838,14 @@ impl MetaLogicManipulator for ImplicitArgInserter {
 }
 
 impl MetaLogicManipulator for PlaceholderFiller {
-    fn reduction_rule(&mut self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
         self.params(&mut rule.params, ctx)?;
         ctx.with_locals(&rule.params, |body| {
             self.reduction_body(&mut rule.body, body)
         })
     }
 
-    fn reduction_body(&mut self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
+    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
         let source_type = self.fill_placeholders(&mut body.source, Expr::Placeholder, ctx)?;
         self.fill_placeholders(&mut body.target, source_type, ctx)?;
         Ok(())

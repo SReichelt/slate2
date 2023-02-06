@@ -132,7 +132,7 @@ impl<'a, Item, ExtraData> Iterator for RefStackIter<'a, Item, ExtraData> {
                 self.item_idx -= n + 1;
                 debug_assert!(self.item_idx < self.frame.items_len);
 
-                // Safety:
+                // SAFETY:
                 // * The only way to create a new nonempty stack is via `with_item` or `with_items`,
                 //   and the only way to access that stack is via the closure argument of type
                 //   `&Self`, which has a temporary lifetime, and of course the iterator inherits
@@ -151,7 +151,7 @@ impl<'a, Item, ExtraData> Iterator for RefStackIter<'a, Item, ExtraData> {
             } else {
                 n -= self.item_idx;
 
-                // Safety:
+                // SAFETY:
                 // * For reasons analogous to above, the parent frame is still in scope.
                 // * The loop condition checked whether it was null.
                 unsafe {
@@ -165,6 +165,12 @@ impl<'a, Item, ExtraData> Iterator for RefStackIter<'a, Item, ExtraData> {
         None
     }
 }
+
+// SAFETY:
+// * Only an empty context can ever be owned.
+// * As long as a reference to a context is valid, we can safely share it between threads.
+unsafe impl<Item, ExtraData: Send> Send for RefStack<Item, ExtraData> {}
+unsafe impl<Item, ExtraData: Sync> Sync for RefStack<Item, ExtraData> {}
 
 #[cfg(test)]
 mod tests {

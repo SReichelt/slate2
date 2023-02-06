@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = { version = "1.0" }
+anyhow = "1.0.69"
+rayon = "1.6.1"
 smallvec = { version = "1.10", features = ["union", "const_generics"] }
 string-interner = { version = "0.14.0", features = ["std", "backends", "inline-more"] }
