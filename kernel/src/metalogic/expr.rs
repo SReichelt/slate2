@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
-use string_interner::symbol::DefaultSymbol;
+use symbol_table::Symbol;
 
 use super::{metalogic::*, parse::*, print::*};
 
@@ -809,13 +809,13 @@ impl LambdaExpr {
 
 #[derive(Clone, Default)]
 pub struct Param {
-    pub name: Option<DefaultSymbol>,
+    pub name: Option<Symbol>,
     pub type_expr: Expr,
     pub implicit: bool,
 }
 
-impl NamedObject<DefaultSymbol> for Param {
-    fn get_name(&self) -> Option<DefaultSymbol> {
+impl NamedObject<Symbol> for Param {
+    fn get_name(&self) -> Option<Symbol> {
         self.name
     }
 }

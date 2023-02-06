@@ -66,7 +66,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             Expr::Var(Var(idx)) => {
                 let param = self.context.get_var(*idx);
                 self.output
-                    .write_str(&self.context.get_display_name(param))?;
+                    .write_str(self.context.get_display_name(param))?;
                 let occurrence = self.context.get_name_occurrence(*idx, param);
                 for _ in 0..occurrence {
                     self.output.write_char('⁺')?;
@@ -163,7 +163,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             self.output.write_char('{')?;
         }
         self.output
-            .write_str(&self.context.get_display_name(param))?;
+            .write_str(self.context.get_display_name(param))?;
         self.output.write_str(" : ")?;
         self.print_expr_with_parens(&param.type_expr, false, true, false, false, false)?;
         if param.implicit {

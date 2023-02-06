@@ -93,9 +93,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.11.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
  "ahash",
 ]
@@ -169,19 +169,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 
 [[package]]
-name = "serde"
-version = "1.0.152"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb7d1f0d3021d347a83e556fc4683dea2ea09d87bccdf88ff5c12545d89d5efb"
-
-[[package]]
 name = "slate-kernel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "rayon",
  "smallvec",
- "string-interner",
+ "symbol_table",
 ]
 
 [[package]]
@@ -191,14 +185,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
-name = "string-interner"
-version = "0.14.0"
+name = "symbol_table"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e2531d8525b29b514d25e275a43581320d587b86db302b9a7e464bac579648"
+checksum = "828f672b631c220bf6ea8a1d3b82c7d0fc998e5ba8373383d8604bc1e2a6245a"
 dependencies = [
- "cfg-if",
+ "ahash",
  "hashbrown",
- "serde",
 ]
 
 [[package]]

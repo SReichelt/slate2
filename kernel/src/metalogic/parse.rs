@@ -2,7 +2,7 @@ use std::mem::take;
 
 use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
-use string_interner::DefaultSymbol;
+use symbol_table::Symbol;
 
 use super::{expr::*, metalogic::*};
 
@@ -195,7 +195,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn get_param_name(&mut self, param_name_str: &str) -> Option<DefaultSymbol> {
+    fn get_param_name(&mut self, param_name_str: &str) -> Option<Symbol> {
         if param_name_str == "_" {
             None
         } else {
@@ -249,7 +249,7 @@ impl ParsingContext<'_, '_, '_> {
             implicit = true;
         }
         if let Some(param_name_str) = self.input.try_read_name() {
-            let mut param_names: SmallVec<[Option<DefaultSymbol>; INLINE_PARAMS]> =
+            let mut param_names: SmallVec<[Option<Symbol>; INLINE_PARAMS]> =
                 smallvec![self.get_param_name(param_name_str)];
             self.input.skip_whitespace();
             while let Some(param_name_str) = self.input.try_read_name() {
