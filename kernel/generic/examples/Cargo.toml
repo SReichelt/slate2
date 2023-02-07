@@ -1,10 +1,9 @@
 [package]
-name = "slate-kernel"
+name = "slate-kernel-generic-examples"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+slate-kernel-generic = { path = ".." }
 anyhow = "1.0.69"
-rayon = "1.6.1"
 smallvec = { version = "1.10", features = ["union", "const_generics"] }
-symbol_table = "0.3.0"

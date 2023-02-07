@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::generic::context::*;
+use slate_kernel_generic::context::*;
 
-use super::metalogic::*;
+use crate::metalogic::*;
 
 pub struct TypeInit<'a> {
     pub ctor: DefInit<'a>,

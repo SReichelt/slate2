@@ -8,11 +8,12 @@ use anyhow::{anyhow, Error, Result};
 use rayon::prelude::*;
 use symbol_table::{Symbol, SymbolTable};
 
-use super::{expr::*, parse::*, print::*};
+use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_util::{anyhow::*, parser::*};
 
 use crate::{
-    generic::{context::*, context_object::*, expr_parts::*},
-    util::{anyhow::*, parser::*},
+    expr::*, expr_manipulators::*, expr_visitors::*, metalogic_context::*,
+    metalogic_manipulators::*, metalogic_visitors::*, parse::*, print::*,
 };
 
 #[derive(Clone)]
@@ -117,7 +118,7 @@ impl MetaLogic {
         &self,
         options: MetaLogicContextOptions,
     ) -> MetaLogicContext {
-        MetaLogicContext::with_globals(MetaLogicContextGlobals {
+        MetaLogicContext::new(MetaLogicContextData {
             metalogic: self,
             options,
         })
@@ -314,6 +315,45 @@ impl MetaLogic {
     }
 }
 
+impl VarAccessor<Param> for MetaLogic {
+    fn get_var(&self, idx: VarIndex) -> &Param {
+        &self.constants.get_var(idx).param
+    }
+
+    fn for_each_var<R>(&self, mut f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
+        self.constants
+            .for_each_var(|var_idx, constant| f(var_idx, &constant.param))
+    }
+}
+
+pub trait MetaLogicRef {
+    fn metalogic(&self) -> &MetaLogic;
+
+    fn constants(&self) -> &[Constant] {
+        &self.metalogic().constants
+    }
+
+    fn lambda_handler(&self) -> &dyn LambdaHandler {
+        self.metalogic().lambda_handler.as_ref()
+    }
+
+    fn get_named_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex>
+    where
+        Self: NamedVarAccessor<Symbol, Param>,
+    {
+        let symbol = self.metalogic().symbol_table.intern(name);
+        self.get_var_index(symbol, occurrence)
+    }
+
+    fn get_display_name(&self, param: &Param) -> &str {
+        self.metalogic().get_display_name(param)
+    }
+
+    fn intern_name(&self, name: &str) -> Symbol {
+        self.metalogic().symbol_table.intern(name)
+    }
+}
+
 #[derive(Clone)]
 pub struct Constant {
     pub param: Param,
@@ -328,8 +368,8 @@ impl NamedObject<Symbol> for Constant {
 
 pub type ReductionRule = MultiLambda<Param, ReductionBody>;
 
-impl ReductionRule {
-    pub fn print(&self, ctx: &MetaLogicContext) -> String {
+impl CanPrint for ReductionRule {
+    fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         PrintingContext::print(&mut result, ctx, |printing_context| {
             printing_context.print_reduction_rule(&self)
@@ -344,111 +384,6 @@ pub struct ReductionBody {
     pub source: Expr,
     pub target: Expr,
     pub source_app_len: usize,
-}
-
-#[derive(Clone, Copy)]
-pub struct MetaLogicContextOptions {
-    pub reduce_with_reduction_rules: bool,
-    pub reduce_with_combinators: bool,
-    pub print_all_implicit_args: bool,
-}
-
-#[derive(Clone, Copy)]
-pub struct MetaLogicContextGlobals<'a> {
-    metalogic: &'a MetaLogic,
-    options: MetaLogicContextOptions,
-}
-
-impl VarAccessor<Param> for MetaLogicContextGlobals<'_> {
-    fn get_var(&self, idx: VarIndex) -> &Param {
-        &self.metalogic.constants.get_var(idx).param
-    }
-
-    fn for_each_var<R>(&self, mut f: impl FnMut(VarIndex, &Param) -> Option<R>) -> Option<R> {
-        self.metalogic
-            .constants
-            .for_each_var(|var_idx, constant| f(var_idx, &constant.param))
-    }
-}
-
-pub type MetaLogicContext<'a> = ParamContextImpl<Param, MetaLogicContextGlobals<'a>>;
-
-impl MetaLogicContext<'_> {
-    pub fn metalogic(&self) -> &MetaLogic {
-        self.globals().metalogic
-    }
-
-    pub fn options(&self) -> &MetaLogicContextOptions {
-        &self.globals().options
-    }
-
-    pub fn constants(&self) -> &[Constant] {
-        &self.metalogic().constants
-    }
-
-    pub fn lambda_handler(&self) -> &dyn LambdaHandler {
-        self.metalogic().lambda_handler.as_ref()
-    }
-
-    pub fn with_new_options<R>(
-        &self,
-        options: MetaLogicContextOptions,
-        f: impl FnOnce(&Self) -> R,
-    ) -> R {
-        let globals = MetaLogicContextGlobals {
-            options,
-            ..*self.globals()
-        };
-        self.with_new_globals(globals, f)
-    }
-
-    pub fn get_named_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex> {
-        let symbol = self.metalogic().symbol_table.intern(name);
-        self.get_var_index(symbol, occurrence)
-    }
-
-    pub fn get_display_name(&self, param: &Param) -> &str {
-        self.metalogic().get_display_name(param)
-    }
-
-    pub fn intern_name(&self, name: &str) -> Symbol {
-        self.metalogic().symbol_table.intern(name)
-    }
-}
-
-/// We distinguish between comparisons with or without reductions by passing either
-/// `MetaLogicContext` or `MinimalContext`.
-pub trait ComparisonContext: ParamContext<Param> {
-    fn as_metalogic_context(&self) -> Option<&MetaLogicContext>;
-
-    fn use_combinators(&self) -> bool;
-}
-
-// We need this so that with_reduction_options can take a single closure instead of two, which is
-// necessary because we would need to mutate the same variable in both closures.
-pub enum ReductionOptionParam<'a, 'b, Ctx: ComparisonContext> {
-    NoRed(&'a Ctx),
-    Red(&'a MetaLogicContext<'b>),
-}
-
-impl ComparisonContext for MinimalContext {
-    fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
-        None
-    }
-
-    fn use_combinators(&self) -> bool {
-        false
-    }
-}
-
-impl ComparisonContext for MetaLogicContext<'_> {
-    fn as_metalogic_context(&self) -> Option<&MetaLogicContext> {
-        Some(self)
-    }
-
-    fn use_combinators(&self) -> bool {
-        self.globals().options.reduce_with_combinators
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -730,112 +665,4 @@ pub trait LambdaHandler: Sync {
 pub trait MetaLogicVisitorBase: Sync {
     fn get_constant_error_prefix(&self, name: &str) -> String;
     fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String;
-}
-
-impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitorBase
-    for DeepExprVisitor<Visitor>
-{
-    fn get_constant_error_prefix(&self, name: &str) -> String {
-        self.0.get_constant_error_prefix(name)
-    }
-
-    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
-        self.0.get_rule_error_prefix(name, rule_str)
-    }
-}
-
-impl MetaLogicVisitorBase for ParamTypeChecker {
-    fn get_constant_error_prefix(&self, name: &str) -> String {
-        format!("type of constant «{name}» is invalid")
-    }
-
-    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
-        format!("types within reduction rule for «{name}» are invalid («{rule_str}»)")
-    }
-}
-
-impl MetaLogicVisitorBase for ImplicitArgInserter {
-    fn get_constant_error_prefix(&self, name: &str) -> String {
-        format!("invalid implicit arguments in type of constant «{name}»")
-    }
-
-    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
-        format!("invalid implicit arguments in reduction rule for «{name}» («{rule_str}»)")
-    }
-}
-
-impl MetaLogicVisitorBase for PlaceholderFiller {
-    fn get_constant_error_prefix(&self, name: &str) -> String {
-        format!("unable to fill placeholder in type of constant «{name}»")
-    }
-
-    fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String {
-        format!("unable to fill placeholder in reduction rule for «{name}» («{rule_str}»)")
-    }
-}
-
-pub trait MetaLogicVisitor: MetaLogicVisitorBase + ExprVisitor {
-    fn reduction_rule(&self, _rule: &ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn reduction_body(&self, _body: &ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl<Visitor: MetaLogicVisitorBase + ExprVisitor> MetaLogicVisitor for DeepExprVisitor<Visitor> {
-    fn reduction_rule(&self, rule: &ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
-        self.params(&rule.params, ctx)?;
-        ctx.with_locals(&rule.params, |body| self.reduction_body(&rule.body, body))
-    }
-
-    fn reduction_body(&self, body: &ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&body.source, ctx)?;
-        self.expr(&body.target, ctx)
-    }
-}
-
-pub trait MetaLogicManipulator: MetaLogicVisitorBase + ExprManipulator {
-    fn reduction_rule(&self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn reduction_body(&self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl MetaLogicManipulator for ImplicitArgInserter {
-    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
-        self.params(&mut rule.params, ctx)?;
-        ctx.with_locals(&rule.params, |body| {
-            self.reduction_body(&mut rule.body, body)
-        })
-    }
-
-    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        let source_type = self.insert_implicit_args_and_get_type(&mut body.source, ctx)?;
-        let target_type = self.insert_implicit_args_and_get_type(&mut body.target, ctx)?;
-
-        let (_, source_app_len) = body.source.get_app_info();
-        body.source_app_len = source_app_len;
-
-        Expr::check_type_arg_implicitness(&source_type, &target_type, ctx)
-    }
-}
-
-impl MetaLogicManipulator for PlaceholderFiller {
-    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
-        self.params(&mut rule.params, ctx)?;
-        ctx.with_locals(&rule.params, |body| {
-            self.reduction_body(&mut rule.body, body)
-        })
-    }
-
-    fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        let source_type = self.fill_placeholders(&mut body.source, Expr::Placeholder, ctx)?;
-        self.fill_placeholders(&mut body.target, source_type, ctx)?;
-        Ok(())
-    }
 }

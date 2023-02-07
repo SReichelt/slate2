@@ -1,16 +1,15 @@
 use std::{
     fmt::{self, Debug},
     mem::take,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
 use symbol_table::Symbol;
 
-use super::{metalogic::*, parse::*, print::*};
+use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
 
-use crate::generic::{context::*, context_object::*, expr_parts::*};
+use crate::{metalogic::*, metalogic_context::*, parse::*, print::*};
 
 #[derive(Clone, PartialEq)]
 pub enum Expr {
@@ -94,19 +93,6 @@ impl Expr {
 
     pub fn let_binding(param: Param, arg: Arg, body: Expr) -> Self {
         Expr::app(Expr::lambda(param, body), arg)
-    }
-
-    pub fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
-        ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
-    }
-
-    pub fn print(&self, ctx: &MetaLogicContext) -> String {
-        let mut result = String::new();
-        PrintingContext::print(&mut result, ctx, |printing_context| {
-            printing_context.print_expr(&self)
-        })
-        .unwrap();
-        result
     }
 
     pub fn reduce(&mut self, ctx: &MetaLogicContext, mut max_depth: i32) -> Result<bool> {
@@ -339,52 +325,7 @@ impl Expr {
         }
     }
 
-    pub fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
-        let mut result = self.get_unreduced_type(ctx)?;
-        // There is a lot of potential for optimization here:
-        // * Fully reducing all types is very suboptimal. We could have different reduction
-        //   strengths instead.
-        // * If we are determining the type of an application, then the types of the function and
-        //   argument have already been reduced. Instead of ignoring that here, we could exploit it
-        //   by skipping all subexpressions where no substitution occurs. The current behavior is
-        //   especially problematic because the run time grows quadratically with expression size.
-        result.reduce(ctx, -1)?;
-        Ok(result)
-    }
-
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
-        match self {
-            Expr::Placeholder => Ok(Expr::Placeholder),
-            Expr::Var(var) => Ok(var.get_type(ctx)),
-            Expr::App(app) => {
-                // Finding the result type of an application is surprisingly tricky because the
-                // application itself does not include the type parameters of its function. Instead,
-                // to determine the property we need to match the type of the actual function
-                // argument against a term that denotes a sufficiently generic pi type. Then we
-                // apply the property to the argument of the application.
-                let fun = &app.body;
-                let arg = &app.param;
-                let fun_type = fun.get_type(ctx)?;
-                let arg_type = arg.expr.get_type(ctx)?;
-                if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
-                    Ok(prop.apply(arg.clone(), ctx))
-                } else {
-                    let fun_str = fun.print(ctx);
-                    let fun_type_str = fun_type.print(ctx);
-                    let arg_str = arg.expr.print(ctx);
-                    let arg_type = arg.expr.get_type(ctx)?;
-                    let arg_type_str = arg_type.print(ctx);
-                    Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
-                }
-            }
-            Expr::Lambda(lambda) => ctx.with_local(&lambda.param, |body_ctx| {
-                let body_type = lambda.body.get_type(body_ctx)?;
-                Self::get_fun_type(&lambda.param, body_type, ctx)
-            }),
-        }
-    }
-
-    fn get_fun_type(param: &Param, body_type: Expr, ctx: &MetaLogicContext) -> Result<Expr> {
+    pub fn get_fun_type(param: &Param, body_type: Expr, ctx: &MetaLogicContext) -> Result<Expr> {
         let prop = Expr::lambda(param.clone(), body_type);
         ctx.lambda_handler().get_dep_type(
             param.type_expr.clone(),
@@ -689,17 +630,123 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
     }
 }
 
-impl Var {
-    pub fn get_type(&self, ctx: &MetaLogicContext) -> Expr {
+pub trait HasType {
+    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+        let mut result = self.get_unreduced_type(ctx)?;
+        // There is a lot of potential for optimization here:
+        // * Fully reducing all types is very suboptimal. We could have different reduction
+        //   strengths instead.
+        // * If we are determining the type of an application, then the types of the function and
+        //   argument have already been reduced. Instead of ignoring that here, we could exploit it
+        //   by skipping all subexpressions where no substitution occurs. The current behavior is
+        //   especially problematic because the run time grows quadratically with expression size.
+        result.reduce(ctx, -1)?;
+        Ok(result)
+    }
+
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr>;
+}
+
+impl HasType for Expr {
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+        match self {
+            Expr::Placeholder => Ok(Expr::Placeholder),
+            Expr::Var(var) => var.get_unreduced_type(ctx),
+            Expr::App(app) => app.get_unreduced_type(ctx),
+            Expr::Lambda(lambda) => lambda.get_unreduced_type(ctx),
+        }
+    }
+}
+
+pub trait CanParse: Sized {
+    fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self>;
+}
+
+impl CanParse for Expr {
+    fn parse(s: &str, ctx: &MetaLogicContext) -> Result<Self> {
+        ParsingContext::parse(s, ctx, |parsing_context| parsing_context.parse_expr())
+    }
+}
+
+pub trait CanPrint {
+    fn print(&self, ctx: &MetaLogicContext) -> String;
+}
+
+impl CanPrint for Expr {
+    fn print(&self, ctx: &MetaLogicContext) -> String {
+        let mut result = String::new();
+        PrintingContext::print(&mut result, ctx, |printing_context| {
+            printing_context.print_expr(&self)
+        })
+        .unwrap();
+        result
+    }
+}
+
+impl HasType for Var {
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         let Var(idx) = self;
-        ctx.get_var(*idx).type_expr.shifted_from_var(ctx, *idx)
+        Ok(ctx.get_var(*idx).type_expr.shifted_from_var(ctx, *idx))
     }
 }
 
 pub type AppExpr = App<Expr, Arg>;
+
+impl HasType for AppExpr {
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+        // Finding the result type of an application is surprisingly tricky because the
+        // application itself does not include the type parameters of its function. Instead,
+        // to determine the property we need to match the type of the actual function
+        // argument against a term that denotes a sufficiently generic pi type. Then we
+        // apply the property to the argument of the application.
+        let fun = &self.body;
+        let arg = &self.param;
+        let fun_type = fun.get_type(ctx)?;
+        let arg_type = arg.expr.get_type(ctx)?;
+        if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
+            Ok(prop.apply(arg.clone(), ctx))
+        } else {
+            let fun_str = fun.print(ctx);
+            let fun_type_str = fun_type.print(ctx);
+            let arg_str = arg.expr.print(ctx);
+            let arg_type = arg.expr.get_type(ctx)?;
+            let arg_type_str = arg_type.print(ctx);
+            Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
+        }
+    }
+}
+
 pub type LambdaExpr = Lambda<Param, Expr>;
 
-impl LambdaExpr {
+impl HasType for LambdaExpr {
+    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+        ctx.with_local(&self.param, |body_ctx| {
+            let body_type = self.body.get_type(body_ctx)?;
+            Expr::get_fun_type(&self.param, body_type, ctx)
+        })
+    }
+}
+
+pub trait IsLambda {
+    fn apply(self, arg: Arg, ctx: &impl Context) -> Expr;
+
+    fn extract_body_if_const(&mut self, ctx: &impl ParamContext<Param>) -> Option<Expr>;
+
+    fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
+        if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
+            if metalogic_ctx.use_combinators() {
+                let expr = self.convert_to_combinator(metalogic_ctx)?;
+                //dbg!(expr.print(metalogic_ctx));
+                return Ok(Some(expr));
+            }
+        }
+        Ok(None)
+    }
+
+    fn convert_to_combinator(&self, ctx: &MetaLogicContext) -> Result<Expr>;
+}
+
+impl IsLambda for LambdaExpr {
     fn apply(self, arg: Arg, ctx: &impl Context) -> Expr {
         let mut expr = self.body;
         expr.substitute(&mut [arg.expr], true, ctx);
@@ -718,92 +765,77 @@ impl LambdaExpr {
         })
     }
 
-    fn try_convert_to_combinator<Ctx: ComparisonContext>(&self, ctx: &Ctx) -> Result<Option<Expr>> {
-        if let Some(metalogic_ctx) = ctx.as_metalogic_context() {
-            if metalogic_ctx.use_combinators() {
-                let expr = self.convert_to_combinator(metalogic_ctx)?;
-                //dbg!(expr.print(metalogic_ctx));
-                return Ok(Some(expr));
-            }
-        }
-        Ok(None)
-    }
-
     fn convert_to_combinator(&self, ctx: &MetaLogicContext) -> Result<Expr> {
-        Self::create_combinator_app(&self.param, &self.body, ctx)
+        create_combinator_app(&self.param, &self.body, ctx)
     }
+}
 
-    fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> Result<Expr> {
-        ctx.with_local(&param, |body_ctx| {
-            //dbg!(body.print(body_ctx));
+fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> Result<Expr> {
+    ctx.with_local(&param, |body_ctx| {
+        //dbg!(body.print(body_ctx));
 
-            if let Some(shifted_body) = body.shifted_to_supercontext(body_ctx, ctx) {
-                let body_type = shifted_body.get_type(ctx)?;
-                let cmb = ctx.lambda_handler().get_const_cmb(
-                    param.type_expr.clone(),
-                    body_type,
-                    ctx.as_minimal(),
-                )?;
-                return Ok(Expr::explicit_app(cmb, shifted_body));
-            }
-
-            match body {
-                Expr::Var(Var(-1)) => ctx
-                    .lambda_handler()
-                    .get_id_cmb(param.type_expr.clone(), ctx.as_minimal()),
-                Expr::App(app) => {
-                    let fun = &app.body;
-                    let arg = &app.param.expr;
-                    if let Expr::Var(Var(-1)) = arg {
-                        // If the expression can be eta-reduced, do that instead of outputting a
-                        // combinator.
-                        if let Some(shifted_fun) = fun.shifted_to_supercontext(body_ctx, ctx) {
-                            return Ok(shifted_fun);
-                        }
-                    }
-                    let cmb = Self::get_subst_cmb(param, ctx, fun, arg, body_ctx)?;
-                    let fun_lambda = Expr::lambda(param.clone(), fun.clone());
-                    let arg_lambda = Expr::lambda(param.clone(), arg.clone());
-                    Ok(Expr::explicit_multi_app(
-                        cmb,
-                        smallvec![fun_lambda, arg_lambda],
-                    ))
-                }
-                Expr::Lambda(lambda) => {
-                    let body_cmb = lambda.convert_to_combinator(body_ctx)?;
-                    //dbg!(body_cmb.print(body_ctx));
-                    Self::create_combinator_app(param, &body_cmb, ctx)
-                }
-                _ => unreachable!("constant body should have been detected"),
-            }
-        })
-    }
-
-    fn get_subst_cmb(
-        param: &Param,
-        ctx: &MetaLogicContext,
-        fun: &Expr,
-        arg: &Expr,
-        body_ctx: &MetaLogicContext,
-    ) -> Result<Expr> {
-        let fun_type = fun.get_type(body_ctx)?;
-        let arg_type = arg.get_type(body_ctx)?;
-        if let Some(fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
-            let prop1 = Expr::lambda(param.clone(), arg_type);
-            let rel2 = Expr::lambda(param.clone(), fun_prop);
-            ctx.lambda_handler().get_subst_cmb(
+        if let Some(shifted_body) = body.shifted_to_supercontext(body_ctx, ctx) {
+            let body_type = shifted_body.get_type(ctx)?;
+            let cmb = ctx.lambda_handler().get_const_cmb(
                 param.type_expr.clone(),
-                prop1,
-                rel2,
+                body_type,
                 ctx.as_minimal(),
-            )
-        } else {
-            let fun_str = fun.print(body_ctx);
-            let fun_type_str = fun_type.print(body_ctx);
-            let arg_str = arg.print(body_ctx);
-            let arg_type_str = arg_type.print(body_ctx);
-            Err(anyhow!("application type mismatch when converting to combinator: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
+            )?;
+            return Ok(Expr::explicit_app(cmb, shifted_body));
         }
+
+        match body {
+            Expr::Var(Var(-1)) => ctx
+                .lambda_handler()
+                .get_id_cmb(param.type_expr.clone(), ctx.as_minimal()),
+            Expr::App(app) => {
+                let fun = &app.body;
+                let arg = &app.param.expr;
+                if let Expr::Var(Var(-1)) = arg {
+                    // If the expression can be eta-reduced, do that instead of outputting a
+                    // combinator.
+                    if let Some(shifted_fun) = fun.shifted_to_supercontext(body_ctx, ctx) {
+                        return Ok(shifted_fun);
+                    }
+                }
+                let cmb = get_subst_cmb(param, ctx, fun, arg, body_ctx)?;
+                let fun_lambda = Expr::lambda(param.clone(), fun.clone());
+                let arg_lambda = Expr::lambda(param.clone(), arg.clone());
+                Ok(Expr::explicit_multi_app(
+                    cmb,
+                    smallvec![fun_lambda, arg_lambda],
+                ))
+            }
+            Expr::Lambda(lambda) => {
+                let body_cmb = lambda.convert_to_combinator(body_ctx)?;
+                //dbg!(body_cmb.print(body_ctx));
+                create_combinator_app(param, &body_cmb, ctx)
+            }
+            _ => unreachable!("constant body should have been detected"),
+        }
+    })
+}
+
+fn get_subst_cmb(
+    param: &Param,
+    ctx: &MetaLogicContext,
+    fun: &Expr,
+    arg: &Expr,
+    body_ctx: &MetaLogicContext,
+) -> Result<Expr> {
+    let fun_type = fun.get_type(body_ctx)?;
+    let arg_type = arg.get_type(body_ctx)?;
+    if let Some(fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
+        let prop1 = Expr::lambda(param.clone(), arg_type);
+        let rel2 = Expr::lambda(param.clone(), fun_prop);
+        ctx.lambda_handler()
+            .get_subst_cmb(param.type_expr.clone(), prop1, rel2, ctx.as_minimal())
+    } else {
+        let fun_str = fun.print(body_ctx);
+        let fun_type_str = fun_type.print(body_ctx);
+        let arg_str = arg.print(body_ctx);
+        let arg_type_str = arg_type.print(body_ctx);
+        Err(anyhow!("application type mismatch when converting to combinator: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
     }
 }
 
@@ -996,510 +1028,5 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
             &target.expr,
             target_subctx,
         )
-    }
-}
-
-pub trait ExprVisitor {
-    fn expr(&self, _expr: &Expr, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn param(&self, _param: &Param, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn params(&self, params: &[Param], ctx: &MetaLogicContext) -> Result<()> {
-        for param_idx in 0..params.len() {
-            let (prev, next) = params.split_at(param_idx);
-            let param = &next[0];
-            ctx.with_locals(prev, |param_ctx| self.param(param, param_ctx))?;
-        }
-        Ok(())
-    }
-
-    fn arg(&self, _arg: &Arg, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-}
-
-pub struct DeepExprVisitor<Visitor: ExprVisitor>(pub Visitor);
-
-impl<Visitor: ExprVisitor> ExprVisitor for DeepExprVisitor<Visitor> {
-    fn expr(&self, expr: &Expr, ctx: &MetaLogicContext) -> Result<()> {
-        match expr {
-            Expr::Placeholder => {}
-            Expr::Var(_) => {}
-            Expr::App(app) => {
-                self.arg(&app.param, ctx)?;
-                self.expr(&app.body, ctx)?;
-            }
-            Expr::Lambda(lambda) => {
-                self.param(&lambda.param, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| self.expr(&lambda.body, body_ctx))?;
-            }
-        }
-
-        self.0.expr(expr, ctx)
-    }
-
-    fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&param.type_expr, ctx)?;
-
-        self.0.param(param, ctx)
-    }
-
-    fn arg(&self, arg: &Arg, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&arg.expr, ctx)?;
-
-        self.0.arg(arg, ctx)
-    }
-}
-
-pub struct ParamTypeChecker;
-
-impl ExprVisitor for ParamTypeChecker {
-    fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
-        let type_type = param.type_expr.get_type(ctx)?;
-        let cmp_type_type = ctx.lambda_handler().get_universe_type()?;
-        if type_type.compare(&cmp_type_type, ctx)? {
-            Ok(())
-        } else {
-            let type_str = param.type_expr.print(ctx);
-            let type_type_str = type_type.print(ctx);
-            let cmp_type_type_str = cmp_type_type.print(ctx);
-            Err(anyhow!("parameter type «{type_str} : {type_type_str}» must have type «{cmp_type_type_str}» instead"))
-        }
-    }
-}
-
-pub trait ExprManipulator {
-    fn expr(&self, _expr: &mut Expr, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn param(&self, _param: &mut Param, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-
-    fn params(&self, params: &mut [Param], ctx: &MetaLogicContext) -> Result<()> {
-        for param_idx in 0..params.len() {
-            let (prev, next) = params.split_at_mut(param_idx);
-            let param = &mut next[0];
-            ctx.with_locals(prev, |param_ctx| self.param(param, param_ctx))?;
-        }
-        Ok(())
-    }
-
-    fn arg(&self, _arg: &mut Arg, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
-}
-
-pub struct ImplicitArgInserter {
-    pub max_depth: u32,
-}
-
-impl ImplicitArgInserter {
-    pub fn insert_implicit_args_and_get_type(
-        &self,
-        expr: &mut Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Expr> {
-        let mut expr_type = self.insert_implicit_args(expr, ctx)?;
-        if self.max_depth > 0 && expr_type != Expr::Placeholder {
-            let type_arg_inserter = ImplicitArgInserter {
-                max_depth: self.max_depth - 1,
-            };
-            type_arg_inserter.insert_implicit_args(&mut expr_type, ctx)?;
-            return Ok(expr_type);
-        }
-        Ok(Expr::Placeholder)
-    }
-
-    pub fn insert_implicit_args(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<Expr> {
-        match expr {
-            Expr::Placeholder => Ok(Expr::Placeholder),
-            Expr::Var(var) => Ok(var.get_type(ctx)),
-            Expr::App(app) => {
-                let fun = &mut app.body;
-                let arg = &mut app.param;
-                let mut fun_type = self.insert_implicit_args_and_get_type(fun, ctx)?;
-                self.arg(arg, ctx)?;
-                while let Some(lambda) =
-                    fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx)
-                {
-                    if lambda.param.implicit && !arg.implicit {
-                        *fun = Expr::app(
-                            take(fun),
-                            Arg {
-                                expr: Expr::Placeholder,
-                                implicit: true,
-                            },
-                        );
-                        fun_type = lambda.apply(arg.clone(), ctx);
-                    } else if arg.implicit && !lambda.param.implicit {
-                        let name = ctx.get_display_name(&lambda.param);
-                        return Err(anyhow!("expected explicit argument for «{name}»"));
-                    } else {
-                        return Ok(lambda.apply(arg.clone(), ctx));
-                    }
-                }
-                return Ok(Expr::Placeholder);
-            }
-            Expr::Lambda(lambda) => {
-                self.param(&mut lambda.param, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| {
-                    let body_type =
-                        self.insert_implicit_args_and_get_type(&mut lambda.body, body_ctx)?;
-                    Expr::get_fun_type(&lambda.param, body_type, ctx)
-                })
-            }
-        }
-    }
-}
-
-impl ExprManipulator for ImplicitArgInserter {
-    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
-        self.insert_implicit_args(expr, ctx)?;
-        Ok(())
-    }
-
-    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut param.type_expr, ctx)
-    }
-
-    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut arg.expr, ctx)
-    }
-}
-
-pub struct PlaceholderFiller {
-    pub max_reduction_depth: u32,
-    pub force: bool,
-    pub has_unfilled_placeholders: AtomicBool,
-}
-
-impl PlaceholderFiller {
-    pub fn try_fill_placeholders(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<Expr> {
-        let sub_filler = PlaceholderFiller {
-            max_reduction_depth: self.max_reduction_depth,
-            force: false,
-            has_unfilled_placeholders: AtomicBool::new(false),
-        };
-        sub_filler.fill_placeholders(expr, Expr::Placeholder, ctx)
-    }
-
-    pub fn fill_placeholders(
-        &self,
-        expr: &mut Expr,
-        mut expected_type: Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Expr> {
-        self.fill_arg_placeholders(expr, &mut expected_type, ctx)?;
-        self.fill_inner_placeholders(expr, expected_type, ctx)
-    }
-
-    fn fill_inner_placeholders(
-        &self,
-        expr: &mut Expr,
-        mut expected_type: Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Expr> {
-        match expr {
-            Expr::Placeholder => {
-                self.has_unfilled_placeholders
-                    .store(true, Ordering::Relaxed);
-                if self.force {
-                    let type_str_options = MetaLogicContextOptions {
-                        reduce_with_reduction_rules: true,
-                        reduce_with_combinators: true,
-                        print_all_implicit_args: false,
-                    };
-                    ctx.with_new_options(type_str_options, |type_str_ctx| {
-                        let type_str = expected_type.print(type_str_ctx);
-                        if let Ok(true) = expected_type.reduce(type_str_ctx, -1) {
-                            let reduced_type_str = expected_type.print(type_str_ctx);
-                            if reduced_type_str != type_str {
-                                return Err(anyhow!("unfilled placeholder of type «{type_str}» (reduced: «{reduced_type_str}»)"));
-                            }
-                        }
-                        Err(anyhow!("unfilled placeholder of type «{type_str}»"))
-                    })
-                } else {
-                    Ok(expected_type)
-                }
-            }
-            Expr::Var(var) => Ok(var.get_type(ctx)),
-            Expr::App(app) => {
-                let fun = &mut app.body;
-                let arg = &mut app.param;
-
-                let initial_arg_type = self.try_fill_placeholders(&mut arg.expr, ctx)?;
-                let initial_fun_type =
-                    self.fill_arg_placeholders_in_fun(fun, arg, initial_arg_type, ctx)?;
-
-                let fun_type_result =
-                    self.fill_inner_placeholders(fun, initial_fun_type.clone(), ctx);
-                // Report errors in arguments first, to better support the "underscore trick".
-                let (mut fun_type, fun_type_err) = match fun_type_result {
-                    Ok(fun_type) => (fun_type, Ok(())),
-                    Err(err) => (self.try_fill_placeholders(fun, ctx)?, Err(err)),
-                };
-                //dbg!(
-                //    "start",
-                //    fun.print(ctx),
-                //    arg.expr.print(ctx),
-                //    expected_type.print(ctx),
-                //    initial_fun_type.print(ctx)
-                //);
-                let lambda = self.get_fun_type_lambda(&mut fun_type, arg.implicit, ctx)?;
-                //dbg!(
-                //    "fill arg placeholders",
-                //    fun.print(ctx),
-                //    arg.expr.print(ctx),
-                //    fun_type.print(ctx),
-                //    lambda.param.type_expr.print(ctx)
-                //);
-                self.fill_placeholders(&mut arg.expr, lambda.param.type_expr.clone(), ctx)?;
-                //dbg!(
-                //    "filled arg placeholders",
-                //    fun.print(ctx),
-                //    arg.expr.print(ctx),
-                //    fun_type.print(ctx),
-                //    arg_type.print(ctx),
-                //);
-                fun_type_err?;
-                Ok(lambda.apply(arg.clone(), ctx))
-            }
-            Expr::Lambda(lambda) => {
-                let expected_type_lambda =
-                    self.get_fun_type_lambda(&mut expected_type, lambda.param.implicit, ctx)?;
-                if lambda.param.type_expr.is_empty() {
-                    lambda.param.type_expr = expected_type_lambda.param.type_expr;
-                }
-                self.param(&mut lambda.param, ctx)?;
-                ctx.with_local(&lambda.param, |body_ctx| {
-                    let body_type = self.fill_placeholders(
-                        &mut lambda.body,
-                        expected_type_lambda.body,
-                        body_ctx,
-                    )?;
-                    Expr::get_fun_type(&lambda.param, body_type, ctx)
-                })
-            }
-        }
-    }
-
-    fn fill_arg_placeholders(
-        &self,
-        expr: &mut Expr,
-        expected_type: &mut Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<bool> {
-        if expected_type.is_empty() || !matches!(expr, Expr::App(_)) {
-            return Ok(true);
-        }
-
-        let mut params = SmallVec::new();
-        let mut args = SmallVec::new();
-        let mut has_unfilled_args = false;
-        let innermost_fun_type =
-            self.analyze_app(expr, ctx, &mut params, &mut args, &mut has_unfilled_args)?;
-
-        if has_unfilled_args {
-            if ctx.with_locals(&params, |ctx_with_params| {
-                //dbg!(
-                //    "apply",
-                //    fun.print(ctx),
-                //    innermost_fun_type.print(ctx_with_params),
-                //    expected_fun_type.print(ctx)
-                //);
-                innermost_fun_type.substitute_and_compare(
-                    ctx_with_params,
-                    &mut args,
-                    expected_type,
-                    ctx,
-                )
-            })? {
-                Self::apply_args(expr, args);
-                //dbg!("applied", fun.print(ctx));
-            } else {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
-    }
-
-    fn fill_arg_placeholders_in_fun(
-        &self,
-        fun: &mut Expr,
-        arg: &mut Arg,
-        initial_arg_type: Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Expr> {
-        let has_arg_type = !initial_arg_type.is_empty();
-        let mut initial_fun_type =
-            Self::get_expected_fun_type(initial_arg_type, arg.implicit, ctx)?;
-
-        if has_arg_type {
-            if !self.fill_arg_placeholders(fun, &mut initial_fun_type, ctx)? {
-                //dbg!(
-                //    "compare fail",
-                //    fun.print(ctx),
-                //    fun_params
-                //        .iter()
-                //        .map(|param| param.get_name_or_placeholder())
-                //        .collect::<Vec<&str>>(),
-                //    ctx.with_locals(&fun_params, |ctx_with_params| innermost_fun_type
-                //        .print(ctx_with_params)),
-                //    expected_fun_type.print(ctx)
-                //);
-                if self.max_reduction_depth > 0 {
-                    //dbg!("reduce");
-                    let mut initial_arg_type = self.try_fill_placeholders(&mut arg.expr, ctx)?;
-                    if initial_arg_type.apply_one_reduction_rule(ctx)? {
-                        //dbg!(initial_arg_type.print(ctx));
-                        let sub_filler = PlaceholderFiller {
-                            max_reduction_depth: self.max_reduction_depth - 1,
-                            force: self.force,
-                            has_unfilled_placeholders: AtomicBool::new(false),
-                        };
-                        let result = sub_filler.fill_arg_placeholders_in_fun(
-                            fun,
-                            arg,
-                            initial_arg_type,
-                            ctx,
-                        );
-                        if sub_filler.has_unfilled_placeholders.load(Ordering::Relaxed) {
-                            self.has_unfilled_placeholders
-                                .store(true, Ordering::Relaxed);
-                        }
-                        initial_fun_type = result?;
-                        //dbg!("result", fun.print(ctx), arg.expr.print(ctx));
-                    }
-                }
-            }
-        }
-
-        Ok(initial_fun_type)
-    }
-
-    fn get_expected_fun_type(
-        initial_arg_type: Expr,
-        implicit: bool,
-        ctx: &MetaLogicContext,
-    ) -> Result<Expr> {
-        let expected_param = Param {
-            name: None,
-            type_expr: initial_arg_type.clone(),
-            implicit,
-        };
-        ctx.lambda_handler().get_dep_type(
-            initial_arg_type,
-            Expr::lambda(expected_param, Expr::Placeholder),
-            DependentTypeCtorKind::Pi,
-            ctx.as_minimal(),
-        )
-    }
-
-    /// Decomposes the type of the innermost function within `expr` (i.e. of the expression returned
-    /// by `get_app_info`) into a telescope along with a body type in the context of that telescope.
-    /// Also copies the corresponding argument expressions into `result_args`.
-    /// Example: If we have `f : A → B → C`, then `analyze_app` of `f a b` yields `C` along with
-    /// `result_params` of types `A` and `B`, and `result_args` `a` and `b`.
-    fn analyze_app(
-        &self,
-        expr: &mut Expr,
-        ctx: &MetaLogicContext,
-        result_params: &mut SmallVec<[Param; INLINE_PARAMS]>,
-        result_args: &mut SmallVec<[Expr; INLINE_PARAMS]>,
-        has_unfilled_args: &mut bool,
-    ) -> Result<Expr> {
-        if let Expr::App(app) = expr {
-            let fun = &mut app.body;
-            let arg = &mut app.param;
-            if arg.expr.is_empty() {
-                *has_unfilled_args = true;
-            }
-            let mut fun_type =
-                self.analyze_app(fun, ctx, result_params, result_args, has_unfilled_args)?;
-            let lambda = ctx.with_locals(result_params, |fun_type_ctx| {
-                self.get_fun_type_lambda(&mut fun_type, arg.implicit, fun_type_ctx)
-            })?;
-            result_params.push(lambda.param);
-            result_args.push(arg.expr.clone());
-            Ok(lambda.body)
-        } else if *has_unfilled_args {
-            self.try_fill_placeholders(expr, ctx)
-        } else {
-            // Skip unnecessary work if we don't have any arguments to fill.
-            Ok(Expr::Placeholder)
-        }
-    }
-
-    fn apply_args(mut expr: &mut Expr, mut args: SmallVec<[Expr; INLINE_PARAMS]>) {
-        while let Expr::App(app) = expr {
-            if let Some(value) = args.pop() {
-                app.param.expr = value;
-                expr = &mut app.body;
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn get_fun_type_lambda(
-        &self,
-        fun_type: &mut Expr,
-        implicit: bool,
-        ctx: &MetaLogicContext,
-    ) -> Result<LambdaExpr> {
-        if let Some(lambda) = fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx)
-        {
-            Ok(lambda)
-        } else {
-            //dbg!(fun_type.print(ctx));
-            if self.max_reduction_depth > 0 && fun_type.apply_one_reduction_rule(ctx)? {
-                //dbg!(fun_type.print(ctx));
-                let sub_filler = PlaceholderFiller {
-                    max_reduction_depth: self.max_reduction_depth - 1,
-                    force: self.force,
-                    has_unfilled_placeholders: AtomicBool::new(false),
-                };
-                let result = sub_filler.get_fun_type_lambda(fun_type, implicit, ctx);
-                if sub_filler.has_unfilled_placeholders.load(Ordering::Relaxed) {
-                    self.has_unfilled_placeholders
-                        .store(true, Ordering::Relaxed);
-                }
-                return result;
-            }
-
-            Ok(LambdaExpr {
-                param: Param {
-                    name: None,
-                    type_expr: Expr::Placeholder,
-                    implicit,
-                },
-                body: Expr::Placeholder,
-            })
-        }
-    }
-}
-
-impl ExprManipulator for PlaceholderFiller {
-    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
-        self.fill_placeholders(expr, Expr::Placeholder, ctx)?;
-        Ok(())
-    }
-
-    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
-        let expected_type = ctx.lambda_handler().get_universe_type()?;
-        self.fill_placeholders(&mut param.type_expr, expected_type, ctx)?;
-        Ok(())
-    }
-
-    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut arg.expr, ctx)
     }
 }

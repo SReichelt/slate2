@@ -14,9 +14,10 @@ use std::ptr::null;
 /// operations.
 /// To improve iteration performance, references to slices can be pushed as a single frame, instead
 /// of pushing each item individually.
-pub struct RefStack<Item, ExtraData = ()> {
+pub struct RefStack<Item, ExtraData: Copy = ()> {
     // Null if this is the root; in that case `items` is also guaranteed to be null.
     parent: *const RefStack<Item, ExtraData>,
+    len: usize,
 
     items: *const Item,
     items_len: usize,
@@ -29,10 +30,11 @@ pub struct RefStack<Item, ExtraData = ()> {
     extra_data: ExtraData,
 }
 
-impl<Item, ExtraData> RefStack<Item, ExtraData> {
+impl<Item, ExtraData: Copy> RefStack<Item, ExtraData> {
     pub fn new(extra_data: ExtraData) -> Self {
         RefStack {
             parent: null(),
+            len: 0,
             items: null(),
             items_len: 0,
             extra_data,
@@ -40,17 +42,13 @@ impl<Item, ExtraData> RefStack<Item, ExtraData> {
     }
 
     /// Temporarily creates a new stack with `item` pushed to it, and calls `f` with this stack.
-    pub fn with_item<R>(
-        &self,
-        item: &Item,
-        extra_data: ExtraData,
-        f: impl FnOnce(&Self) -> R,
-    ) -> R {
+    pub fn with_item<R>(&self, item: &Item, f: impl FnOnce(&Self) -> R) -> R {
         let new_stack = RefStack {
             parent: self,
+            len: self.len + 1,
             items: item,
             items_len: 1,
-            extra_data,
+            extra_data: self.extra_data,
         };
 
         // Note: for safety, it is important that neither ownership nor a reference to `new_stack`
@@ -59,17 +57,14 @@ impl<Item, ExtraData> RefStack<Item, ExtraData> {
     }
 
     /// Temporarily creates a new stack with `items` pushed to it, and calls `f` with this stack.
-    pub fn with_items<R>(
-        &self,
-        items: &[Item],
-        extra_data: ExtraData,
-        f: impl FnOnce(&Self) -> R,
-    ) -> R {
+    pub fn with_items<R>(&self, items: &[Item], f: impl FnOnce(&Self) -> R) -> R {
+        let items_len = items.len();
         let new_stack = RefStack {
             parent: self,
+            len: self.len + items_len,
             items: items.as_ptr(),
-            items_len: items.len(),
-            extra_data,
+            items_len,
+            extra_data: self.extra_data,
         };
 
         // Note: for safety, it is important that neither ownership nor a reference to `new_stack`
@@ -79,9 +74,10 @@ impl<Item, ExtraData> RefStack<Item, ExtraData> {
 
     /// Temporarily creates a new stack that contains the same items but its own copy of
     /// `extra_data`, and calls `f` with this stack.
-    pub fn with_extra_data<R>(&self, extra_data: ExtraData, f: impl FnOnce(&Self) -> R) -> R {
+    pub fn with_new_extra_data<R>(&self, extra_data: ExtraData, f: impl FnOnce(&Self) -> R) -> R {
         let new_stack = RefStack {
             parent: self,
+            len: self.len,
             items: null(),
             items_len: 0,
             extra_data,
@@ -90,6 +86,10 @@ impl<Item, ExtraData> RefStack<Item, ExtraData> {
         // Note: for safety, it is important that neither ownership nor a reference to `new_stack`
         // escapes this method.
         f(&new_stack)
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
 
     /// Iterates over the items on the stack, with the most-recently-pushed item returned first.
@@ -105,7 +105,7 @@ impl<Item, ExtraData> RefStack<Item, ExtraData> {
     }
 }
 
-impl<'a, Item, ExtraData> IntoIterator for &'a RefStack<Item, ExtraData> {
+impl<'a, Item, ExtraData: Copy> IntoIterator for &'a RefStack<Item, ExtraData> {
     type Item = &'a Item;
     type IntoIter = RefStackIter<'a, Item, ExtraData>;
 
@@ -114,12 +114,12 @@ impl<'a, Item, ExtraData> IntoIterator for &'a RefStack<Item, ExtraData> {
     }
 }
 
-pub struct RefStackIter<'a, Item, ExtraData = ()> {
+pub struct RefStackIter<'a, Item, ExtraData: Copy = ()> {
     frame: &'a RefStack<Item, ExtraData>,
     item_idx: usize,
 }
 
-impl<'a, Item, ExtraData> Iterator for RefStackIter<'a, Item, ExtraData> {
+impl<'a, Item, ExtraData: Copy> Iterator for RefStackIter<'a, Item, ExtraData> {
     type Item = &'a Item;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -164,13 +164,18 @@ impl<'a, Item, ExtraData> Iterator for RefStackIter<'a, Item, ExtraData> {
 
         None
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.frame.len - self.frame.items_len + self.item_idx;
+        (remaining, Some(remaining))
+    }
 }
 
 // SAFETY:
 // * Only an empty context can ever be owned.
 // * As long as a reference to a context is valid, we can safely share it between threads.
-unsafe impl<Item, ExtraData: Send> Send for RefStack<Item, ExtraData> {}
-unsafe impl<Item: Sync, ExtraData: Sync> Sync for RefStack<Item, ExtraData> {}
+unsafe impl<Item, ExtraData: Copy + Send> Send for RefStack<Item, ExtraData> {}
+unsafe impl<Item: Sync, ExtraData: Copy + Sync> Sync for RefStack<Item, ExtraData> {}
 
 #[cfg(test)]
 mod tests {
@@ -185,7 +190,7 @@ mod tests {
     #[test]
     fn single_item_is_returned() {
         let stack = RefStack::<u32>::new(());
-        stack.with_item(&1, (), |stack2| {
+        stack.with_item(&1, |stack2| {
             assert!(stack.iter().next().is_none());
             assert_eq!(stack2.iter().collect::<Vec<&u32>>(), [&1]);
         });
@@ -194,8 +199,8 @@ mod tests {
     #[test]
     fn two_items_are_returned() {
         let stack = RefStack::<u32>::new(());
-        stack.with_item(&1, (), |stack2| {
-            stack2.with_item(&2, (), |stack3| {
+        stack.with_item(&1, |stack2| {
+            stack2.with_item(&2, |stack3| {
                 assert!(stack.iter().next().is_none());
                 assert_eq!(stack2.iter().next(), Some(&1));
                 assert!(stack2.iter().nth(1).is_none());
@@ -209,7 +214,7 @@ mod tests {
     #[test]
     fn slice_is_returned_in_reverse() {
         let stack = RefStack::<u32>::new(());
-        stack.with_items(&[1, 2], (), |stack2| {
+        stack.with_items(&[1, 2], |stack2| {
             assert_eq!(stack2.iter().collect::<Vec<&u32>>(), [&2, &1]);
             assert_eq!(stack2.iter().next(), Some(&2));
             assert_eq!(stack2.iter().nth(1), Some(&1));
@@ -220,8 +225,8 @@ mod tests {
     #[test]
     fn two_slices_are_returned() {
         let stack = RefStack::<u32>::new(());
-        stack.with_items(&[1, 2], (), |stack2| {
-            stack2.with_items(&[3, 4, 5], (), |stack3| {
+        stack.with_items(&[1, 2], |stack2| {
+            stack2.with_items(&[3, 4, 5], |stack3| {
                 assert_eq!(stack3.iter().collect::<Vec<&u32>>(), [&5, &4, &3, &2, &1]);
                 assert_eq!(stack3.iter().next(), Some(&5));
                 assert_eq!(stack3.iter().nth(3), Some(&2));
@@ -234,7 +239,7 @@ mod tests {
     #[test]
     fn stack_with_empty_slice_is_empty() {
         let stack = RefStack::<u32>::new(());
-        stack.with_items(&[], (), |stack2| {
+        stack.with_items(&[], |stack2| {
             assert!(stack2.iter().next().is_none());
         });
     }
@@ -243,13 +248,13 @@ mod tests {
     #[cfg(feature = "test_lifetime")] // Uncomment to see compiler error.
     fn item_ref_cannot_escape() {
         let stack = RefStack::<u32>::new(());
-        stack.with_item(&42, (), |stack2| stack2.iter().next());
+        stack.with_item(&42, |stack2| stack2.iter().next());
     }
 
     #[test]
     fn copied_item_can_be_returned() {
         let stack = RefStack::<u32>::new(());
-        let result = stack.with_item(&42, (), |stack2| *stack2.iter().next().unwrap());
+        let result = stack.with_item(&42, |stack2| *stack2.iter().next().unwrap());
         assert_eq!(result, 42);
     }
 }

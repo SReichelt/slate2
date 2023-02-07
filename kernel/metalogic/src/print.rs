@@ -1,8 +1,8 @@
 use std::fmt;
 
-use super::{expr::*, metalogic::*};
+use slate_kernel_generic::{context::*, expr_parts::*};
 
-use crate::generic::{context::*, expr_parts::*};
+use crate::{expr::*, metalogic::*, metalogic_context::*};
 
 pub struct PrintingContext<'a, 'b, W: fmt::Write> {
     output: &'a mut W,

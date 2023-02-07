@@ -1,0 +1,12 @@
+[package]
+name = "slate-kernel-metalogic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slate-kernel-util = { path = "../util" }
+slate-kernel-generic = { path = "../generic" }
+anyhow = "1.0.69"
+smallvec = { version = "1.10", features = ["union", "const_generics"] }
+rayon = "1.6.1"
+symbol_table = "0.3.0"

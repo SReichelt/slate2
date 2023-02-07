@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use smallvec::SmallVec;
 
-use super::{context::*, context_object::*};
+use crate::{context::*, context_object::*};
 
 /// A simple variable reference. This is the prototypical context object, but obviously does not
 /// support substitution by itself.

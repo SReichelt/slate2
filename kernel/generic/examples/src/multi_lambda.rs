@@ -30,7 +30,7 @@ use std::{
 
 use smallvec::{smallvec, SmallVec};
 
-use crate::generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
 
 #[derive(Clone, PartialEq)]
 pub enum InnerExpr {
@@ -261,23 +261,23 @@ impl SubstInto<InnerExpr, InnerExpr> for VarApp {
     }
 }
 
-impl OuterExpr {
-    pub fn reduce(mut self) -> InnerExpr {
+impl From<OuterExpr> for InnerExpr {
+    fn from(mut expr: OuterExpr) -> Self {
         // First substitute earlier variables within later ones, then substitute everything at once
         // in the body.
         // Although it would be easier to substitute the variables from last to first within the
         // body only, we take the more complicated route because we need to do something similar in
         // a real application.
-        let len = self.params.len();
+        let len = expr.params.len();
         for i in 1..len {
-            let (prev_params, rest) = self.params.split_at_mut(i);
+            let (prev_params, rest) = expr.params.split_at_mut(i);
             let param = &mut rest[0];
             let start = -(i as VarIndex);
             param.substitute_int(start, start, prev_params, false);
         }
-        self.body
-            .substitute(&mut self.params, true, &MinimalContext::new());
-        self.body
+        expr.body
+            .substitute(&mut expr.params, true, &MinimalContext::new());
+        expr.body
     }
 }
 
@@ -299,7 +299,7 @@ mod tests {
             body: InnerExpr::var(-1),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λx.x
             get_id()
         );
@@ -314,7 +314,7 @@ mod tests {
             body: InnerExpr::var_app(-1, vec![smallvec![InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λx.x
             get_id()
         );
@@ -333,7 +333,7 @@ mod tests {
             body: InnerExpr::var_app(-2, vec![smallvec![InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λx.x
             get_id()
         );
@@ -351,7 +351,7 @@ mod tests {
             ),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λx.x
             get_id()
         );
@@ -372,7 +372,7 @@ mod tests {
             ),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λx.x
             get_id()
         );
@@ -387,7 +387,7 @@ mod tests {
             // I(I,I)
             body: InnerExpr::var_app(-1, vec![smallvec![InnerExpr::var(-1), InnerExpr::var(-1)]]),
         };
-        expr.reduce();
+        let _ = InnerExpr::from(expr);
     }
 
     fn get_omega() -> InnerExpr {
@@ -407,7 +407,7 @@ mod tests {
             body: InnerExpr::var(-1),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λf.f(f)
             get_omega()
         );
@@ -458,7 +458,7 @@ mod tests {
             body: InnerExpr::var_app(-2, vec![smallvec![InnerExpr::var(-1), InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(x)
             get_num(1)
         );
@@ -479,7 +479,7 @@ mod tests {
             body: InnerExpr::var_app(-3, vec![smallvec![InnerExpr::var(-2), InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(f(x))
             get_num(2)
         );
@@ -500,7 +500,7 @@ mod tests {
             body: InnerExpr::var_app(-3, vec![smallvec![InnerExpr::var(-1), InnerExpr::var(-2)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(f(x))
             get_num(2)
         );
@@ -519,7 +519,7 @@ mod tests {
             body: InnerExpr::var_app(-2, vec![smallvec![InnerExpr::var(-1), InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(f(f(f(x)))
             get_num(4)
         );
@@ -540,7 +540,7 @@ mod tests {
             body: InnerExpr::var_app(-3, vec![smallvec![InnerExpr::var(-2), InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(f(f(f(f(f(x))))))
             get_num(6)
         );
@@ -561,7 +561,7 @@ mod tests {
             body: InnerExpr::var_app(-1, vec![smallvec![InnerExpr::var(-3), InnerExpr::var(-2)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(f(f(f(f(f(x))))))
             get_num(6)
         );
@@ -582,7 +582,7 @@ mod tests {
             body: InnerExpr::var_app(-3, vec![smallvec![InnerExpr::var(-2), InnerExpr::var(-1)]]),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(f(f(f(f(f(f(f(x))))))))
             get_num(8)
         );
@@ -634,7 +634,7 @@ mod tests {
             ),
         };
         assert_eq!(
-            expr.reduce(),
+            InnerExpr::from(expr),
             // λ(f,x).f(...(f(x)))
             get_num(n)
         );

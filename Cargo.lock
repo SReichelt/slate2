@@ -169,13 +169,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 
 [[package]]
-name = "slate-kernel"
+name = "slate-kernel-generic"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "slate-kernel-util",
+ "smallvec",
+]
+
+[[package]]
+name = "slate-kernel-generic-examples"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "slate-kernel-generic",
+ "smallvec",
+]
+
+[[package]]
+name = "slate-kernel-metalogic"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "rayon",
+ "slate-kernel-generic",
+ "slate-kernel-util",
  "smallvec",
  "symbol_table",
+]
+
+[[package]]
+name = "slate-kernel-metalogic-mltt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "slate-kernel-generic",
+ "slate-kernel-metalogic",
+ "smallvec",
+]
+
+[[package]]
+name = "slate-kernel-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]

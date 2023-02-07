@@ -3,10 +3,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use smallvec::smallvec;
 
-use crate::{
-    generic::context::*,
-    metalogic::{expr::*, helpers::*, metalogic::*},
-};
+use slate_kernel_generic::context::*;
+use slate_kernel_metalogic::{expr::*, helpers::*, metalogic::*};
 
 pub fn get_mltt() -> MetaLogic {
     MetaLogic::construct_semantically(
@@ -945,11 +943,12 @@ impl LambdaHandler for MLTTLambdaHandler {
 
 #[cfg(test)]
 mod tests {
-    use crate::generic::context_object::*;
+    use anyhow::Result;
+
+    use slate_kernel_generic::context_object::*;
+    use slate_kernel_metalogic::metalogic_context::*;
 
     use super::*;
-
-    use anyhow::Result;
 
     #[test]
     fn test_mltt() -> Result<()> {

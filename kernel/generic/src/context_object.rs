@@ -1,11 +1,8 @@
 use anyhow::Result;
 
-use super::context::*;
+use crate::context::*;
 
 pub const REF_CHUNK_LEN: usize = 16;
-
-// TODO: We should convert everything to operations that take contexts instead of indices, like
-//       we already did for comparison operations.
 
 /// An object that lives in a specific context, so that variable indices are meaningful.
 pub trait ContextObject: Clone {

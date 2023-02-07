@@ -1,0 +1,10 @@
+[package]
+name = "slate-kernel-metalogic-mltt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slate-kernel-generic = { path = "../../generic" }
+slate-kernel-metalogic = { path = ".." }
+anyhow = "1.0.69"
+smallvec = { version = "1.10", features = ["union", "const_generics"] }

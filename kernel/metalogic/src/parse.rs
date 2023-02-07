@@ -4,12 +4,10 @@ use anyhow::{anyhow, Result};
 use smallvec::{smallvec, SmallVec};
 use symbol_table::Symbol;
 
-use super::{expr::*, metalogic::*};
+use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_util::parser::*;
 
-use crate::{
-    generic::{context::*, context_object::*, expr_parts::*},
-    util::parser::*,
-};
+use crate::{expr::*, metalogic::*, metalogic_context::*};
 
 pub struct ParsingContext<'a, 'b, 'c> {
     input: &'a mut ParserInput<'b>,

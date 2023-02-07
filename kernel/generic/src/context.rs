@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use crate::util::ref_stack::RefStack;
+use slate_kernel_util::ref_stack::RefStack;
 
 /// A De Bruijn level if nonnegative, or a bitwise negated De Bruijn index if negative.
 ///
@@ -165,12 +165,6 @@ impl<ParamType, T: VarAccessor<ParamType>> VarAccessor<ParamType> for &T {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct ParamContextData<GlobalsType> {
-    globals: GlobalsType,
-    locals_start: VarIndex,
-}
-
 /// To get some idea what a context should look like, see the documentation of `VarIndex`.
 ///
 /// We want global indices to resolve fast, but since we want to be able to treat variables as
@@ -181,61 +175,35 @@ pub struct ParamContextData<GlobalsType> {
 /// because creating a subcontext should not invalidate the parent context. So locals are managed
 /// as a series of stack frames living on the Rust call stack, with parent pointers. As a
 /// consequence, we need to iterate over frames when accessing locals by index.
-pub type ParamContextImpl<ParamType, GlobalsType> =
-    RefStack<ParamType, ParamContextData<GlobalsType>>;
+pub type ParamContextImpl<ParamType, ExtraData> = RefStack<ParamType, ExtraData>;
 
-impl<ParamType, GlobalsType> ParamContextImpl<ParamType, GlobalsType> {
-    pub fn with_globals(globals: GlobalsType) -> Self {
-        ParamContextImpl::new(ParamContextData {
-            globals,
-            locals_start: 0,
-        })
-    }
-
-    pub fn with_new_globals<R>(&self, globals: GlobalsType, f: impl FnOnce(&Self) -> R) -> R {
-        let extra_data = ParamContextData {
-            globals,
-            locals_start: self.extra_data().locals_start,
-        };
-        self.with_extra_data(extra_data, f)
-    }
-
-    pub fn globals(&self) -> &GlobalsType {
-        &self.extra_data().globals
-    }
-}
-
-impl<ParamType, GlobalsType> Context for ParamContextImpl<ParamType, GlobalsType> {
+impl<ParamType, ExtraData: Copy> Context for ParamContextImpl<ParamType, ExtraData> {
     fn locals_start(&self) -> VarIndex {
-        self.extra_data().locals_start
+        !(self.len() as VarIndex)
     }
 }
 
-impl<ParamType, GlobalsType: Copy> ParamContext<ParamType>
-    for ParamContextImpl<ParamType, GlobalsType>
+impl<ParamType, ExtraData: Copy> ParamContext<ParamType>
+    for ParamContextImpl<ParamType, ExtraData>
 {
     fn with_local<R>(&self, param: &ParamType, f: impl FnOnce(&Self) -> R) -> R {
-        let mut extra_data = *self.extra_data();
-        extra_data.locals_start -= 1;
-        self.with_item(param, extra_data, f)
+        self.with_item(param, f)
     }
 
     fn with_locals<R>(&self, params: &[ParamType], f: impl FnOnce(&Self) -> R) -> R {
-        let mut extra_data = *self.extra_data();
-        extra_data.locals_start -= params.len() as VarIndex;
-        self.with_items(params, extra_data, f)
+        self.with_items(params, f)
     }
 }
 
-impl<ParamType, GlobalsType: VarAccessor<ParamType>> VarAccessor<ParamType>
-    for ParamContextImpl<ParamType, GlobalsType>
+impl<ParamType, ExtraData: Copy + VarAccessor<ParamType>> VarAccessor<ParamType>
+    for ParamContextImpl<ParamType, ExtraData>
 {
     fn get_var(&self, idx: VarIndex) -> &ParamType {
         if idx < 0 {
             let mut iter = self.iter();
             iter.nth((!idx) as usize).unwrap()
         } else {
-            self.globals().get_var(idx)
+            self.extra_data().get_var(idx)
         }
     }
 
@@ -249,7 +217,7 @@ impl<ParamType, GlobalsType: VarAccessor<ParamType>> VarAccessor<ParamType>
             }
         }
 
-        self.globals().for_each_var(f)
+        self.extra_data().for_each_var(f)
     }
 }
 
