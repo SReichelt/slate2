@@ -95,6 +95,15 @@ impl Expr {
         Expr::app(Expr::lambda(param, body), arg)
     }
 
+    pub fn is_small(&self) -> bool {
+        match self {
+            Expr::Placeholder => true,
+            Expr::Var(_) => true,
+            Expr::App(_) => false,
+            Expr::Lambda(_) => false,
+        }
+    }
+
     pub fn reduce(&mut self, ctx: &MetaLogicContext, mut max_depth: i32) -> Result<bool> {
         if max_depth >= 0 {
             if max_depth == 0 {
@@ -117,32 +126,26 @@ impl Expr {
                     // anyway.
                     // However, as an exception for better performance, we skip reduction of the
                     // argument if it is dropped.
-                    if let Expr::Lambda(lambda) = &mut app.body {
-                        if let Some(const_body) = lambda.extract_body_if_const(ctx) {
-                            *self = const_body;
-                            reduced = true;
-                            continue;
-                        } else {
-                            reduced |= app.body.reduce(ctx, max_depth)?;
-                        }
-                    } else {
-                        reduced |= app.body.reduce(ctx, max_depth)?;
+                    if let Some(beta_reduced) = app.beta_reduce_if_trivial(ctx) {
+                        *self = beta_reduced;
+                        reduced = true;
+                        continue;
+                    }
 
-                        // Try again after reduction.
-                        if let Expr::Lambda(lambda) = &mut app.body {
-                            if let Some(const_body) = lambda.extract_body_if_const(ctx) {
-                                *self = const_body;
-                                reduced = true;
-                                continue;
-                            }
-                        }
+                    reduced |= app.body.reduce(ctx, max_depth)?;
+
+                    // Reduction of function may have made beta reduction possible.
+                    if let Some(beta_reduced) = app.beta_reduce_if_trivial(ctx) {
+                        *self = beta_reduced;
+                        reduced = true;
+                        continue;
                     }
 
                     reduced |= app.param.expr.reduce(ctx, max_depth)?;
 
                     // Now always beta-reduce if possible.
-                    if let Expr::Lambda(lambda) = &mut app.body {
-                        *self = take(lambda).apply(take(&mut app.param), ctx);
+                    if let Some(beta_reduced) = app.beta_reduce(ctx) {
+                        *self = beta_reduced;
                         reduced = true;
                         continue;
                     }
@@ -157,12 +160,8 @@ impl Expr {
                             // Eta-reduction isn't really important, but it makes printed
                             // expressions easier to read.
                             if let Expr::App(app) = &mut lambda.body {
-                                if let Expr::Var(Var(-1)) = app.param.expr {
-                                    if app.body.valid_in_superctx(body_ctx, ctx) {
-                                        let mut eta_reduced = take(&mut app.body);
-                                        eta_reduced.shift_to_supercontext(body_ctx, ctx);
-                                        return Ok(Some(eta_reduced));
-                                    }
+                                if let Some(eta_reduced) = app.eta_reduce(ctx, body_ctx) {
+                                    return Ok(Some(eta_reduced));
                                 }
                             }
 
@@ -208,8 +207,8 @@ impl Expr {
             Ok(true)
         } else if let Expr::App(app) = self {
             if app.body.apply_one_reduction_rule(ctx)? {
-                if let Expr::Lambda(lambda) = &mut app.body {
-                    *self = take(lambda).apply(take(&mut app.param), ctx);
+                if let Some(beta_reduced) = app.beta_reduce(ctx) {
+                    *self = beta_reduced;
                 }
                 Ok(true)
             } else {
@@ -713,6 +712,46 @@ impl HasType for AppExpr {
             let arg_type_str = arg_type.print(ctx);
             Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
         }
+    }
+}
+
+pub trait IsApp {
+    fn beta_reduce(&mut self, ctx: &impl Context) -> Option<Expr>;
+    fn beta_reduce_if_trivial(&mut self, ctx: &impl ParamContext<Param>) -> Option<Expr>;
+
+    fn eta_reduce<Ctx: Context>(&mut self, ctx: &Ctx, body_ctx: &Ctx) -> Option<Expr>;
+}
+
+impl IsApp for AppExpr {
+    fn beta_reduce(&mut self, ctx: &impl Context) -> Option<Expr> {
+        if let Expr::Lambda(lambda) = &mut self.body {
+            Some(take(lambda).apply(take(&mut self.param), ctx))
+        } else {
+            None
+        }
+    }
+
+    fn beta_reduce_if_trivial(&mut self, ctx: &impl ParamContext<Param>) -> Option<Expr> {
+        if let Expr::Lambda(lambda) = &mut self.body {
+            if self.param.expr.is_small() {
+                return Some(take(lambda).apply(take(&mut self.param), ctx));
+            }
+            if let Some(const_body) = lambda.extract_body_if_const(ctx) {
+                return Some(const_body);
+            }
+        }
+        None
+    }
+
+    fn eta_reduce<Ctx: Context>(&mut self, ctx: &Ctx, body_ctx: &Ctx) -> Option<Expr> {
+        if let Expr::Var(Var(-1)) = self.param.expr {
+            if self.body.valid_in_superctx(body_ctx, ctx) {
+                let mut eta_reduced = take(&mut self.body);
+                eta_reduced.shift_to_supercontext(body_ctx, ctx);
+                return Some(eta_reduced);
+            }
+        }
+        None
     }
 }
 
