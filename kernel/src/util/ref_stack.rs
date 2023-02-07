@@ -170,7 +170,7 @@ impl<'a, Item, ExtraData> Iterator for RefStackIter<'a, Item, ExtraData> {
 // * Only an empty context can ever be owned.
 // * As long as a reference to a context is valid, we can safely share it between threads.
 unsafe impl<Item, ExtraData: Send> Send for RefStack<Item, ExtraData> {}
-unsafe impl<Item, ExtraData: Sync> Sync for RefStack<Item, ExtraData> {}
+unsafe impl<Item: Sync, ExtraData: Sync> Sync for RefStack<Item, ExtraData> {}
 
 #[cfg(test)]
 mod tests {
