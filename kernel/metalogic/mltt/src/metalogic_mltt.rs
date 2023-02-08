@@ -173,7 +173,7 @@ pub fn get_mltt() -> MetaLogic {
                         ],
                     },
                     DefInit {
-                        sym: "trans_left_right: Π {A : U}. Π {a b : A}. Π e : a = b. trans (left e) (symm (right e)) = e",
+                        sym: "trans_left_right : Π {A : U}. Π {a b : A}. Π e : a = b. trans (left e) (symm (right e)) = e",
                         red: &[
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : Equiv a b. trans_left_right (Equiv_to_Eq e) :≡ Equiv_to_Eq (Equiv_trans_left_right e)",
                             "∀ {A : U}. ∀ a : A. trans_left_right (refl a) :≡ refl (refl a)",
@@ -182,7 +182,7 @@ pub fn get_mltt() -> MetaLogic {
                         ],
                     },
                     DefInit {
-                        sym: "trans_right_left: Π {A : U}. Π {a b : A}. Π e : a = b. trans (right e) (symm (left e)) = symm e",
+                        sym: "trans_right_left : Π {A : U}. Π {a b : A}. Π e : a = b. trans (right e) (symm (left e)) = symm e",
                         red: &["trans_right_left :≡ λ {A a b}. λ e. trans_left_right (symm e)"],
                     },
                     DefInit {
@@ -203,28 +203,28 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["inv :≡ λ {A B}. λ e. Equiv_U_inv (Eq_to_Equiv e)"],
                     },
                     DefInit {
-                        sym: "symm_symm: Π {A : U}. Π {a b : A}. Π e : a = b. symm (symm e) = e",
+                        sym: "symm_symm : Π {A : U}. Π {a b : A}. Π e : a = b. symm (symm e) = e",
                         red: &["symm_symm :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_symm_symm (Eq_to_Equiv e))"],
                     },
                     DefInit {
-                        sym: "symm_trans: Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. symm (trans e f) = trans (symm f) (symm e)",
+                        sym: "symm_trans : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. symm (trans e f) = trans (symm f) (symm e)",
                         red: &["symm_trans :≡ λ {A a b c}. λ e f. Equiv_to_Eq (Equiv_symm_trans (Eq_to_Equiv e) (Eq_to_Equiv f))"],
                     },
                     DefInit {
-                        sym: "symm_trans_symm: Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : c = b. symm (trans e (symm f)) = trans f (symm e)",
-                        red: &["symm_trans_symm :≡ λ {A a b c}. λ e f. sorry _"],
+                        sym: "symm_trans_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : c = b. symm (trans e (symm f)) = trans f (symm e)",
+                        red: &["symm_trans_symm :≡ λ {A a b c}. λ e f. Equiv_to_Eq (Equiv_symm_trans_symm (Eq_to_Equiv e) (Eq_to_Equiv f))"],
                     },
                     DefInit {
-                        sym: "trans_refl: Π {A : U}. Π {a b : A}. Π e : a = b. trans e (refl b) = e",
+                        sym: "trans_refl : Π {A : U}. Π {a b : A}. Π e : a = b. trans e (refl b) = e",
                         red: &["trans_refl :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_trans_refl (Eq_to_Equiv e))"],
                     },
                     DefInit {
-                        sym: "trans_e_symm: Π {A : U}. Π {a b : A}. Π e : a = b. trans e (symm e) = refl a",
-                        red: &["trans_e_symm :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_trans_e_symm (Eq_to_Equiv e))"],
+                        sym: "trans_1_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans (symm e) e = refl b",
+                        red: &["trans_1_symm :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_trans_1_symm (Eq_to_Equiv e))"],
                     },
                     DefInit {
-                        sym: "trans_symm_e: Π {A : U}. Π {a b : A}. Π e : a = b. trans (symm e) e = refl b",
-                        red: &["trans_symm_e :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_trans_symm_e (Eq_to_Equiv e))"],
+                        sym: "trans_2_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans e (symm e) = refl a",
+                        red: &["trans_2_symm :≡ λ {A a b}. λ e. Equiv_to_Eq (Equiv_trans_2_symm (Eq_to_Equiv e))"],
                     },
                     DefInit {
                         sym: "trans3 : Π {A : U}. Π {a b c d : A}. a = b → b = c → c = d → a = d",
@@ -237,6 +237,22 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "assoc: Π {A : U}. Π {a b c d : A}. Π e : a = b. Π f : b = c. Π g : c = d. trans3 e f g = trans3' e f g",
                         red: &["assoc :≡ λ {A a b c d}. λ e f g. Equiv_to_Eq (Equiv_assoc (Eq_to_Equiv e) (Eq_to_Equiv f) (Eq_to_Equiv g))"],
+                    },
+                    DefInit {
+                        sym: "trans_1_cancel_lemma : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans3 (symm e) e f = f",
+                        red: &["trans_1_cancel_lemma :≡ λ {A a b c}. λ e f. trans (assoc (symm e) e f) (ap_trans_1 (trans_1_symm e) f)"],
+                    },
+                    DefInit {
+                        sym: "trans_1_cancel : Π {A : U}. Π {a b c : A}. Π {e : a = b}. Π {f f' : b = c}. trans e f = trans e f' → f = f'",
+                        red: &["trans_1_cancel :≡ λ {A a b c e f f'}. λ h. trans3 (symm (trans_1_cancel_lemma e f)) (ap_trans_2 (symm e) h) (trans_1_cancel_lemma e f')"],
+                    },
+                    DefInit {
+                        sym: "trans_2_cancel_lemma : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans3' e f (symm f) = e",
+                        red: &["trans_2_cancel_lemma :≡ λ {A a b c}. λ e f. trans3 (symm (assoc e f (symm f))) (ap_trans_2 e (trans_2_symm f)) (trans_refl e)"],
+                    },
+                    DefInit {
+                        sym: "trans_2_cancel : Π {A : U}. Π {a b c : A}. Π {e e' : a = b}. Π {f : b = c}. trans e f = trans e' f → e = e'",
+                        red: &["trans_2_cancel :≡ λ {A a b c e e' f}. λ h. trans3 (symm (trans_2_cancel_lemma e f)) (ap_trans_1 h (symm f)) (trans_2_cancel_lemma e' f)"],
                     },
                     DefInit {
                         sym: "inv_to : Π {A B : U}. Π e : A = B. Π a : A. inv e (to e a) = a",
@@ -263,7 +279,6 @@ pub fn get_mltt() -> MetaLogic {
                 },
                 defs: &[
                     DefInit {
-                        // TODO: We should write this as a chain of invertible operations.
                         sym: "DepEq_to : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. a =[eAB] b → to eAB a = b",
                         red: &["DepEq_to :≡ λ {A B eAB a b}. λ e. trans3 (symm (to_right_left eAB a)) (ap (inv (right eAB)) e) (inv_to (right eAB) b)"],
                     },
@@ -398,31 +413,35 @@ pub fn get_mltt() -> MetaLogic {
                         ],
                     },
                     DefInit {
-                        sym: "Equiv_trans_left_right: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans (Equiv_left e) (Equiv_symm (Equiv_right e)) = e",
+                        sym: "Equiv_trans_left_right : Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans (Equiv_left e) (Equiv_symm (Equiv_right e)) = e",
                         red: &["Equiv_trans_left_right :≡ λ {A a b}. λ e. sorry _"],
                     },
                     DefInit {
-                        sym: "Equiv_symm_symm: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_symm (Equiv_symm e) = e",
+                        sym: "Equiv_symm_symm : Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_symm (Equiv_symm e) = e",
                         red: &["Equiv_symm_symm :≡ λ {A a b}. λ e. sorry _"],
                     },
                     DefInit {
-                        sym: "Equiv_trans_refl: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans e (Equiv_refl b) = e",
-                        red: &["Equiv_trans_refl :≡ λ {A a b}. λ e. sorry _"],
-                    },
-                    DefInit {
-                        sym: "Equiv_trans_e_symm: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans e (Equiv_symm e) = Equiv_refl a",
-                        red: &["Equiv_trans_e_symm :≡ λ {A a b}. λ e. sorry _"],
-                    },
-                    DefInit {
-                        sym: "Equiv_trans_symm_e: Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans (Equiv_symm e) e = Equiv_refl b",
-                        red: &["Equiv_trans_symm_e :≡ λ {A a b}. λ e. sorry _"],
-                    },
-                    DefInit {
-                        sym: "Equiv_symm_trans: Π {A : U}. Π {a b c : A}. Π e : Equiv a b. Π f : Equiv b c. Equiv_symm (Equiv_trans e f) = Equiv_trans (Equiv_symm f) (Equiv_symm e)",
+                        sym: "Equiv_symm_trans : Π {A : U}. Π {a b c : A}. Π e : Equiv a b. Π f : Equiv b c. Equiv_symm (Equiv_trans e f) = Equiv_trans (Equiv_symm f) (Equiv_symm e)",
                         red: &["Equiv_symm_trans :≡ λ {A a b c}. λ e f. sorry _"],
                     },
                     DefInit {
-                        sym: "Equiv_assoc: Π {A : U}. Π {a b c d : A}. Π e : Equiv a b. Π f : Equiv b c. Π g : Equiv c d. Equiv_trans e (Equiv_trans f g) = Equiv_trans (Equiv_trans e f) g",
+                        sym: "Equiv_symm_trans_symm : Π {A : U}. Π {a b c : A}. Π e : Equiv a b. Π f : Equiv c b. Equiv_symm (Equiv_trans e (Equiv_symm f)) = Equiv_trans f (Equiv_symm e)",
+                        red: &["Equiv_symm_trans_symm :≡ λ {A a b c}. λ e f. sorry _"],
+                    },
+                    DefInit {
+                        sym: "Equiv_trans_refl : Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans e (Equiv_refl b) = e",
+                        red: &["Equiv_trans_refl :≡ λ {A a b}. λ e. sorry _"],
+                    },
+                    DefInit {
+                        sym: "Equiv_trans_1_symm : Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans (Equiv_symm e) e = Equiv_refl b",
+                        red: &["Equiv_trans_1_symm :≡ λ {A a b}. λ e. sorry _"],
+                    },
+                    DefInit {
+                        sym: "Equiv_trans_2_symm : Π {A : U}. Π {a b : A}. Π e : Equiv a b. Equiv_trans e (Equiv_symm e) = Equiv_refl a",
+                        red: &["Equiv_trans_2_symm :≡ λ {A a b}. λ e. sorry _"],
+                    },
+                    DefInit {
+                        sym: "Equiv_assoc : Π {A : U}. Π {a b c d : A}. Π e : Equiv a b. Π f : Equiv b c. Π g : Equiv c d. Equiv_trans e (Equiv_trans f g) = Equiv_trans (Equiv_trans e f) g",
                         red: &["Equiv_assoc :≡ λ {A a b c d}. λ e f g. sorry _"],
                     },
                     DefInit {
@@ -626,7 +645,18 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "IsHalfAdjoint_symm : Π {A B : U}. Π {fAB : A → B}. Π {fBA : B → A}. Π {eAB : IsQuasiInv fAB fBA}. IsHalfAdjoint eAB → IsHalfAdjoint (IsQuasiInv_symm eAB)",
-                        red: &["IsHalfAdjoint_symm :≡ λ {A B fAB fBA eAB}. λ efAB. λ b : B. sorry _"],
+                        red: &["IsHalfAdjoint_symm :≡ λ {A B fAB fBA eAB}. \
+                                                      [eABA ⫽ IsQuasiInv_leftInv eAB] [eBAB ⫽ IsQuasiInv_rightInv eAB] \
+                                                      λ efAB : (Π a : A. ap fAB (eABA a) = eBAB (fAB a)). \
+                                                      λ b : B. \
+                                                      [h1 : ap fAB (eABA (fBA b)) = eBAB (fAB (fBA b)) \
+                                                          ⫽ efAB (fBA b)] \
+                                                      [h2 : trans {B} {fAB (fBA (fAB (fBA b)))} {fAB (fBA b)} {b} (eBAB (fAB (fBA b))) (eBAB b) = \
+                                                            trans {B} {fAB (fBA (fAB (fBA b)))} {fAB (fBA b)} {b} (ap (λ b : B. fAB (fBA b)) (eBAB b)) (eBAB b) \
+                                                          ⫽ Equiv_id_nat {B} {λ b. fAB (fBA b)} eBAB (eBAB b)] \
+                                                      [h3 : ap fAB (ap fBA (eBAB b)) = ap fAB (eABA (fBA b)) \
+                                                          ⫽ symm (trans h1 (trans_2_cancel h2))] \
+                                                      ap_ap_inv (IsEquiv_intro fAB fBA (IsInv_intro (IsQuasiInv_intro eABA eBAB) efAB)) h3"],
                     },
                     DefInit {
                         sym: "IsHalfAdjoint_trans : Π {A B C : U}. Π {fAB : A → B}. Π {fBA : B → A}. Π {fBC : B → C}. Π {fCB : C → B}. Π {eAB : IsQuasiInv fAB fBA}. Π {eBC : IsQuasiInv fBC fCB}. IsHalfAdjoint eAB → IsHalfAdjoint eBC → IsHalfAdjoint (IsQuasiInv_trans eAB eBC)",
@@ -661,8 +691,10 @@ pub fn get_mltt() -> MetaLogic {
                     // For a similar reason, we want to reduce application to `refl`, `symm`, and
                     // `trans` generically. As a consequence, we need to restrict other reductions
                     // to `Equiv_to_Eq`, except where we expect the result to be definitionally
-                    // equal. (At some point, we should check whether the restrictions are really
-                    // necessary in all cases.)
+                    // equal.
+                    // (At some point, we should check whether the restrictions are really necessary
+                    // in all cases. And if they are completely unnecessary, we could merge `Eq` and
+                    // `Equiv` again.)
                     "∀ {A B : U}. ∀ f : A → B. ∀ {a b : A}. ∀ e : Equiv a b. ap f (Equiv_to_Eq e) :≡ ap' f (Equiv_to_Eq e)",
                     "∀ {A B : U}. ∀ f : A → B. ∀ a : A. ap f (refl a) :≡ refl (f a)",
                     "∀ {A B : U}. ∀ f : A → B. ∀ {a b : A}. ∀ e : a = b. ap f (symm e) :≡ symm (ap f e)",
@@ -713,10 +745,6 @@ pub fn get_mltt() -> MetaLogic {
                 ],
             },
             DefInit {
-                sym: "apd'' : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap' P e] f a'",
-                red: &["apd'' :≡ λ {A P}. λ f. λ {a a'}. λ e. sorry _"],
-            },
-            DefInit {
                 sym: "apd_eq : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. apd f e = apd' f e",
                 red: &["apd_eq :≡ sorry _"],
             },
@@ -733,8 +761,20 @@ pub fn get_mltt() -> MetaLogic {
                 red: &["subst_rl :≡ λ {A}. λ P. λ {a a'}. λ e. inv (ap P e)"],
             },
             DefInit {
+                sym: "ap_inv : Π {A B : U}. Π {f : A → B}. IsEquiv f → Π {a a' : A}. f a = f a' → a = a'",
+                red: &["ap_inv :≡ λ {A B f}. λ h. λ {a a'}. λ e. trans3 (symm (IsEquiv_leftInv h a)) (ap (IsEquiv_inv h) {f a} {f a'} e) (IsEquiv_leftInv h a')"],
+            },
+            DefInit {
+                sym: "ap_isequiv : Π {A B : U}. Π {f : A → B}. IsEquiv f → Π a a' : A. IsEquiv (ap f {a} {a'})",
+                red: &["ap_isequiv :≡ λ {A B f}. λ h a a'. IsEquiv_intro (ap f {a} {a'}) (ap_inv h {a} {a'}) (sorry _)"],
+            },
+            DefInit {
                 sym: "ap_ap : Π {A B : U}. Π f : A → B. Π {a a' : A}. Π {e e' : a = a'}. e = e' → ap f e = ap f e'",
                 red: &["ap_ap :≡ λ {A B}. λ f. λ {a a'}. ap (ap f {a} {a'})"],
+            },
+            DefInit {
+                sym: "ap_ap_inv : Π {A B : U}. Π {f : A → B}. IsEquiv f → Π {a a' : A}. Π {e e' : a = a'}. ap f e = ap f e' → e = e'",
+                red: &["ap_ap_inv :≡ λ {A B f}. λ h. λ {a a'}. ap_inv (ap_isequiv h a a')"],
             },
             DefInit {
                 sym: "ap_symm : Π {A : U}. Π {a b : A}. Π {e e' : a = b}. e = e' → symm e = symm e'",
