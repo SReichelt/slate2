@@ -458,11 +458,11 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "Equiv_U_inv_to : Π {A B : U}. Π e : Equiv A B. Π a : A. Equiv_U_inv e (Equiv_U_to e a) = a",
-                        red: &["Equiv_U_inv_to :≡ λ {A B}. λ e a. sorry _"],
+                        red: &["Equiv_U_inv_to :≡ λ {A B}. λ e. IsEquiv_leftInv (Sigma_snd e)"],
                     },
                     DefInit {
                         sym: "Equiv_U_to_inv : Π {A B : U}. Π e : Equiv A B. Π b : B. Equiv_U_to e (Equiv_U_inv e b) = b",
-                        red: &["Equiv_U_to_inv :≡ λ {A B}. λ e b. sorry _"],
+                        red: &["Equiv_U_to_inv :≡ λ {A B}. λ e. IsEquiv_rightInv (Sigma_snd e)"],
                     },
                     DefInit {
                         sym: "Equiv_Fun_nat : Π {A B : U}. Π {f g : A → B}. Π efg : Equiv f g. Π {a a' : A}. Π ea : a = a'. trans (efg a) (ap g ea) = trans (ap f ea) (efg a')",
