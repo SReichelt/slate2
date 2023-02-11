@@ -1,6 +1,7 @@
 use std::fmt;
 
 use slate_kernel_generic::{context::*, expr_parts::*};
+use smallvec::SmallVec;
 
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
@@ -75,6 +76,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             Expr::App(app) => {
                 let mut fun = &app.body;
                 let arg = &app.param;
+
                 if !arg.implicit && !self.context.options().print_all_implicit_args {
                     while let Expr::App(fun_app) = fun {
                         if fun_app.param.implicit {
@@ -84,24 +86,19 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                         }
                     }
                 }
-                if let Expr::Lambda(lambda) = fun {
-                    if parens_for_lambda {
-                        self.output.write_char('(')?;
-                    }
-                    self.print_let_binding(lambda, arg)?;
-                    if parens_for_lambda {
-                        self.output.write_char(')')?;
-                    }
-                } else {
-                    if parens_for_app {
-                        self.output.write_char('(')?;
-                    }
-                    self.print_expr_with_parens(fun, false, true, true, true, true)?;
-                    self.output.write_char(' ')?;
-                    self.print_arg(arg, true)?;
-                    if parens_for_app {
-                        self.output.write_char(')')?;
-                    }
+
+                if self.try_print_let_binding(fun, arg, SmallVec::new(), parens_for_lambda)? {
+                    return Ok(());
+                }
+
+                if parens_for_app {
+                    self.output.write_char('(')?;
+                }
+                self.print_expr_with_parens(fun, false, true, true, true, true)?;
+                self.output.write_char(' ')?;
+                self.print_arg(arg, true)?;
+                if parens_for_app {
+                    self.output.write_char(')')?;
                 }
             }
             Expr::Lambda(lambda) => {
@@ -138,24 +135,89 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 output: self.output,
                 context: body_ctx,
             };
-            body_printing_ctx.print_expr_with_parens(&lambda.body, false, false, false, true, false)
+            body_printing_ctx.print_expr(&lambda.body)
         })
     }
 
-    fn print_let_binding(&mut self, lambda: &LambdaExpr, arg: &Arg) -> fmt::Result {
-        self.output.write_char('[')?;
-        self.print_param(&lambda.param)?;
-        self.output.write_str(" ⫽ ")?;
-        self.print_arg(arg, false)?;
-        self.output.write_char(']')?;
-        self.output.write_char(' ')?;
-        self.context.with_local(&lambda.param, |body_ctx| {
-            let mut body_printing_ctx = PrintingContext {
+    /// If the expression is a multi-lambda abstraction applied to the corresponding number of
+    /// arguments, print it as a let-binding followed by the body.
+    fn try_print_let_binding<'a>(
+        &mut self,
+        fun: &'a Expr,
+        arg: &'a Arg,
+        mut outer_args: SmallVec<[&'a Arg; INLINE_PARAMS]>,
+        parens_for_lambda: bool,
+    ) -> Result<bool, fmt::Error> {
+        outer_args.push(arg);
+
+        // Check for a nested let-binding.
+        if let Expr::App(app) = fun {
+            self.try_print_let_binding(&app.body, &app.param, outer_args, parens_for_lambda)
+        } else {
+            // Not nested further. Now check if we have the appropriate number of lambda
+            // abstractions inside, collecting their parameters, and print it if we do.
+            self.try_print_let_binding_inner(fun, SmallVec::new(), &outer_args, parens_for_lambda)
+        }
+    }
+
+    fn try_print_let_binding_inner<'a>(
+        &mut self,
+        body: &'a Expr,
+        mut params: SmallVec<[&'a Param; INLINE_PARAMS]>,
+        args: &SmallVec<[&Arg; INLINE_PARAMS]>,
+        parens_for_lambda: bool,
+    ) -> Result<bool, fmt::Error> {
+        if params.len() == args.len() {
+            if parens_for_lambda {
+                self.output.write_char('(')?;
+            }
+            self.output.write_char('[')?;
+            self.print_let_binding_inner(body, SmallVec::new(), &params, args)?;
+            if parens_for_lambda {
+                self.output.write_char(')')?;
+            }
+            return Ok(true);
+        } else if let Expr::Lambda(lambda) = body {
+            params.push(&lambda.param);
+            return self.try_print_let_binding_inner(&lambda.body, params, args, parens_for_lambda);
+        }
+
+        Ok(false)
+    }
+
+    fn print_let_binding_inner(
+        &mut self,
+        body: &Expr,
+        mut outer_params: SmallVec<[Param; INLINE_PARAMS]>,
+        params: &[&Param],
+        args: &[&Arg],
+    ) -> fmt::Result {
+        let (param, params_rest) = params.split_first().unwrap();
+        self.context.with_locals(&outer_params, |param_ctx| {
+            let mut param_printing_ctx = PrintingContext {
                 output: self.output,
-                context: body_ctx,
+                context: param_ctx,
             };
-            body_printing_ctx.print_expr(&lambda.body)
-        })
+            param_printing_ctx.print_param(param)
+        })?;
+        self.output.write_str(" ⫽ ")?;
+        let (arg, args_rest) = args.split_last().unwrap();
+        self.print_arg(arg, false)?;
+        outer_params.push((*param).clone());
+        if params_rest.is_empty() {
+            self.output.write_char(']')?;
+            self.output.write_char(' ')?;
+            self.context.with_locals(&outer_params, |body_ctx| {
+                let mut body_printing_ctx = PrintingContext {
+                    output: self.output,
+                    context: body_ctx,
+                };
+                body_printing_ctx.print_expr(&body)
+            })
+        } else {
+            self.output.write_str("; ")?;
+            self.print_let_binding_inner(body, outer_params, params_rest, args_rest)
+        }
     }
 
     fn print_param(&mut self, param: &Param) -> fmt::Result {

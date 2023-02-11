@@ -115,18 +115,16 @@ impl ParsingContext<'_, '_, '_> {
             self.input.read_char(')')?;
             Ok(Some(expr))
         } else if self.input.try_read_char('[') {
-            let param = self.parse_param()?;
-            self.input.read_char('⫽')?;
-            let arg = self.parse_delimited_arg()?;
+            let (params, args) = self.parse_let_binding()?;
             self.input.read_char(']')?;
-            let body = self.context.with_local(&param, |body_ctx| {
+            let body = self.context.with_locals(&params, |body_ctx| {
                 let mut body_parsing_ctx = ParsingContext {
                     input: self.input,
                     context: body_ctx,
                 };
                 body_parsing_ctx.parse_expr()
             })?;
-            Ok(Some(Expr::let_binding(param, arg, body)))
+            Ok(Some(Expr::let_binding(params, args, body)))
         } else if self.input.try_read_char('λ') {
             let (params, body) = self.parse_lambda()?;
             Ok(Some(Expr::multi_lambda(params, body)))
@@ -304,6 +302,32 @@ impl ParsingContext<'_, '_, '_> {
                 .get_dep_type(domain, prop, kind, ctx)
         } else {
             Ok(body)
+        }
+    }
+
+    pub fn parse_let_binding(
+        &mut self,
+    ) -> Result<(
+        SmallVec<[Param; INLINE_PARAMS]>,
+        SmallVec<[Arg; INLINE_PARAMS]>,
+    )> {
+        let mut params = SmallVec::new();
+        let mut args = SmallVec::new();
+        loop {
+            let new_param = self.context.with_locals(&params, |new_param_ctx| {
+                let mut new_params_parsing_ctx = ParsingContext {
+                    input: self.input,
+                    context: new_param_ctx,
+                };
+                new_params_parsing_ctx.parse_param()
+            })?;
+            params.push(new_param);
+            self.input.read_char('⫽')?;
+            args.push(self.parse_delimited_arg()?);
+            self.input.skip_whitespace();
+            if !self.input.try_read_char(';') {
+                return Ok((params, args));
+            }
         }
     }
 

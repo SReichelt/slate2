@@ -158,7 +158,7 @@ impl PlaceholderFiller {
                         if let Ok(true) = expected_type.reduce(type_str_ctx, -1) {
                             let reduced_type_str = expected_type.print(type_str_ctx);
                             if reduced_type_str != type_str {
-                                return Err(anyhow!("unfilled placeholder of type «{type_str}» (reduced: «{reduced_type_str}»)"));
+                                return Err(anyhow!("unfilled placeholder of type «{type_str}»\n(reduced: «{reduced_type_str}»)"));
                             }
                         }
                         Err(anyhow!("unfilled placeholder of type «{type_str}»"))

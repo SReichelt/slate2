@@ -3,5 +3,8 @@
     "editor.rulers": [
         100
     ],
-    "rust-analyzer.imports.granularity.enforce": true
+    "rust-analyzer.imports.granularity.enforce": true,
+    "editor.unicodeHighlight.allowedCharacters": {
+        "×": true
+    }
 }

@@ -91,8 +91,12 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    pub fn let_binding(param: Param, arg: Arg, body: Expr) -> Self {
-        Expr::app(Expr::lambda(param, body), arg)
+    pub fn let_binding(
+        params: SmallVec<[Param; INLINE_PARAMS]>,
+        args: SmallVec<[Arg; INLINE_PARAMS]>,
+        body: Expr,
+    ) -> Self {
+        Expr::multi_app(Expr::multi_lambda(params, body), args)
     }
 
     pub fn is_small(&self) -> bool {
