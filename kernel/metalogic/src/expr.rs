@@ -191,7 +191,8 @@ impl Expr {
 
     fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
         if let Some((const_idx, app_len)) = self.get_const_app_info() {
-            for rule in &ctx.constants()[const_idx as usize].reduction_rules {
+            let constant = &ctx.constants()[const_idx as usize];
+            for rule in &constant.reduction_rules {
                 if rule.body.source_app_len == app_len {
                     if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
                         let mut expr = rule.body.target.clone();
@@ -980,6 +981,17 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Param {
             &target.type_expr,
             target_subctx,
         )
+    }
+}
+
+impl CanPrint for Param {
+    fn print(&self, ctx: &MetaLogicContext) -> String {
+        let mut result = String::new();
+        PrintingContext::print(&mut result, ctx, |printing_context| {
+            printing_context.print_param(&self)
+        })
+        .unwrap();
+        result
     }
 }
 

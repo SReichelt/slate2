@@ -4,7 +4,8 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result};
+use log::{trace, warn};
 use rayon::prelude::*;
 use symbol_table::{Symbol, SymbolTable};
 
@@ -107,6 +108,9 @@ impl MetaLogic {
         metalogic.root_ctx_options.reduce_with_reduction_rules = true;
         metalogic.root_ctx_options.reduce_with_combinators = true;
         metalogic.root_ctx_options.print_all_implicit_args = false;
+
+        metalogic.reduce_reduction_rule_args()?;
+
         Ok(metalogic)
     }
 
@@ -146,23 +150,27 @@ impl MetaLogic {
             .par_iter()
             .flat_map(|constant| {
                 let mut errors = Vec::new();
+                let name = self.get_display_name(constant);
 
-                if let Err(error) = visitor.param(&constant.param, &root_ctx).with_prefix(|| {
-                    let name = self.get_display_name(constant);
-                    visitor.get_constant_error_prefix(name)
+                trace_start(&visitor.get_constant_title(name));
+                if let Err(error) = visitor.constant(&constant, &root_ctx).with_prefix(|| {
+                    let param_str = constant.param.print(&root_ctx);
+                    visitor.get_constant_error_prefix(name, &param_str)
                 }) {
                     errors.push(error);
                 }
+                trace_end(&visitor.get_constant_title(name));
 
+                trace_start(&visitor.get_rules_title(name));
                 for rule in &constant.reduction_rules {
                     if let Err(error) = visitor.reduction_rule(rule, &root_ctx).with_prefix(|| {
-                        let name = self.get_display_name(constant);
                         let rule_str = rule.print(&root_ctx);
                         visitor.get_rule_error_prefix(name, &rule_str)
                     }) {
                         errors.push(error);
                     }
                 }
+                trace_end(&visitor.get_rules_title(name));
 
                 errors
             })
@@ -182,20 +190,22 @@ impl MetaLogic {
         // Manipulate all types first, then all reduction rules in a second step, as manipulation
         // relies on accurate types.
         self.constants = self.manipulate_constants(|constant, root_ctx, errors| {
-            if let Err(error) = manipulator
-                .param(&mut constant.param, &root_ctx)
-                .with_prefix(|| {
-                    let name = self.get_display_name(constant);
-                    manipulator.get_constant_error_prefix(name)
-                })
-            {
+            let name = self.get_display_name(constant);
+
+            trace_start(&manipulator.get_constant_title(name));
+            if let Err(error) = manipulator.constant(constant, &root_ctx).with_prefix(|| {
+                let param_str = constant.param.print(&root_ctx);
+                manipulator.get_constant_error_prefix(name, &param_str)
+            }) {
                 errors.push(error);
             }
+            trace_end(&manipulator.get_constant_title(name));
         })?;
 
         self.constants = self.manipulate_constants(|constant, root_ctx, errors| {
             let name = self.get_display_name(constant);
 
+            trace_start(&manipulator.get_rules_title(name));
             for rule in &mut constant.reduction_rules {
                 if let Err(error) = manipulator.reduction_rule(rule, &root_ctx).with_prefix(|| {
                     let rule_str = rule.print(&root_ctx);
@@ -204,6 +214,7 @@ impl MetaLogic {
                     errors.push(error);
                 }
             }
+            trace_end(&manipulator.get_rules_title(name));
         })?;
 
         Ok(())
@@ -251,6 +262,7 @@ impl MetaLogic {
             .has_unfilled_placeholders
             .load(Ordering::Relaxed)
         {
+            warn!("second placeholder filling pass needed");
             placeholder_filler.force = true;
             placeholder_filler
                 .has_unfilled_placeholders
@@ -261,57 +273,16 @@ impl MetaLogic {
         Ok(())
     }
 
+    fn reduce_reduction_rule_args(&mut self) -> Result<()> {
+        self.manipulate_exprs(&mut ReductionRuleArgReducer)
+    }
+
     pub fn check_type_of_types(&self) -> Result<()> {
         self.visit_exprs(&DeepExprVisitor(ParamTypeChecker))
     }
 
     pub fn check_reduction_rule_types(&self) -> Result<()> {
-        let mut errors = Vec::new();
-        let root_ctx = self.get_root_context();
-
-        for constant in &self.constants {
-            for rule in &constant.reduction_rules {
-                if let Err(error) =
-                    self.check_reduction_rule_type(rule, &root_ctx)
-                        .with_prefix(|| {
-                            let name = self.get_display_name(constant);
-                            let rule_str = rule.print(&root_ctx);
-                            format!("error in reduction rule for «{name}» («{rule_str}»)")
-                        })
-                {
-                    errors.push(error);
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.combine())
-        }
-    }
-
-    fn check_reduction_rule_type(
-        &self,
-        rule: &ReductionRule,
-        ctx: &MetaLogicContext,
-    ) -> Result<()> {
-        ctx.with_locals(&rule.params, |rule_ctx| {
-            //let mut clone = rule.body.source.clone();
-            //clone.convert_to_combinators(rule_ctx, -1)?;
-            //dbg!(clone.print(rule_ctx));
-            let source_type = rule.body.source.get_type(rule_ctx)?;
-            let target_type = rule.body.target.get_type(rule_ctx)?;
-            if source_type.compare(&target_type, rule_ctx)? {
-                Ok(())
-            } else {
-                let source_str = rule.body.source.print(rule_ctx);
-                let source_type_str = source_type.print(rule_ctx);
-                let target_str = rule.body.target.print(rule_ctx);
-                let target_type_str = target_type.print(rule_ctx);
-                Err(anyhow!("type conflict between «{source_str} : {source_type_str}»\nand «{target_str} : {target_type_str}»"))
-            }
-        })
+        self.visit_exprs(&ReductionRuleChecker)
     }
 }
 
@@ -663,6 +634,21 @@ pub trait LambdaHandler: Sync {
 }
 
 pub trait MetaLogicVisitorBase: Sync {
-    fn get_constant_error_prefix(&self, name: &str) -> String;
+    fn get_constant_title(&self, name: &str) -> Option<String>;
+    fn get_rules_title(&self, name: &str) -> Option<String>;
+
+    fn get_constant_error_prefix(&self, name: &str, param_str: &str) -> String;
     fn get_rule_error_prefix(&self, name: &str, rule_str: &str) -> String;
+}
+
+fn trace_start(title: &Option<String>) {
+    if let Some(title_str) = title {
+        trace!("{title_str}: start");
+    }
+}
+
+fn trace_end(title: &Option<String>) {
+    if let Some(title_str) = title {
+        trace!("{title_str}: end");
+    }
 }

@@ -228,6 +228,10 @@ pub trait NamedObject<Name> {
 pub trait NamedVarAccessor<Name, ParamType: NamedObject<Name>>: VarAccessor<ParamType> {
     fn get_var_index(&self, name: Name, occurrence: usize) -> Option<VarIndex>;
     fn get_name_occurrence(&self, idx: VarIndex, param: &ParamType) -> usize;
+
+    fn has_var(&self, name: Name) -> bool {
+        self.get_var_index(name, 0).is_some()
+    }
 }
 
 impl<Name: Copy + PartialEq, ParamType: NamedObject<Name>, T: VarAccessor<ParamType> + ?Sized>

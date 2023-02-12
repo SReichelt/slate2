@@ -7,4 +7,6 @@ edition = "2021"
 slate-kernel-generic = { path = "../../generic" }
 slate-kernel-metalogic = { path = ".." }
 anyhow = "1.0.69"
+env_logger = "0.10.0"
 smallvec = { version = "1.10", features = ["union", "const_generics"] }
+mimalloc = { version = "0.1.34", default-features = false }

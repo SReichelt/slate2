@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use slate_kernel_generic::{context::*, expr_parts::*};
 use smallvec::SmallVec;
@@ -127,10 +127,35 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         }
     }
 
+    fn disambiguate_param<'a>(&self, param: &'a Param) -> Cow<'a, Param> {
+        if let Some(mut name) = param.name {
+            if self.context.has_var(name) {
+                let mut name_str = self.context.get_display_name(param).to_owned();
+                if let Expr::Var(Var(type_idx)) = param.type_expr {
+                    let type_param = self.context.get_var(type_idx);
+                    let type_name = self.context.get_display_name(type_param);
+                    if type_name.len() == 1 && type_name.starts_with(|c| c >= 'A' && c <= 'H') {
+                        name_str = type_name.to_lowercase();
+                        name = self.context.intern_name(&name_str);
+                    }
+                }
+                while self.context.has_var(name) {
+                    name_str += "\'";
+                    name = self.context.intern_name(&name_str);
+                }
+                let mut new_param = param.clone();
+                new_param.name = Some(name);
+                return Cow::Owned(new_param);
+            }
+        }
+        Cow::Borrowed(param)
+    }
+
     fn print_lambda(&mut self, lambda: &LambdaExpr) -> fmt::Result {
-        self.print_param(&lambda.param)?;
+        let param = self.disambiguate_param(&lambda.param);
+        self.print_param(&param)?;
         self.output.write_str(". ")?;
-        self.context.with_local(&lambda.param, |body_ctx| {
+        self.context.with_local(&param, |body_ctx| {
             let mut body_printing_ctx = PrintingContext {
                 output: self.output,
                 context: body_ctx,
@@ -192,18 +217,19 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         params: &[&Param],
         args: &[&Arg],
     ) -> fmt::Result {
-        let (param, params_rest) = params.split_first().unwrap();
+        let (orig_param, params_rest) = params.split_first().unwrap();
+        let param = self.disambiguate_param(orig_param);
         self.context.with_locals(&outer_params, |param_ctx| {
             let mut param_printing_ctx = PrintingContext {
                 output: self.output,
                 context: param_ctx,
             };
-            param_printing_ctx.print_param(param)
+            param_printing_ctx.print_param(&param)
         })?;
         self.output.write_str(" ⫽ ")?;
         let (arg, args_rest) = args.split_last().unwrap();
         self.print_arg(arg, false)?;
-        outer_params.push((*param).clone());
+        outer_params.push(param.into_owned());
         if params_rest.is_empty() {
             self.output.write_char(']')?;
             self.output.write_char(' ')?;
@@ -220,7 +246,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         }
     }
 
-    fn print_param(&mut self, param: &Param) -> fmt::Result {
+    pub fn print_param(&mut self, param: &Param) -> fmt::Result {
         if param.implicit {
             self.output.write_char('{')?;
         }
