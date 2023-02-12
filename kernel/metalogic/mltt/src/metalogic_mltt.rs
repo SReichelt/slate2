@@ -269,8 +269,10 @@ pub fn get_mltt() -> MetaLogic {
                         // `refl` but not if the first argument is.
                         sym: "trans' : Π {A : U}. Π {a b c : A}. a = b → b = c → a = c",
                         red: &[
-                            // Generic reduction.
+                            // Generic reductions.
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans' e (refl b) :≡ e",
+                            "∀ {A : U}. ∀ {a b c d : A}. ∀ e : a = b. ∀ f : b = c. ∀ g : c = d. \
+                             trans' (trans e f) g :≡ trans e (trans' f g)",
                             // Definitions for each type.
                             "trans' {Unit} :≡ λ {_ _ _}. λ _ _. unit",
                             "∀ {A : U}. ∀ P : A → U. trans' {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans' (efg a) (egh a)",
@@ -354,8 +356,23 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["to_inv :≡ λ {A B}. λ e. inv_to (symm e)"],
                     },
                     DefInit {
+                        sym: "Eq_U_eq_by_to : Π {A B : U}. Π e e' : A = B. to e = to e' → e = e'",
+                        red: &["Eq_U_eq_by_to :≡ λ {A B}. λ e e' h. λ a : A. λ b : B. \
+                                                                    trans3 (Eq_rel_to e a b) \
+                                                                           (ap (λ f : A → B. f a = b) h) \
+                                                                           (symm (Eq_rel_to e' a b))"],
+                    },
+                    DefInit {
                         sym: "trans_eq : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans e f = trans' e f",
-                        red: &["trans_eq :≡ λ {A a b c}. λ e f. sorry _"],
+                        red: &[
+                            "trans_eq {U} :≡ λ {A B C}. λ e f. Eq_U_eq_by_to (trans e f) \
+                                                                             (trans' e f) \
+                                                                             (refl (comp (to f) (to e)))",
+                            "trans_eq {Unit} :≡ λ {_ _ _}. λ _ _. unit",
+                            "∀ {A : U}. ∀ P : A → U. trans_eq {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans_eq (efg a) (egh a)",
+                            "∀ {A : U}. ∀ P : A → U. trans_eq {Sigma P} :≡ sorry _",
+                            "∀ A B : U. trans_eq {A = B} :≡ λ {e f g}. trans_eq {A → B → U} {Eq_rel e} {Eq_rel f} {Eq_rel g}",
+                        ],
                     },
                     DefInit {
                         sym: "trans_refl : Π {A : U}. Π {a b : A}. Π e : a = b. trans e (refl b) = e",
@@ -365,58 +382,57 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "trans'_refl : Π {A : U}. Π {a b : A}. Π e : a = b. trans' (refl a) e = e",
                         red: &["trans'_refl :≡ λ {A a b}. λ e. symm (trans_eq (refl a) e)"],
                     },
-                    // TODO: Check which of these we prefer, and which have a simple implementation.
                     DefInit {
                         sym: "trans_1_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans (symm e) e = refl b",
-                        red: &["trans_1_symm :≡ λ {A a b}. λ e. ap_symm (trans_2'_symm (symm e))"],
+                        red: &["trans_1_symm :≡ λ {A a b}. λ e. trans_2_symm (symm e)"],
                     },
                     DefInit {
                         sym: "trans'_1_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans' (symm e) e = refl b",
-                        red: &["trans'_1_symm :≡ λ {A a b}. λ e. ap_symm (trans_2_symm (symm e))"],
+                        red: &["trans'_1_symm :≡ λ {A a b}. λ e. trans'_2_symm (symm e)"],
                     },
                     DefInit {
                         sym: "trans_2_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans e (symm e) = refl a",
-                        red: &["trans_2_symm :≡ λ {A a b}. λ e. sorry _"],
+                        red: &[
+                            "trans_2_symm {U} :≡ λ {A B}. λ e. Eq_U_eq_by_to (trans e (symm e)) \
+                                                                             (refl A) \
+                                                                             (sorry _)", // TODO: matching bug?
+                            "trans_2_symm {Unit} :≡ λ {_ _}. λ _. unit",
+                            "∀ {A : U}. ∀ P : A → U. trans_2_symm {Pi P} :≡ λ {f g}. λ e. λ a : A. trans_2_symm (e a)",
+                            "∀ {A : U}. ∀ P : A → U. trans_2_symm {Sigma P} :≡ λ {p q}. λ e. sorry _",
+                            "∀ A B : U. trans_2_symm {A = B} :≡ λ {e f}. trans_2_symm {A → B → U} {Eq_rel e} {Eq_rel f}",
+                        ],
                     },
                     DefInit {
-                        sym: "trans_2'_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans' e (symm e) = refl a",
-                        red: &["trans_2'_symm :≡ λ {A a b}. λ e. sorry _"],
+                        sym: "trans'_2_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans' e (symm e) = refl a",
+                        red: &["trans'_2_symm :≡ λ {A a b}. λ e. ap_symm (trans_2_symm e)"],
                     },
                     DefInit {
                         sym: "trans3 : Π {A : U}. Π {a b c d : A}. a = b → b = c → c = d → a = d",
                         red: &["trans3 :≡ λ {A a b c d}. λ e f g. trans e (trans' f g)"],
                     },
                     DefInit {
-                        sym: "trans3' : Π {A : U}. Π {a b c d : A}. a = b → b = c → c = d → a = d",
-                        red: &["trans3' :≡ λ {A a b c d}. λ e f g. trans' (trans e f) g"],
-                    },
-                    DefInit {
-                        sym: "assoc : Π {A : U}. Π {a b c d : A}. Π e : a = b. Π f : b = c. Π g : c = d. trans3 e f g = trans3' e f g",
-                        red: &["assoc :≡ λ {A a b c d}. λ e f g. sorry _"],
-                    },
-                    DefInit {
                         sym: "trans3_1_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans3 (symm e) e f = f",
-                        red: &["trans3_1_symm :≡ λ {A a b c}. λ e f. trans3 (assoc (symm e) e f) (ap_trans'_1 (trans_1_symm e) f) (trans'_refl f)"],
+                        red: &["trans3_1_symm :≡ λ {A a b c}. λ e f. trans' (ap_trans'_1 (trans_1_symm e) f) (trans'_refl f)"],
                     },
                     DefInit {
                         sym: "trans3_2_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : a = c. trans3 e (symm e) f = f",
-                        red: &["trans3_2_symm :≡ λ {A a b c}. λ e f. sorry _"],
+                        red: &["trans3_2_symm :≡ λ {A a b c}. λ e f. trans3_1_symm (symm e) f"],
                     },
                     DefInit {
                         sym: "trans'_1_cancel : Π {A : U}. Π {a b c : A}. Π {e : a = b}. Π {f f' : b = c}. trans' e f = trans' e f' → f = f'",
-                        red: &["trans'_1_cancel :≡ λ {A a b c e f f'}. λ h. sorry _"], // trans3 (symm (trans3_1_symm e f)) (ap_trans'_2 (symm e) h) (trans3_1_symm e f')
+                        red: &["trans'_1_cancel :≡ λ {A a b c e f f'}. λ h. trans3 (symm (trans3_1_symm e f)) (ap_trans_2 (symm e) h) (trans3_1_symm e f')"],
                     },
                     DefInit {
-                        sym: "trans3'_2_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : c = b. trans3' e (symm f) f = e",
-                        red: &["trans3'_2_symm :≡ λ {A a b c}. λ e f. sorry _"],
+                        sym: "trans3_2_symm' : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : c = b. trans3 e (symm f) f = e",
+                        red: &["trans3_2_symm' :≡ λ {A a b c}. λ e f. trans3_3_symm e (symm f)"],
                     },
                     DefInit {
-                        sym: "trans3'_3_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans3' e f (symm f) = e",
-                        red: &["trans3'_3_symm :≡ λ {A a b c}. λ e f. sorry _"], // trans (symm (assoc e f (symm f))) (ap_trans'_2 e (trans_2_symm f))
+                        sym: "trans3_3_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans3 e f (symm f) = e",
+                        red: &["trans3_3_symm :≡ λ {A a b c}. λ e f. trans' (ap_trans_2 e (trans'_2_symm f)) (trans_refl e)"],
                     },
                     DefInit {
                         sym: "trans_2_cancel : Π {A : U}. Π {a b c : A}. Π {e e' : a = b}. Π {f : b = c}. trans e f = trans e' f → e = e'",
-                        red: &["trans_2_cancel :≡ λ {A a b c e e' f}. λ h. sorry _"], // trans3 (symm (trans3'_3_symm e f)) (ap_trans_1 h (symm f)) (trans3'_3_symm e' f)
+                        red: &["trans_2_cancel :≡ λ {A a b c e e' f}. λ h. trans3 (symm (trans3_3_symm e f)) (ap_trans'_1 h (symm f)) (trans3_3_symm e' f)"],
                     },
                     DefInit {
                         sym: "symm_is_Eq : Π {A : U}. Π a b : A. (a = b) = (b = a)",
