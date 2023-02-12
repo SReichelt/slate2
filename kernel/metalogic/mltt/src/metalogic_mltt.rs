@@ -101,12 +101,26 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["comp :≡ λ {A B C}. λ g f a. g (f a)"],
                     },
                     DefInit {
-                        sym: "swapd : Π {A B : U}. Π {Q : A → B → U}. Pi2 Q → (Π b : B. Π a : A. Q a b)",
-                        red: &["swapd :≡ λ {A B Q}. λ g b a. g a b"],
+                        sym: "swapd : Π {A B : U}. Π {Q : A → B → U}. Pi2 Q → Pi2 (Rel_swap Q)",
+                        red: &["swapd :≡ λ {A B Q}. λ g. λ b : B. λ a : A. g a b"],
                     },
                     DefInit {
                         sym: "swap : Π {A B C : U}. (A → B → C) → (B → A → C)",
                         red: &["swap :≡ λ {A B C}. λ g b a. g a b"],
+                    },
+                    DefInit {
+                        sym: "swapd_rel : Π A B : U. Π Q : A → B → U. Pi2 Q → Pi2 (Rel_swap Q) → U",
+                        red: &["swapd_rel :≡ λ A B Q. λ f f'. Π a : A. Π b : B. f a b ={Q a b} f' b a"],
+                    },
+                    DefInit {
+                        sym: "swapd_is_Eq : Π A B : U. Π Q : A → B → U. Pi2 Q = Pi2 (Rel_swap Q)",
+                        red: &["swapd_is_Eq :≡ λ A B Q. Eq_U_intro' (swapd_rel A B Q) \
+                                                                    (IsFunRel_swapd_rel A B Q) \
+                                                                    (IsFunRel_swap_swapd_rel A B Q)"],
+                    },
+                    DefInit {
+                        sym: "swap_is_Eq : Π A B C : U. (A → B → C) = (B → A → C)",
+                        red: &["swap_is_Eq :≡ λ A B C. swapd_is_Eq A B (const A (const B C))"],
                     },
                 ],
             },
@@ -201,13 +215,19 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[],
                     },
                     DefInit {
-                        sym: "Eq_U_intro' : Π {A B : U}. Π R : A → B → U. \
-                                            Π to : A → B. R = Fun_to_Rel to → \
-                                            Π inv : B → A. Rel_swap R = Fun_to_Rel inv → \
+                        sym: "Eq_U_intro' : Π {A B : U}. Π R : A → B → U. IsFunRel R → IsFunRel (Rel_swap R) → \
                                             A = B",
-                        red: &["Eq_U_intro' :≡ λ {A B}. λ R to hTo inv hInv. \
-                                               Eq_U_intro R (IsBijRel_intro (IsFunRel_intro R to hTo) \
-                                                                            (IsFunRel_intro (Rel_swap R) inv hInv))"],
+                        red: &["Eq_U_intro' :≡ λ {A B}. λ R hTo hInv. \
+                                               Eq_U_intro R (IsBijRel_intro hTo hInv)"],
+                    },
+                    DefInit {
+                        sym: "Eq_U_intro'' : Π {A B : U}. Π R : A → B → U. \
+                                             Π to : A → B. R = Fun_to_Rel to → \
+                                             Π inv : B → A. Rel_swap R = Fun_to_Rel inv → \
+                                             A = B",
+                        red: &["Eq_U_intro'' :≡ λ {A B}. λ R to hTo inv hInv. \
+                                                Eq_U_intro' R (IsFunRel_intro R to hTo) \
+                                                              (IsFunRel_intro (Rel_swap R) inv hInv)"],
                     },
                     // We treat `refl`, `symm`, and `trans` as (additional) constructors, which we
                     // only reduce in cases where that is compatible with all other operations.
@@ -310,8 +330,12 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["Eq_rel_to :≡ λ {A B}. λ e. IsFunRel_eq (IsBijRel_to_isFunRel (Eq_isBijRel e))"],
                     },
                     DefInit {
+                        sym: "Eq_rel_inv' : Π {A B : U}. Π e : A = B. Π a : A. Π b : B. ((Eq_rel e) a b) = (inv e b = a)",
+                        red: &["Eq_rel_inv' :≡ λ {A B}. λ e a b. (IsFunRel_eq (IsBijRel_inv_isFunRel (Eq_isBijRel e))) b a"],
+                    },
+                    DefInit {
                         sym: "Eq_rel_inv : Π {A B : U}. Π e : A = B. Π a : A. Π b : B. ((Eq_rel e) a b) = (a = inv e b)",
-                        red: &["Eq_rel_inv :≡ λ {A B}. λ e. sorry _"], // TODO: swapping arguments of a function is an equivalence
+                        red: &["Eq_rel_inv :≡ λ {A B}. λ e a b. trans' (Eq_rel_inv' e a b) (symm_is_Eq (inv e b) a)"],
                     },
                     DefInit {
                         sym: "Eq_to_inv_eq : Π {A B : U}. Π e : A = B. Π a : A. Π b : B. (to e a = b) = (a = inv e b)",
@@ -384,29 +408,29 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "symm_is_Eq : Π {A : U}. Π a b : A. (a = b) = (b = a)",
                         red: &["symm_is_Eq :≡ λ {A}. λ a b. \
-                                              Eq_U_intro' (λ e : a = b. λ f : b = a. e = symm f) \
-                                                          (symm {A} {a} {b}) \
-                                                          (sorry _) \
-                                                          (symm {A} {b} {a}) \
-                                                          (sorry _)"],
+                                              Eq_U_intro'' (λ e : a = b. λ f : b = a. e = symm f) \
+                                                           (symm {A} {a} {b}) \
+                                                           (sorry _) \
+                                                           (symm {A} {b} {a}) \
+                                                           (sorry _)"],
                     },
                     DefInit {
                         sym: "trans_1_is_Eq : Π {A : U}. Π {a a' : A}. a = a' → Π b : A. (a = b) = (a' = b)",
                         red: &["trans_1_is_Eq :≡ λ {A}. λ {a a'}. λ e. λ b. \
-                                                 Eq_U_intro' (λ f : a = b. λ f' : a' = b. f = trans e f') \
-                                                             (λ f : a = b. trans' (symm e) f) \
-                                                             (sorry _) \
-                                                             (λ f : a' = b. trans' e f) \
-                                                             (sorry _)"],
+                                                 Eq_U_intro'' (λ f : a = b. λ f' : a' = b. f = trans e f') \
+                                                              (λ f : a = b. trans' (symm e) f) \
+                                                              (sorry _) \
+                                                              (λ f : a' = b. trans' e f) \
+                                                              (sorry _)"],
                     },
                     DefInit {
                         sym: "trans_2_is_Eq : Π {A : U}. Π a : A. Π {b b' : A}. b = b' → (a = b) = (a = b')",
                         red: &["trans_2_is_Eq :≡ λ {A}. λ a. λ {b b'}. λ e. \
-                                                 Eq_U_intro' (λ f : a = b. λ f' : a = b'. trans f e = f') \
-                                                             (λ f : a = b. trans f e) \
-                                                             (sorry _) \
-                                                             (λ f : a = b'. trans f (symm e)) \
-                                                             (sorry _)"],
+                                                 Eq_U_intro'' (λ f : a = b. λ f' : a = b'. trans f e = f') \
+                                                              (λ f : a = b. trans f e) \
+                                                              (sorry _) \
+                                                              (λ f : a = b'. trans f (symm e)) \
+                                                              (sorry _)"],
                     },
                     DefInit {
                         sym: "Eq_Fun_nat : Π {A B : U}. Π {f g : A → B}. Π efg : f = g. Π {a a' : A}. Π ea : a = a'. \
@@ -615,6 +639,16 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[],
                     },
                     DefInit {
+                        sym: "IsFunRel_swapd_rel : Π A B : U. Π Q : A → B → U. \
+                                                   IsFunRel (swapd_rel A B Q)",
+                        red: &[],
+                    },
+                    DefInit {
+                        sym: "IsFunRel_swap_swapd_rel : Π A B : U. Π Q : A → B → U. \
+                                                        IsFunRel (Rel_swap (swapd_rel A B Q))",
+                        red: &[],
+                    },
+                    DefInit {
                         sym: "IsFunRel_to : Π {A B : U}. Π {R : A → B → U}. IsFunRel R → A → B",
                         red: &[
                             "∀ {A B : U}. ∀ R : A → B → U. ∀ f : A → B. ∀ hf : R = Fun_to_Rel f. \
@@ -625,6 +659,10 @@ pub fn get_mltt() -> MetaLogic {
                              IsFunRel_to (IsFunRel_comp_1 h f) :≡ comp (IsFunRel_to h) f",
                             "∀ {A B C : U}. ∀ e : B = C. ∀ {R : A → B → U}. ∀ h : IsFunRel R. \
                              IsFunRel_to (IsFunRel_comp_2 e h) :≡ comp (to e) (IsFunRel_to h)",
+                            "∀ A B : U. ∀ Q : A → B → U. \
+                             IsFunRel_to (IsFunRel_swapd_rel A B Q) :≡ swapd {A} {B} {Q}",
+                            "∀ A B : U. ∀ Q : A → B → U. \
+                             IsFunRel_to (IsFunRel_swap_swapd_rel A B Q) :≡ swapd {B} {A} {Rel_swap Q}",
                         ],
                     },
                     DefInit {
@@ -641,6 +679,15 @@ pub fn get_mltt() -> MetaLogic {
                              IsFunRel_eq (IsFunRel_comp_2 e h) :≡ λ a : A. λ c : C. \
                                                                   trans {U} {R a (inv e c)} {IsFunRel_to h a = inv e c} {to e (IsFunRel_to h a) = c} \
                                                                         ((IsFunRel_eq h) a (inv e c)) (symm (Eq_to_inv_eq e (IsFunRel_to h a) c))",
+                            "∀ A B : U. ∀ Q : A → B → U. \
+                             IsFunRel_eq (IsFunRel_swapd_rel A B Q) :≡ λ f : Pi2 Q. λ f' : Pi2 (Rel_swap Q). \
+                                                                       swapd_is_Eq A B (λ a b. f a b ={Q a b} f' b a)",
+                            "∀ A B : U. ∀ Q : A → B → U. \
+                             IsFunRel_eq (IsFunRel_swap_swapd_rel A B Q) :≡ λ f' : Pi2 (Rel_swap Q). λ f : Pi2 Q. \
+                                                                            apd (Pi2 {A} {B}) \
+                                                                                {λ a : A. λ b : B. f a b ={Q a b} f' b a} \
+                                                                                {λ a : A. λ b : B. f' b a ={Q a b} f a b} \
+                                                                                (λ a : A. λ b : B. symm_is_Eq {Q a b} (f a b) (f' b a))",
                         ],
                     },
                 ],
