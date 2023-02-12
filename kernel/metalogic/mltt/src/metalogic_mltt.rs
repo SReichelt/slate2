@@ -343,11 +343,15 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "inv_to : Π {A B : U}. Π e : A = B. Π a : A. inv e (to e a) = a",
-                        red: &["inv_to :≡ λ {A B}. λ e a. sorry _"],
+                        red: &["inv_to :≡ λ {A B}. λ e a. \
+                                          IsFunRel_unique (IsBijRel_inv_isFunRel (Eq_isBijRel e)) \
+                                                          (to e a) \
+                                                          a \
+                                                          (IsFunRel_inst (IsBijRel_to_isFunRel (Eq_isBijRel e)) a)"],
                     },
                     DefInit {
                         sym: "to_inv : Π {A B : U}. Π e : A = B. Π b : B. to e (inv e b) = b",
-                        red: &["to_inv :≡ λ {A B}. λ e. sorry _"],
+                        red: &["to_inv :≡ λ {A B}. λ e. inv_to (symm e)"],
                     },
                     DefInit {
                         sym: "trans_eq : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans e f = trans' e f",
@@ -361,6 +365,11 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "trans'_refl : Π {A : U}. Π {a b : A}. Π e : a = b. trans' (refl a) e = e",
                         red: &["trans'_refl :≡ λ {A a b}. λ e. symm (trans_eq (refl a) e)"],
                     },
+                    // TODO: Check which of these we prefer, and which have a simple implementation.
+                    DefInit {
+                        sym: "trans_1_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans (symm e) e = refl b",
+                        red: &["trans_1_symm :≡ λ {A a b}. λ e. ap_symm (trans_2'_symm (symm e))"],
+                    },
                     DefInit {
                         sym: "trans'_1_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans' (symm e) e = refl b",
                         red: &["trans'_1_symm :≡ λ {A a b}. λ e. ap_symm (trans_2_symm (symm e))"],
@@ -368,6 +377,10 @@ pub fn get_mltt() -> MetaLogic {
                     DefInit {
                         sym: "trans_2_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans e (symm e) = refl a",
                         red: &["trans_2_symm :≡ λ {A a b}. λ e. sorry _"],
+                    },
+                    DefInit {
+                        sym: "trans_2'_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans' e (symm e) = refl a",
+                        red: &["trans_2'_symm :≡ λ {A a b}. λ e. sorry _"],
                     },
                     DefInit {
                         sym: "trans3 : Π {A : U}. Π {a b c d : A}. a = b → b = c → c = d → a = d",
@@ -383,7 +396,7 @@ pub fn get_mltt() -> MetaLogic {
                     },
                     DefInit {
                         sym: "trans3_1_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. trans3 (symm e) e f = f",
-                        red: &["trans3_1_symm :≡ λ {A a b c}. λ e f. sorry _"], // trans (assoc (symm e) e f) (ap_trans_1 (trans'_1_symm e) f)
+                        red: &["trans3_1_symm :≡ λ {A a b c}. λ e f. trans3 (assoc (symm e) e f) (ap_trans'_1 (trans_1_symm e) f) (trans'_refl f)"],
                     },
                     DefInit {
                         sym: "trans3_2_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : a = c. trans3 e (symm e) f = f",
@@ -690,6 +703,47 @@ pub fn get_mltt() -> MetaLogic {
                                                                                 (λ a : A. λ b : B. symm_is_Eq {Q a b} (f a b) (f' b a))",
                         ],
                     },
+                    DefInit {
+                        sym: "IsFunRel_inst : Π {A B : U}. Π {R : A → B → U}. Π h : IsFunRel R. Π a : A. \
+                                              R a (IsFunRel_to h a)",
+                        red: &["IsFunRel_inst :≡ λ {A B R}. λ h a. \
+                                                 inv ((IsFunRel_eq h) a (IsFunRel_to h a)) \
+                                                     (refl (IsFunRel_to h a))"],
+                    },
+                    DefInit {
+                        sym: "IsFunRel_unique : Π {A B : U}. Π {R : A → B → U}. Π h : IsFunRel R. \
+                                                Π a : A. Π b : B. R a b → \
+                                                IsFunRel_to h a = b",
+                        red: &["IsFunRel_unique :≡ λ {A B R}. λ h a b. to ((IsFunRel_eq h) a b)"],
+                    },
+                    DefInit {
+                        // This shows that our version of equivalence is equivalent to the
+                        // "bijective relation" variant in the HoTT book.
+                        // TODO: The proof currently uses a strange reverse path induction. We
+                        // should reduce it to the underlying application of `apd` once it is done,
+                        // to see if it can be simplified that way.
+                        sym: "IsFunRel_inst_unique : Π {A B : U}. Π {R : A → B → U}. Π h : IsFunRel R. \
+                                                     Π a : A. Π b : B. Π hRab : R a b. \
+                                                     IsFunRel_inst h a =[ap (R a) (IsFunRel_unique h a b hRab)] hRab",
+                        red: &["IsFunRel_inst_unique :≡ λ {A B R}. λ h a b hRab. \
+                                                        [h1 : inv ((IsFunRel_eq h) a b) (IsFunRel_unique h a b hRab) = hRab \
+                                                            ⫽ inv_to {R a b} {IsFunRel_to h a = b} ((IsFunRel_eq h) a b) hRab] \
+                                                        [h2 : ap (R a) (trans (symm (IsFunRel_unique h a b hRab)) \
+                                                                       (IsFunRel_unique h a b hRab)) = \
+                                                              refl (R a b)
+                                                            ⫽ ap_ap (R a) (trans_1_symm (IsFunRel_unique h a b hRab))] \
+                                                        [h3 : inv ((IsFunRel_eq h) a b) (IsFunRel_unique h a b hRab) \
+                                                              =[ap (R a) (trans (symm (IsFunRel_unique h a b hRab)) \
+                                                                                (IsFunRel_unique h a b hRab))] \
+                                                              hRab \
+                                                            ⫽ inv (ap_DepEq h2 (inv ((IsFunRel_eq h) a b) (IsFunRel_unique h a b hRab)) hRab) h1] \
+                                                        substd_rl (λ b' : B. λ e : IsFunRel_to h a = b'. \
+                                                                   inv ((IsFunRel_eq h) a b') e \
+                                                                   =[ap (R a) (trans (symm e) (IsFunRel_unique h a b hRab))] \
+                                                                   hRab) \
+                                                                  (IsFunRel_unique h a b hRab) \
+                                                                  h3"],
+                    },
                 ],
             },
             TypeInit {
@@ -838,6 +892,14 @@ pub fn get_mltt() -> MetaLogic {
                 red: &["ap_trans_1 :≡ λ {A a b c e e'}. λ he f. (ap (trans {A} {a} {b} {c}) he) f"],
             },
             DefInit {
+                sym: "ap_trans'_1 : Π {A : U}. Π {a b c : A}. Π {e e' : a = b}. e = e' → Π f : b = c. trans' e f = trans' e' f",
+                red: &["ap_trans'_1 :≡ λ {A a b c e e'}. λ he f. (ap (trans' {A} {a} {b} {c}) he) f"],
+            },
+            DefInit {
+                sym: "ap_trans_2 : Π {A : U}. Π {a b c : A}. Π e : a = b. Π {f f' : b = c}. f = f' → trans e f = trans e f'",
+                red: &["ap_trans_2 :≡ λ {A a b c}. λ e. λ {f f'}. λ hf. ap (trans {A} {a} {b} {c} e) hf"],
+            },
+            DefInit {
                 sym: "ap_trans'_2 : Π {A : U}. Π {a b c : A}. Π e : a = b. Π {f f' : b = c}. f = f' → trans' e f = trans' e f'",
                 red: &["ap_trans'_2 :≡ λ {A a b c}. λ e. λ {f f'}. λ hf. ap (trans' {A} {a} {b} {c} e) hf"],
             },
@@ -857,6 +919,14 @@ pub fn get_mltt() -> MetaLogic {
             DefInit {
                 sym: "apj : Π {A : U}. Π {a a' : A}. Π P : (Π b : A. a = b → U). Π e : a = a'. P a (refl a) = P a' e",
                 red: &["apj :≡ λ {A a a'}. λ P e. sorry _"], // trans3 _ ((apd P e) e) _)
+            },
+            DefInit {
+                sym: "substd_lr : Π {A : U}. Π {a a' : A}. Π P : (Π b : A. a = b → U). Π e : a = a'. P a (refl a) → P a' e",
+                red: &["substd_lr :≡ λ {A a a'}. λ P e. to (apj P e)"],
+            },
+            DefInit {
+                sym: "substd_rl : Π {A : U}. Π {a a' : A}. Π P : (Π b : A. a = b → U). Π e : a = a'. P a' e → P a (refl a)",
+                red: &["substd_rl :≡ λ {A a a'}. λ P e. inv (apj P e)"],
             },
             DefInit {
                 sym: "sorry : Π A : U. A", // TODO: remove once everything is filled
