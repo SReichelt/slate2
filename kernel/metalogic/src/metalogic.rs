@@ -104,13 +104,11 @@ impl MetaLogic {
 
         metalogic.insert_implicit_args()?;
         metalogic.fill_placeholders()?;
+        metalogic.reduce_reduction_rule_args()?;
 
         metalogic.root_ctx_options.reduce_with_reduction_rules = true;
         metalogic.root_ctx_options.reduce_with_combinators = true;
         metalogic.root_ctx_options.print_all_implicit_args = false;
-
-        metalogic.reduce_reduction_rule_args()?;
-
         Ok(metalogic)
     }
 
@@ -263,6 +261,7 @@ impl MetaLogic {
             .load(Ordering::Relaxed)
         {
             warn!("second placeholder filling pass needed");
+            self.reduce_reduction_rule_args()?;
             placeholder_filler.force = true;
             placeholder_filler
                 .has_unfilled_placeholders
@@ -274,7 +273,11 @@ impl MetaLogic {
     }
 
     fn reduce_reduction_rule_args(&mut self) -> Result<()> {
-        self.manipulate_exprs(&mut ReductionRuleArgReducer)
+        let orig_reduce_with_reduction_rules = self.root_ctx_options.reduce_with_reduction_rules;
+        self.root_ctx_options.reduce_with_reduction_rules = true;
+        let result = self.manipulate_exprs(&mut ReductionRuleArgReducer);
+        self.root_ctx_options.reduce_with_reduction_rules = orig_reduce_with_reduction_rules;
+        result
     }
 
     pub fn check_type_of_types(&self) -> Result<()> {
