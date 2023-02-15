@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt::Debug,
     sync::atomic::{AtomicBool, Ordering},
@@ -31,7 +32,7 @@ pub struct MetaLogic {
 }
 
 impl MetaLogic {
-    pub fn construct<F>(constants_init: &[DefInit], create_lambda_handler: F) -> Result<Self>
+    pub fn construct<F>(constants_init: &[Cow<DefInit>], create_lambda_handler: F) -> Result<Self>
     where
         F: FnOnce(&HashMap<&str, VarIndex>) -> Box<dyn LambdaHandler>,
     {
