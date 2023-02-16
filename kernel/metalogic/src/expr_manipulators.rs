@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
+use log::info;
 use smallvec::SmallVec;
 
 use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
@@ -176,8 +177,7 @@ impl PlaceholderFiller {
                 let initial_fun_type =
                     self.fill_arg_placeholders_in_fun(fun, arg, initial_arg_type, ctx)?;
 
-                let fun_type_result =
-                    self.fill_inner_placeholders(fun, initial_fun_type.clone(), ctx);
+                let fun_type_result = self.fill_inner_placeholders(fun, initial_fun_type, ctx);
                 // Report errors in arguments first, to better support the "underscore trick".
                 let (mut fun_type, fun_type_err) = match fun_type_result {
                     Ok(fun_type) => (fun_type, Ok(())),
@@ -213,6 +213,12 @@ impl PlaceholderFiller {
                 let expected_type_lambda =
                     self.get_fun_type_lambda(&mut expected_type, lambda.param.implicit, ctx)?;
                 if lambda.param.type_expr.is_empty() {
+                    if self.force {
+                        info!(
+                            "unfilled parameter type in last pass: {}",
+                            lambda.param.print(ctx)
+                        );
+                    }
                     lambda.param.type_expr = expected_type_lambda.param.type_expr;
                 }
                 self.param(&mut lambda.param, ctx)?;
@@ -245,6 +251,10 @@ impl PlaceholderFiller {
             self.analyze_app(expr, ctx, &mut params, &mut args, &mut has_unfilled_args)?;
 
         if has_unfilled_args {
+            if self.force {
+                info!("unfilled arguments in last pass: {}", expr.print(ctx));
+            }
+
             if ctx.with_locals(&params, |ctx_with_params| {
                 //dbg!(
                 //    "apply",

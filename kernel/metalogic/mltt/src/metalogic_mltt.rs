@@ -41,7 +41,7 @@ pub fn get_mltt() -> MetaLogic {
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Empty_isProp : IsProp Empty",
-                        red: &["Empty_isProp :≡ λ a. Empty_elim (Π b : Empty. a = b) a"],
+                        red: &["Empty_isProp :≡ λ a : Empty. Empty_elim (Π b : Empty. a = b) a"],
                     }),
                 ],
             },
@@ -57,7 +57,7 @@ pub fn get_mltt() -> MetaLogic {
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Unit_isProp : IsProp Unit",
-                        red: &["Unit_isProp :≡ λ _ _. unit"],
+                        red: &["Unit_isProp :≡ λ _ _ : Unit. unit"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Unit_isContr : IsContr Unit",
