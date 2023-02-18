@@ -157,17 +157,30 @@ impl ParsingContext<'_, '_, '_> {
     fn parse_delimited_arg(&mut self) -> Result<Arg> {
         self.input.skip_whitespace();
         if self.input.try_read_char('{') {
-            let expr = self.parse_expr()?;
-            self.input.read_char('}')?;
-            Ok(Arg {
-                expr,
-                implicit: true,
-            })
+            if self.input.try_read_char('{') {
+                let expr = self.parse_expr()?;
+                self.input.read_char('}')?;
+                self.input.read_char('}')?;
+                Ok(Arg {
+                    expr,
+                    implicit: true,
+                    match_all: true,
+                })
+            } else {
+                let expr = self.parse_expr()?;
+                self.input.read_char('}')?;
+                Ok(Arg {
+                    expr,
+                    implicit: true,
+                    match_all: false,
+                })
+            }
         } else {
             let expr = self.parse_expr()?;
             Ok(Arg {
                 expr,
                 implicit: false,
+                match_all: false,
             })
         }
     }
@@ -175,16 +188,29 @@ impl ParsingContext<'_, '_, '_> {
     fn try_parse_arg(&mut self) -> Result<Option<Arg>> {
         self.input.skip_whitespace();
         if self.input.try_read_char('{') {
-            let expr = self.parse_expr()?;
-            self.input.read_char('}')?;
-            Ok(Some(Arg {
-                expr,
-                implicit: true,
-            }))
+            if self.input.try_read_char('{') {
+                let expr = self.parse_expr()?;
+                self.input.read_char('}')?;
+                self.input.read_char('}')?;
+                Ok(Some(Arg {
+                    expr,
+                    implicit: true,
+                    match_all: true,
+                }))
+            } else {
+                let expr = self.parse_expr()?;
+                self.input.read_char('}')?;
+                Ok(Some(Arg {
+                    expr,
+                    implicit: true,
+                    match_all: false,
+                }))
+            }
         } else if let Some(expr) = self.try_parse_one()? {
             Ok(Some(Arg {
                 expr,
                 implicit: false,
+                match_all: false,
             }))
         } else {
             Ok(None)

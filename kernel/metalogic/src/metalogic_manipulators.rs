@@ -130,10 +130,10 @@ impl MetaLogicManipulator for ReductionRuleArgReducer {
             self.reduction_body(&mut rule.body, body)
         })?;
 
-        let mut idx = 0;
+        let mut idx = -(rule.params.len() as VarIndex);
         for param in &rule.params {
-            let next_idx = idx - 1;
-            if !rule.body.source.has_refs_impl(next_idx, idx) {
+            let next_idx = idx + 1;
+            if !rule.body.source.has_refs_impl(idx, next_idx) {
                 let name = ctx.get_display_name(param);
                 return Err(anyhow!("match expression does not reference «{name}»"));
             }

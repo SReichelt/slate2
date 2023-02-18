@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Error, Result};
 use log::{trace, warn};
 use rayon::prelude::*;
+use smallvec::SmallVec;
 use symbol_table::{Symbol, SymbolTable};
 
 use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
@@ -262,7 +263,6 @@ impl MetaLogic {
             .load(Ordering::Relaxed)
         {
             warn!("second placeholder filling pass needed");
-            self.reduce_reduction_rule_args()?;
             placeholder_filler.force = true;
             placeholder_filler
                 .has_unfilled_placeholders
@@ -287,6 +287,68 @@ impl MetaLogic {
 
     pub fn check_reduction_rule_types(&self) -> Result<()> {
         self.visit_exprs(&ReductionRuleChecker)
+    }
+
+    pub fn parse_expr(&self, s: &str) -> Result<Expr> {
+        let root_ctx = self.get_root_context();
+
+        let mut expr = Expr::parse(s, &root_ctx)?;
+
+        let arg_inserter = ImplicitArgInserter {
+            max_depth: self.lambda_handler.implicit_arg_max_depth(),
+        };
+        arg_inserter.expr(&mut expr, &root_ctx)?;
+
+        self.adapt_user_expr(&mut expr)?;
+
+        Ok(expr)
+    }
+
+    pub fn add_definition(&mut self, name: &str, mut value: Expr) -> Result<&Param> {
+        let value_type = self.adapt_user_expr(&mut value)?;
+
+        let idx = self.constants.len();
+        self.constants.push(Constant {
+            param: Param {
+                name: Some(self.symbol_table.intern(name)),
+                type_expr: value_type,
+                implicit: false,
+            },
+            reduction_rules: vec![ReductionRule {
+                params: SmallVec::new(),
+                body: ReductionBody {
+                    source: Expr::var(idx as VarIndex),
+                    target: value,
+                    source_app_len: 0,
+                },
+            }],
+        });
+
+        let reduction_rule_checker = ReductionRuleChecker;
+        if let Err(err) =
+            reduction_rule_checker.constant(&self.constants[idx], &self.get_root_context())
+        {
+            self.constants.pop();
+            return Err(err);
+        }
+
+        Ok(&self.constants[idx].param)
+    }
+
+    fn adapt_user_expr(&self, expr: &mut Expr) -> Result<Expr> {
+        let root_ctx = self.get_root_context();
+
+        let placeholder_filler = PlaceholderFiller {
+            max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
+            force: true,
+            has_unfilled_placeholders: AtomicBool::new(false),
+        };
+        let expr_type = placeholder_filler.fill_placeholders(expr, Expr::Placeholder, &root_ctx)?;
+
+        let param_type_checker = DeepExprVisitor(ParamTypeChecker);
+        param_type_checker.expr(expr, &root_ctx)?;
+
+        Ok(expr_type)
     }
 }
 

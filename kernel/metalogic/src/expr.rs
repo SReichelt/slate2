@@ -37,6 +37,7 @@ impl Expr {
             Arg {
                 expr: arg,
                 implicit: false,
+                match_all: false,
             },
         )
     }
@@ -999,6 +1000,7 @@ impl CanPrint for Param {
 pub struct Arg {
     pub expr: Expr,
     pub implicit: bool,
+    pub match_all: bool,
 }
 
 impl PartialEq for Arg {
@@ -1029,6 +1031,7 @@ impl ContextObject for Arg {
         Arg {
             expr: self.expr.shifted_impl(start, end, shift),
             implicit: self.implicit,
+            match_all: self.match_all,
         }
     }
 
@@ -1062,6 +1065,9 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Arg {
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
+        if self.match_all || target.match_all {
+            return Ok(true);
+        }
         self.expr
             .shift_and_compare_impl(ctx, orig_ctx, &target.expr, target_subctx)
     }
@@ -1076,6 +1082,9 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
+        if self.match_all || target.match_all {
+            return Ok(true);
+        }
         self.expr.substitute_and_shift_and_compare_impl(
             ctx,
             args,

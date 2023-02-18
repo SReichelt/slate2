@@ -73,6 +73,7 @@ impl ImplicitArgInserter {
                             Arg {
                                 expr: Expr::Placeholder,
                                 implicit: true,
+                                match_all: false,
                             },
                         );
                         fun_type = lambda.apply(arg.clone(), ctx);
@@ -83,7 +84,7 @@ impl ImplicitArgInserter {
                         return Ok(lambda.apply(arg.clone(), ctx));
                     }
                 }
-                return Ok(Expr::Placeholder);
+                Ok(Expr::Placeholder)
             }
             Expr::Lambda(lambda) => {
                 self.param(&mut lambda.param, ctx)?;
@@ -174,8 +175,13 @@ impl PlaceholderFiller {
                 let arg = &mut app.param;
 
                 let initial_arg_type = self.try_fill_placeholders(&mut arg.expr, ctx)?;
-                let initial_fun_type =
-                    self.fill_arg_placeholders_in_fun(fun, arg, initial_arg_type, ctx)?;
+                let initial_fun_type = self.fill_arg_placeholders_in_fun(
+                    fun,
+                    arg,
+                    expected_type,
+                    initial_arg_type,
+                    ctx,
+                )?;
 
                 let fun_type_result = self.fill_inner_placeholders(fun, initial_fun_type, ctx);
                 // Report errors in arguments first, to better support the "underscore trick".
@@ -283,12 +289,19 @@ impl PlaceholderFiller {
         &self,
         fun: &mut Expr,
         arg: &mut Arg,
+        expected_type: Expr,
         initial_arg_type: Expr,
         ctx: &MetaLogicContext,
     ) -> Result<Expr> {
         let has_arg_type = !initial_arg_type.is_empty();
-        let mut initial_fun_type =
-            Self::get_expected_fun_type(initial_arg_type, arg.implicit, ctx)?;
+        let mut initial_fun_type = Self::get_expected_fun_type(
+            fun,
+            arg,
+            &expected_type,
+            initial_arg_type,
+            arg.implicit,
+            ctx,
+        )?;
 
         if has_arg_type {
             if !self.fill_arg_placeholders(fun, &mut initial_fun_type, ctx)? {
@@ -316,6 +329,7 @@ impl PlaceholderFiller {
                         let result = sub_filler.fill_arg_placeholders_in_fun(
                             fun,
                             arg,
+                            expected_type,
                             initial_arg_type,
                             ctx,
                         );
@@ -334,20 +348,33 @@ impl PlaceholderFiller {
     }
 
     fn get_expected_fun_type(
+        fun: &Expr,
+        arg: &Arg,
+        expected_type: &Expr,
         initial_arg_type: Expr,
         implicit: bool,
         ctx: &MetaLogicContext,
     ) -> Result<Expr> {
-        let expected_param = Param {
+        let min_ctx = ctx.as_minimal();
+        let mut expected_param = Param {
             name: None,
             type_expr: initial_arg_type.clone(),
             implicit,
         };
+        let expected_body_type = if let Expr::Lambda(lambda) = fun {
+            expected_param.name = lambda.param.name;
+            // Replace all occurrences of `arg` in `expected_type` with the new variable.
+            // This may or may not be what we want in a particular case, but heuristics are OK when
+            // auto-filling placeholders.
+            Self::heuristically_unapply(expected_type, arg, &expected_param, &min_ctx)?
+        } else {
+            Expr::Placeholder
+        };
         ctx.lambda_handler().get_dep_type(
             initial_arg_type,
-            Expr::lambda(expected_param, Expr::Placeholder),
+            Expr::lambda(expected_param, expected_body_type),
             DependentTypeCtorKind::Pi,
-            ctx.as_minimal(),
+            min_ctx,
         )
     }
 
@@ -389,7 +416,9 @@ impl PlaceholderFiller {
     fn apply_args(mut expr: &mut Expr, mut args: SmallVec<[Expr; INLINE_PARAMS]>) {
         while let Expr::App(app) = expr {
             if let Some(value) = args.pop() {
-                app.param.expr = value;
+                if app.param.expr.is_empty() {
+                    app.param.expr = value;
+                }
                 expr = &mut app.body;
             } else {
                 break;
@@ -431,6 +460,64 @@ impl PlaceholderFiller {
                 },
                 body: Expr::Placeholder,
             })
+        }
+    }
+
+    fn heuristically_unapply(
+        result_expr: &Expr,
+        arg: &Arg,
+        _param: &Param,
+        ctx: &impl ComparisonContext,
+    ) -> Result<Expr> {
+        Self::replaced_or_shifted(result_expr, ctx, &arg.expr, ctx)
+    }
+
+    fn replaced_or_shifted<Ctx: ComparisonContext>(
+        expr: &Expr,
+        expr_ctx: &Ctx,
+        match_expr: &Expr,
+        match_superctx: &Ctx,
+    ) -> Result<Expr> {
+        let shift_end = match_superctx.subcontext_shift(expr_ctx);
+
+        if match_expr.shift_and_compare(match_superctx, expr, expr_ctx)? {
+            return Ok(Expr::var(shift_end - 1));
+        }
+
+        match expr {
+            Expr::Placeholder => Ok(Expr::Placeholder),
+            Expr::Var(var) => Ok(Expr::Var(var.shifted_impl(
+                expr_ctx.locals_start(),
+                shift_end,
+                -1,
+            ))),
+            Expr::App(app) => Ok(Expr::App(Box::new(App {
+                param: Arg {
+                    expr: Self::replaced_or_shifted(
+                        &app.param.expr,
+                        expr_ctx,
+                        match_expr,
+                        match_superctx,
+                    )?,
+                    ..app.param
+                },
+                body: Self::replaced_or_shifted(&app.body, expr_ctx, match_expr, match_superctx)?,
+            }))),
+            Expr::Lambda(lambda) => {
+                let param = Param {
+                    type_expr: Self::replaced_or_shifted(
+                        &lambda.param.type_expr,
+                        expr_ctx,
+                        match_expr,
+                        match_superctx,
+                    )?,
+                    ..lambda.param
+                };
+                let body = expr_ctx.with_local(&param, |body_ctx| {
+                    Self::replaced_or_shifted(&lambda.body, body_ctx, match_expr, match_superctx)
+                })?;
+                Ok(Expr::Lambda(Box::new(Lambda { param, body })))
+            }
         }
     }
 }

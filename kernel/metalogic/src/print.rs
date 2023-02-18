@@ -119,7 +119,13 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
     fn print_arg(&mut self, arg: &Arg, parens: bool) -> fmt::Result {
         if arg.implicit {
             self.output.write_char('{')?;
+            if arg.match_all {
+                self.output.write_char('{')?;
+            }
             self.print_expr(&arg.expr)?;
+            if arg.match_all {
+                self.output.write_char('}')?;
+            }
             self.output.write_char('}')?;
             Ok(())
         } else {
