@@ -105,10 +105,12 @@ impl MetaLogic {
         }
 
         metalogic.insert_implicit_args()?;
+
+        metalogic.root_ctx_options.reduce_with_reduction_rules = true;
+
         metalogic.fill_placeholders()?;
         metalogic.reduce_reduction_rule_args()?;
 
-        metalogic.root_ctx_options.reduce_with_reduction_rules = true;
         metalogic.root_ctx_options.reduce_with_combinators = true;
         metalogic.root_ctx_options.print_all_implicit_args = false;
         Ok(metalogic)
@@ -128,10 +130,14 @@ impl MetaLogic {
         })
     }
 
-    pub fn get_constant(&self, name: &str) -> Option<&Param> {
+    pub fn get_constants(&self) -> &[Constant] {
+        &self.constants
+    }
+
+    pub fn get_constant(&self, name: &str) -> Option<&Constant> {
         let symbol = self.symbol_table.intern(name);
         let var_idx = self.constants.get_var_index(symbol, 0)?;
-        Some(&self.constants.get_var(var_idx).param)
+        Some(&self.constants.get_var(var_idx))
     }
 
     pub fn get_display_name(&self, obj: &impl NamedObject<Symbol>) -> &str {
@@ -464,6 +470,7 @@ pub trait LambdaHandler: Sync {
         ctx: MinimalContext,
     ) -> Result<Expr>;
 
+    // TODO: semi-generic types no longer needed
     fn get_semi_generic_indep_type(
         &self,
         mut domain: Expr,
