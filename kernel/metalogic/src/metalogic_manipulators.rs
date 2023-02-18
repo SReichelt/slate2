@@ -146,7 +146,7 @@ impl MetaLogicManipulator for ReductionRuleArgReducer {
     fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
         let mut fun = &mut body.source;
         while let Expr::App(app) = fun {
-            app.param.expr.reduce(ctx, -1)?;
+            app.param.expr.reduce_all(ctx)?;
             fun = &mut app.body;
         }
         Ok(())

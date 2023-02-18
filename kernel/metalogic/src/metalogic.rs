@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 use symbol_table::{Symbol, SymbolTable};
 
-use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_generic::{context::*, expr_parts::*};
 use slate_kernel_util::{anyhow::*, parser::*};
 
 use crate::{
@@ -470,59 +470,29 @@ pub trait LambdaHandler: Sync {
         ctx: MinimalContext,
     ) -> Result<Expr>;
 
-    // TODO: semi-generic types no longer needed
-    fn get_semi_generic_indep_type(
-        &self,
-        mut domain: Expr,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Expr)> {
-        let codomain_param = Param {
-            name: None,
-            type_expr: self.get_universe_type()?,
-            implicit: false,
-        };
-        let indep_type = ctx.with_local(&codomain_param, |subctx| {
-            domain.shift_to_subcontext(&ctx, subctx);
-            let codomain_var = Expr::var(-1);
-            self.get_indep_type(domain, codomain_var, kind, *subctx)
-        })?;
-        Ok((codomain_param, indep_type))
-    }
-
-    fn get_semi_generic_dep_type(
-        &self,
-        mut domain: Expr,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Expr)> {
-        let prop_param = Param {
-            name: None,
-            type_expr: self.get_prop_type(domain.clone(), ctx)?,
-            implicit: false,
-        };
-        let dep_type = ctx.with_local(&prop_param, |subctx| {
-            domain.shift_to_subcontext(&ctx, subctx);
-            let prop_var = Expr::var(-1);
-            self.get_dep_type(domain, prop_var, kind, *subctx)
-        })?;
-        Ok((prop_param, dep_type))
-    }
-
     fn get_generic_indep_type(
         &self,
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
     ) -> Result<(Param, Param, Expr)> {
-        let domain_param = Param {
-            name: None,
-            type_expr: self.get_universe_type()?,
-            implicit: false,
-        };
-        let (codomain_param, indep_type) = ctx.with_local(&domain_param, |subctx| {
-            let domain_var = Expr::var(-1);
-            self.get_semi_generic_indep_type(domain_var, kind, *subctx)
+        let params = [
+            Param {
+                name: None,
+                type_expr: self.get_universe_type()?,
+                implicit: false,
+            },
+            Param {
+                name: None,
+                type_expr: self.get_universe_type()?,
+                implicit: false,
+            },
+        ];
+        let indep_type = ctx.with_locals(&params, |subctx| {
+            let domain_var = Expr::var(-2);
+            let codomain_var = Expr::var(-1);
+            self.get_indep_type(domain_var, codomain_var, kind, *subctx)
         })?;
+        let [domain_param, codomain_param] = params;
         Ok((domain_param, codomain_param, indep_type))
     }
 
@@ -531,15 +501,24 @@ pub trait LambdaHandler: Sync {
         kind: DependentTypeCtorKind,
         ctx: MinimalContext,
     ) -> Result<(Param, Param, Expr)> {
-        let domain_param = Param {
-            name: None,
-            type_expr: self.get_universe_type()?,
-            implicit: true,
-        };
-        let (prop_param, dep_type) = ctx.with_local(&domain_param, |subctx| {
-            let domain_var = Expr::var(-1);
-            self.get_semi_generic_dep_type(domain_var, kind, *subctx)
+        let params = [
+            Param {
+                name: None,
+                type_expr: self.get_universe_type()?,
+                implicit: true,
+            },
+            Param {
+                name: None,
+                type_expr: Expr::var(-1),
+                implicit: false,
+            },
+        ];
+        let dep_type = ctx.with_locals(&params, |subctx| {
+            let domain_var = Expr::var(-2);
+            let prop_var = Expr::var(-1);
+            self.get_dep_type(domain_var, prop_var, kind, *subctx)
         })?;
+        let [domain_param, prop_param] = params;
         Ok((domain_param, prop_param, dep_type))
     }
 
@@ -573,85 +552,35 @@ pub trait LambdaHandler: Sync {
         ctx: MinimalContext,
     ) -> Result<Expr>;
 
-    fn get_semi_generic_indep_eq_type(
-        &self,
-        mut domain: Expr,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr)> {
-        let params = [
-            Param {
-                name: None,
-                type_expr: domain.clone(),
-                implicit: false,
-            },
-            Param {
-                name: None,
-                type_expr: domain.shifted_impl(ctx.locals_start(), 0, -1),
-                implicit: false,
-            },
-        ];
-        let eq_type = ctx.with_locals(&params, |subctx| {
-            domain.shift_to_subcontext(&ctx, subctx);
-            let left_var = Expr::var(-2);
-            let right_var = Expr::var(-1);
-            self.get_indep_eq_type(domain, left_var, right_var, *subctx)
-        })?;
-        let [left_param, right_param] = params;
-        Ok((left_param, right_param, eq_type))
-    }
-
     fn get_generic_indep_eq_type(
         &self,
         ctx: MinimalContext,
     ) -> Result<(Param, Param, Param, Expr)> {
-        let domain_param = Param {
-            name: None,
-            type_expr: self.get_universe_type()?,
-            implicit: true,
-        };
-        let (left_param, right_param, eq_type) = ctx.with_local(&domain_param, |subctx| {
-            let domain_var = Expr::var(-1);
-            self.get_semi_generic_indep_eq_type(domain_var, *subctx)
-        })?;
-        Ok((domain_param, left_param, right_param, eq_type))
-    }
-
-    fn get_semi_generic_dep_eq_type(
-        &self,
-        mut left_domain: Expr,
-        mut right_domain: Expr,
-        mut domain_eq: Expr,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr)> {
         let params = [
             Param {
                 name: None,
-                type_expr: left_domain.clone(),
+                type_expr: self.get_universe_type()?,
+                implicit: true,
+            },
+            Param {
+                name: None,
+                type_expr: Expr::var(-1),
                 implicit: false,
             },
             Param {
                 name: None,
-                type_expr: right_domain.shifted_impl(ctx.locals_start(), 0, -1),
+                type_expr: Expr::var(-2),
                 implicit: false,
             },
         ];
         let eq_type = ctx.with_locals(&params, |subctx| {
-            left_domain.shift_to_subcontext(&ctx, subctx);
-            right_domain.shift_to_subcontext(&ctx, subctx);
-            domain_eq.shift_to_subcontext(&ctx, subctx);
+            let domain_var = Expr::var(-3);
             let left_var = Expr::var(-2);
             let right_var = Expr::var(-1);
-            self.get_dep_eq_type(
-                left_domain,
-                right_domain,
-                domain_eq,
-                left_var,
-                right_var,
-                *subctx,
-            )
+            self.get_indep_eq_type(domain_var, left_var, right_var, *subctx)
         })?;
-        let [left_param, right_param] = params;
-        Ok((left_param, right_param, eq_type))
+        let [domain_param, left_param, right_param] = params;
+        Ok((domain_param, left_param, right_param, eq_type))
     }
 
     fn get_generic_dep_eq_type(
@@ -679,19 +608,34 @@ pub trait LambdaHandler: Sync {
                 )?,
                 implicit: false,
             },
+            Param {
+                name: None,
+                type_expr: Expr::var(-3),
+                implicit: false,
+            },
+            Param {
+                name: None,
+                type_expr: Expr::var(-3),
+                implicit: false,
+            },
         ];
-        let (left_param, right_param, eq_type) = ctx.with_locals(&params, |subctx| {
-            let left_domain_var = Expr::var(-3);
-            let right_domain_var = Expr::var(-2);
-            let domain_eq_var = Expr::var(-1);
-            self.get_semi_generic_dep_eq_type(
+        let eq_type = ctx.with_locals(&params, |subctx| {
+            let left_domain_var = Expr::var(-5);
+            let right_domain_var = Expr::var(-4);
+            let domain_eq_var = Expr::var(-3);
+            let left_var = Expr::var(-2);
+            let right_var = Expr::var(-1);
+            self.get_dep_eq_type(
                 left_domain_var,
                 right_domain_var,
                 domain_eq_var,
+                left_var,
+                right_var,
                 *subctx,
             )
         })?;
-        let [left_domain_param, right_domain_param, domain_eq_param] = params;
+        let [left_domain_param, right_domain_param, domain_eq_param, left_param, right_param] =
+            params;
         Ok((
             left_domain_param,
             right_domain_param,

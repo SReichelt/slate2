@@ -109,7 +109,20 @@ impl Expr {
         }
     }
 
-    pub fn reduce(&mut self, ctx: &MetaLogicContext, mut max_depth: i32) -> Result<bool> {
+    pub fn reduce_all(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
+        self.reduce(ctx, false, -1)
+    }
+
+    pub fn reduce(
+        &mut self,
+        ctx: &MetaLogicContext,
+        head_only: bool,
+        mut max_depth: i32,
+    ) -> Result<bool> {
+        if self.is_empty() {
+            return Ok(false);
+        }
+
         if max_depth >= 0 {
             if max_depth == 0 {
                 return Ok(false);
@@ -119,6 +132,38 @@ impl Expr {
 
         let apply_reduction_rules = ctx.options().reduce_with_reduction_rules;
 
+        let mut reduced = false;
+
+        loop {
+            reduced |= self.reduce_step_impl(ctx, head_only, max_depth)?;
+
+            if apply_reduction_rules {
+                if let Some(applied_rule) = self.apply_reduction_rule(ctx)? {
+                    if applied_rule {
+                        reduced = true;
+                        continue;
+                    }
+                } else if head_only {
+                    // Indeterminate result with not-fully-reduced arguments: reduce them and retry.
+                    if self.reduce_step_impl(ctx, false, max_depth)? {
+                        reduced = true;
+                        if let Some(true) = self.apply_reduction_rule(ctx)? {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            return Ok(reduced);
+        }
+    }
+
+    fn reduce_step_impl(
+        &mut self,
+        ctx: &MetaLogicContext,
+        head_only: bool,
+        max_depth: i32,
+    ) -> Result<bool> {
         let mut reduced = false;
 
         loop {
@@ -137,16 +182,18 @@ impl Expr {
                         continue;
                     }
 
-                    reduced |= app.body.reduce(ctx, max_depth)?;
+                    reduced |= app.body.reduce(ctx, head_only, max_depth)?;
 
-                    // Reduction of function may have made beta reduction possible.
-                    if let Some(beta_reduced) = app.beta_reduce_if_trivial(ctx) {
-                        *self = beta_reduced;
-                        reduced = true;
-                        continue;
+                    if !head_only {
+                        // Reduction of function may have made beta reduction possible.
+                        if let Some(beta_reduced) = app.beta_reduce_if_trivial(ctx) {
+                            *self = beta_reduced;
+                            reduced = true;
+                            continue;
+                        }
+
+                        reduced |= app.param.expr.reduce(ctx, head_only, max_depth)?;
                     }
-
-                    reduced |= app.param.expr.reduce(ctx, max_depth)?;
 
                     // Now always beta-reduce if possible.
                     if let Some(beta_reduced) = app.beta_reduce(ctx) {
@@ -156,60 +203,67 @@ impl Expr {
                     }
                 }
                 Expr::Lambda(lambda) => {
-                    reduced |= lambda.param.type_expr.reduce(ctx, max_depth)?;
+                    if !head_only {
+                        reduced |= lambda.param.type_expr.reduce(ctx, head_only, max_depth)?;
 
-                    if let Some(eta_reduced) =
-                        ctx.with_local(&lambda.param, |body_ctx| -> Result<Option<Expr>> {
-                            reduced |= lambda.body.reduce(&body_ctx, max_depth)?;
+                        if let Some(eta_reduced) =
+                            ctx.with_local(&lambda.param, |body_ctx| -> Result<Option<Expr>> {
+                                reduced |= lambda.body.reduce(&body_ctx, head_only, max_depth)?;
 
-                            // Eta-reduction isn't really important, but it makes printed
-                            // expressions easier to read.
-                            if let Expr::App(app) = &mut lambda.body {
-                                if let Some(eta_reduced) = app.eta_reduce(ctx, body_ctx) {
-                                    return Ok(Some(eta_reduced));
+                                // Eta-reduction isn't really important, but it makes printed
+                                // expressions easier to read.
+                                if let Expr::App(app) = &mut lambda.body {
+                                    if let Some(eta_reduced) = app.eta_reduce(ctx, body_ctx) {
+                                        return Ok(Some(eta_reduced));
+                                    }
                                 }
-                            }
 
-                            Ok(None)
-                        })?
-                    {
-                        *self = eta_reduced;
-                        reduced = true;
-                        continue;
+                                Ok(None)
+                            })?
+                        {
+                            *self = eta_reduced;
+                            reduced = true;
+                            continue;
+                        }
                     }
                 }
             }
 
-            if apply_reduction_rules && self.apply_reduction_rule(ctx)? {
-                reduced = true;
-            } else {
-                break;
-            }
+            return Ok(reduced);
         }
-
-        Ok(reduced)
     }
 
-    fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
+    fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<Option<bool>> {
+        let mut result = Some(false);
+
         if let Some((const_idx, app_len)) = self.get_const_app_info() {
             let constant = &ctx.constants()[const_idx as usize];
             for rule in &constant.reduction_rules {
                 if rule.body.source_app_len == app_len {
-                    if let Some(mut args) = self.match_expr(ctx, &rule.params, &rule.body.source)? {
+                    if app_len == 0 && rule.params.is_empty() {
+                        // Fast path for definitions without actual matching.
+                        *self = rule.body.target.clone();
+                        return Ok(Some(true));
+                    } else if let Some(mut args) =
+                        self.match_expr(ctx, &rule.params, &rule.body.source)?
+                    {
                         let mut expr = rule.body.target.clone();
                         expr.substitute(&mut args, true, ctx);
                         *self = expr;
-                        return Ok(true);
+                        return Ok(Some(true));
+                    } else {
+                        // Indeterminate result: matching could succeed if arguments are reduced.
+                        result = None;
                     }
                 }
             }
         }
 
-        Ok(false)
+        Ok(result)
     }
 
     pub fn apply_one_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
-        if self.apply_reduction_rule(ctx)? {
+        if let Some(true) = self.apply_reduction_rule(ctx)? {
             Ok(true)
         } else if let Expr::App(app) = self {
             if app.body.apply_one_reduction_rule(ctx)? {
@@ -243,6 +297,20 @@ impl Expr {
             }
         }
         None
+    }
+
+    pub fn is_defeq(&mut self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<bool> {
+        if self.compare(expr, ctx)? {
+            return Ok(true);
+        }
+
+        // We could first reduce just enough to be sure that the two expressions cannot possibly be
+        // definitionally equal, but `is_defeq` is really only meant to be called for verification,
+        // not for matching.
+        self.reduce_all(ctx)?;
+        expr.reduce_all(ctx)?;
+
+        self.compare(expr, ctx)
     }
 
     pub fn convert_to_combinators(
@@ -340,19 +408,6 @@ impl Expr {
         )
     }
 
-    fn get_prop_from_fun_type(
-        &self,
-        arg_type: Expr,
-        ctx: &MetaLogicContext,
-    ) -> Result<Option<Expr>> {
-        let (prop_param, cmp_fun_type) = ctx.lambda_handler().get_semi_generic_dep_type(
-            arg_type,
-            DependentTypeCtorKind::Pi,
-            ctx.as_minimal(),
-        )?;
-        self.match_expr_1(ctx, prop_param, &cmp_fun_type)
-    }
-
     pub fn match_generic_indep_type(
         &self,
         kind: DependentTypeCtorKind,
@@ -366,7 +421,9 @@ impl Expr {
                 if let Ok(Some((domain, codomain))) =
                     self.match_expr_2(&min_ctx, domain_param, codomain_param, &generic_indep_type)
                 {
-                    if codomain != Expr::Placeholder {
+                    // If the codomain is a placeholder, we don't really know whether this should
+                    // be a dependent type instead.
+                    if !codomain.is_empty() {
                         return Some((domain, codomain));
                     }
                 }
@@ -378,34 +435,45 @@ impl Expr {
     pub fn match_generic_dep_type(
         &self,
         kind: DependentTypeCtorKind,
-        convert_to_lambda: bool,
         ctx: &MetaLogicContext,
-    ) -> Option<LambdaExpr> {
+    ) -> Option<(Expr, Expr)> {
         if *self != Expr::Placeholder {
             let min_ctx = ctx.as_minimal();
             if let Ok((domain_param, prop_param, generic_dep_type)) =
                 ctx.lambda_handler().get_generic_dep_type(kind, min_ctx)
             {
-                if let Ok(Some((domain, mut prop))) =
+                if let Ok(result) =
                     self.match_expr_2(&min_ctx, domain_param, prop_param, &generic_dep_type)
                 {
-                    if let Expr::Lambda(lambda) = prop {
-                        return Some(*lambda);
-                    } else if convert_to_lambda {
-                        let param = Param {
-                            name: None,
-                            type_expr: domain,
-                            implicit: false,
-                        };
-                        min_ctx.with_local(&param, |subctx| {
-                            prop.shift_to_subcontext(&min_ctx, subctx);
-                        });
-                        return Some(Lambda {
-                            param,
-                            body: Expr::explicit_app(prop, Expr::var(-1)),
-                        });
-                    }
+                    return result;
                 }
+            }
+        }
+        None
+    }
+
+    pub fn match_generic_dep_type_as_lambda(
+        &self,
+        kind: DependentTypeCtorKind,
+        convert_to_lambda: bool,
+        ctx: &MetaLogicContext,
+    ) -> Option<LambdaExpr> {
+        if let Some((domain, mut prop)) = self.match_generic_dep_type(kind, ctx) {
+            if let Expr::Lambda(lambda) = prop {
+                return Some(*lambda);
+            } else if convert_to_lambda {
+                let param = Param {
+                    name: None,
+                    type_expr: domain,
+                    implicit: false,
+                };
+                ctx.with_local(&param, |subctx| {
+                    prop.shift_to_subcontext(ctx, subctx);
+                });
+                return Some(Lambda {
+                    param,
+                    body: Expr::explicit_app(prop, Expr::var(-1)),
+                });
             }
         }
         None
@@ -418,8 +486,8 @@ impl Expr {
     ) -> Result<()> {
         if *type_1 != Expr::Placeholder && *type_2 != Expr::Placeholder {
             if let (Some(lambda_1), Some(lambda_2)) = (
-                type_1.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx),
-                type_2.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx),
+                type_1.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx),
+                type_2.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx),
             ) {
                 if lambda_1.param.implicit != lambda_2.param.implicit {
                     let name_1 = ctx.get_display_name(&lambda_1.param);
@@ -636,29 +704,21 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
 }
 
 pub trait HasType {
-    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
-        let mut result = self.get_unreduced_type(ctx)?;
-        // There is a lot of potential for optimization here:
-        // * Fully reducing all types is very suboptimal. We could have different reduction
-        //   strengths instead.
-        // * If we are determining the type of an application, then the types of the function and
-        //   argument have already been reduced. Instead of ignoring that here, we could exploit it
-        //   by skipping all subexpressions where no substitution occurs. The current behavior is
-        //   especially problematic because the run time grows quadratically with expression size.
-        result.reduce(ctx, -1)?;
-        Ok(result)
-    }
+    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr>;
 
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr>;
+    fn has_type(&self, expected_type: &mut Expr, ctx: &MetaLogicContext) -> Result<bool> {
+        let mut expr_type = self.get_type(ctx)?;
+        expr_type.is_defeq(expected_type, ctx)
+    }
 }
 
 impl HasType for Expr {
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         match self {
             Expr::Placeholder => Ok(Expr::Placeholder),
-            Expr::Var(var) => var.get_unreduced_type(ctx),
-            Expr::App(app) => app.get_unreduced_type(ctx),
-            Expr::Lambda(lambda) => lambda.get_unreduced_type(ctx),
+            Expr::Var(var) => var.get_type(ctx),
+            Expr::App(app) => app.get_type(ctx),
+            Expr::Lambda(lambda) => lambda.get_type(ctx),
         }
     }
 }
@@ -689,7 +749,7 @@ impl CanPrint for Expr {
 }
 
 impl HasType for Var {
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         let Var(idx) = self;
         Ok(ctx.get_var(*idx).type_expr.shifted_from_var(ctx, *idx))
     }
@@ -698,26 +758,13 @@ impl HasType for Var {
 pub type AppExpr = App<Expr, Arg>;
 
 impl HasType for AppExpr {
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         // Finding the result type of an application is surprisingly tricky because the
         // application itself does not include the type parameters of its function. Instead,
-        // to determine the property we need to match the type of the actual function
-        // argument against a term that denotes a sufficiently generic pi type. Then we
-        // apply the property to the argument of the application.
-        let fun = &self.body;
-        let arg = &self.param;
-        let fun_type = fun.get_type(ctx)?;
-        let arg_type = arg.expr.get_type(ctx)?;
-        if let Some(prop) = fun_type.get_prop_from_fun_type(arg_type, ctx)? {
-            Ok(prop.apply(arg.clone(), ctx))
-        } else {
-            let fun_str = fun.print(ctx);
-            let fun_type_str = fun_type.print(ctx);
-            let arg_str = arg.expr.print(ctx);
-            let arg_type = arg.expr.get_type(ctx)?;
-            let arg_type_str = arg_type.print(ctx);
-            Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
-        }
+        // to determine the property we need to match the type of the function against a term that
+        // denotes a generic pi type. Then we apply the property to the argument of the application.
+        let (_, prop) = self.get_type_parts(ctx, false)?;
+        Ok(prop.apply(self.param.clone(), ctx))
     }
 }
 
@@ -726,6 +773,8 @@ pub trait IsApp {
     fn beta_reduce_if_trivial(&mut self, ctx: &impl ParamContext<Param>) -> Option<Expr>;
 
     fn eta_reduce<Ctx: Context>(&mut self, ctx: &Ctx, body_ctx: &Ctx) -> Option<Expr>;
+
+    fn get_type_parts(&self, ctx: &MetaLogicContext, reduce_all: bool) -> Result<(Expr, Expr)>;
 }
 
 impl IsApp for AppExpr {
@@ -759,12 +808,39 @@ impl IsApp for AppExpr {
         }
         None
     }
+
+    fn get_type_parts(&self, ctx: &MetaLogicContext, reduce_all: bool) -> Result<(Expr, Expr)> {
+        let fun = &self.body;
+        let arg = &self.param;
+        let mut fun_type = fun.get_type(ctx)?;
+        fun_type.reduce(ctx, !reduce_all, -1)?;
+        if let Some((mut domain, prop)) =
+            fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
+        {
+            let mut arg_type = arg.expr.get_type(ctx)?;
+            if arg_type.is_defeq(&mut domain, ctx)? {
+                Ok((domain, prop))
+            } else {
+                let fun_str = fun.print(ctx);
+                let fun_type_str = fun_type.print(ctx);
+                let domain_str = domain.print(ctx);
+                let arg_str = arg.expr.print(ctx);
+                let arg_type_str = arg_type.print(ctx);
+                Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\nwith domain «{domain_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
+            }
+        } else {
+            let fun_str = fun.print(ctx);
+            let fun_type_str = fun_type.print(ctx);
+            let arg_str = arg.expr.print(ctx);
+            Err(anyhow!("invalid application: «{fun_str} : {fun_type_str}»\nis being applied to «{arg_str}» but is not a function"))
+        }
+    }
 }
 
 pub type LambdaExpr = Lambda<Param, Expr>;
 
 impl HasType for LambdaExpr {
-    fn get_unreduced_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+    fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         ctx.with_local(&self.param, |body_ctx| {
             let body_type = self.body.get_type(body_ctx)?;
             Expr::get_fun_type(&self.param, body_type, ctx)
@@ -834,18 +910,16 @@ fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> 
                 .lambda_handler()
                 .get_id_cmb(param.type_expr.clone(), ctx.as_minimal()),
             Expr::App(app) => {
-                let fun = &app.body;
-                let arg = &app.param.expr;
-                if let Expr::Var(Var(-1)) = arg {
+                if let Expr::Var(Var(-1)) = app.param.expr {
                     // If the expression can be eta-reduced, do that instead of outputting a
                     // combinator.
-                    if let Some(shifted_fun) = fun.shifted_to_supercontext(body_ctx, ctx) {
+                    if let Some(shifted_fun) = app.body.shifted_to_supercontext(body_ctx, ctx) {
                         return Ok(shifted_fun);
                     }
                 }
-                let cmb = get_subst_cmb(param, ctx, fun, arg, body_ctx)?;
-                let fun_lambda = Expr::lambda(param.clone(), fun.clone());
-                let arg_lambda = Expr::lambda(param.clone(), arg.clone());
+                let cmb = get_subst_cmb(param, ctx, app, body_ctx)?;
+                let fun_lambda = Expr::lambda(param.clone(), app.body.clone());
+                let arg_lambda = Expr::lambda(param.clone(), app.param.expr.clone());
                 Ok(Expr::explicit_multi_app(
                     cmb,
                     smallvec![fun_lambda, arg_lambda],
@@ -864,24 +938,14 @@ fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> 
 fn get_subst_cmb(
     param: &Param,
     ctx: &MetaLogicContext,
-    fun: &Expr,
-    arg: &Expr,
+    app: &AppExpr,
     body_ctx: &MetaLogicContext,
 ) -> Result<Expr> {
-    let fun_type = fun.get_type(body_ctx)?;
-    let arg_type = arg.get_type(body_ctx)?;
-    if let Some(fun_prop) = fun_type.get_prop_from_fun_type(arg_type.clone(), body_ctx)? {
-        let prop1 = Expr::lambda(param.clone(), arg_type);
-        let rel2 = Expr::lambda(param.clone(), fun_prop);
-        ctx.lambda_handler()
-            .get_subst_cmb(param.type_expr.clone(), prop1, rel2, ctx.as_minimal())
-    } else {
-        let fun_str = fun.print(body_ctx);
-        let fun_type_str = fun_type.print(body_ctx);
-        let arg_str = arg.print(body_ctx);
-        let arg_type_str = arg_type.print(body_ctx);
-        Err(anyhow!("application type mismatch when converting to combinator: «{fun_str} : {fun_type_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
-    }
+    let (domain, prop) = app.get_type_parts(body_ctx, true)?;
+    let prop1 = Expr::lambda(param.clone(), domain);
+    let rel2 = Expr::lambda(param.clone(), prop);
+    ctx.lambda_handler()
+        .get_subst_cmb(param.type_expr.clone(), prop1, rel2, ctx.as_minimal())
 }
 
 #[derive(Clone, Default)]

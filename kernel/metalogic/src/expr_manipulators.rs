@@ -58,14 +58,14 @@ impl ImplicitArgInserter {
     pub fn insert_implicit_args(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<Expr> {
         match expr {
             Expr::Placeholder => Ok(Expr::Placeholder),
-            Expr::Var(var) => var.get_unreduced_type(ctx),
+            Expr::Var(var) => var.get_type(ctx),
             Expr::App(app) => {
                 let fun = &mut app.body;
                 let arg = &mut app.param;
                 let mut fun_type = self.insert_implicit_args_and_get_type(fun, ctx)?;
                 self.arg(arg, ctx)?;
                 while let Some(lambda) =
-                    fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx)
+                    fun_type.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx)
                 {
                     if lambda.param.implicit && !arg.implicit {
                         *fun = Expr::app(
@@ -157,7 +157,7 @@ impl PlaceholderFiller {
                     };
                     ctx.with_new_options(type_str_options, |type_str_ctx| {
                         let type_str = expected_type.print(type_str_ctx);
-                        if let Ok(true) = expected_type.reduce(type_str_ctx, -1) {
+                        if let Ok(true) = expected_type.reduce_all(type_str_ctx) {
                             let reduced_type_str = expected_type.print(type_str_ctx);
                             if reduced_type_str != type_str {
                                 return Err(anyhow!("unfilled placeholder of type «{type_str}»\n(reduced: «{reduced_type_str}»)"));
@@ -169,7 +169,14 @@ impl PlaceholderFiller {
                     Ok(expected_type)
                 }
             }
-            Expr::Var(var) => var.get_unreduced_type(ctx),
+            Expr::Var(var) => {
+                let var_type = var.get_type(ctx)?;
+                if var_type.is_empty() {
+                    Ok(expected_type)
+                } else {
+                    Ok(var_type)
+                }
+            }
             Expr::App(app) => {
                 let fun = &mut app.body;
                 let arg = &mut app.param;
@@ -366,7 +373,7 @@ impl PlaceholderFiller {
             // Replace all occurrences of `arg` in `expected_type` with the new variable.
             // This may or may not be what we want in a particular case, but heuristics are OK when
             // auto-filling placeholders.
-            Self::heuristically_unapply(expected_type, arg, &expected_param, &min_ctx)?
+            Self::replaced_or_shifted(expected_type, &min_ctx, &arg.expr, &min_ctx)?
         } else {
             Expr::Placeholder
         };
@@ -432,26 +439,12 @@ impl PlaceholderFiller {
         implicit: bool,
         ctx: &MetaLogicContext,
     ) -> Result<LambdaExpr> {
-        if let Some(lambda) = fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, true, ctx)
+        fun_type.reduce(ctx, true, self.max_reduction_depth as i32)?;
+        if let Some(lambda) =
+            fun_type.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx)
         {
             Ok(lambda)
         } else {
-            //dbg!(fun_type.print(ctx));
-            if self.max_reduction_depth > 0 && fun_type.apply_one_reduction_rule(ctx)? {
-                //dbg!(fun_type.print(ctx));
-                let sub_filler = PlaceholderFiller {
-                    max_reduction_depth: self.max_reduction_depth - 1,
-                    force: self.force,
-                    has_unfilled_placeholders: AtomicBool::new(false),
-                };
-                let result = sub_filler.get_fun_type_lambda(fun_type, implicit, ctx);
-                if sub_filler.has_unfilled_placeholders.load(Ordering::Relaxed) {
-                    self.has_unfilled_placeholders
-                        .store(true, Ordering::Relaxed);
-                }
-                return result;
-            }
-
             Ok(LambdaExpr {
                 param: Param {
                     name: None,
@@ -461,15 +454,6 @@ impl PlaceholderFiller {
                 body: Expr::Placeholder,
             })
         }
-    }
-
-    fn heuristically_unapply(
-        result_expr: &Expr,
-        arg: &Arg,
-        _param: &Param,
-        ctx: &impl ComparisonContext,
-    ) -> Result<Expr> {
-        Self::replaced_or_shifted(result_expr, ctx, &arg.expr, ctx)
     }
 
     fn replaced_or_shifted<Ctx: ComparisonContext>(

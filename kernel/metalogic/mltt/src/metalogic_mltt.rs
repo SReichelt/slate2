@@ -542,7 +542,8 @@ pub fn get_mltt() -> MetaLogic {
                     ModuleInit::Def(DefInit {
                         sym: "IsContr_to_IsProp : Π A : U. IsContr A → IsProp A",
                         red: &["IsContr_to_IsProp :≡ λ A h. \
-                                                     λ a b : A. trans (symm (IsContr_unique h a)) \
+                                                     λ a b : A. trans {A} {a} {IsContr_center h} {b} \
+                                                                      (symm (IsContr_unique h a)) \
                                                                       (IsContr_unique h b)"],
                     }),
                     ModuleInit::Def(DefInit {
@@ -808,11 +809,13 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["FunRel_unique :≡ λ {A B}. λ f a b. to ((FunRel_eq f) a b)"],
                     }),
                     ModuleInit::Def(DefInit {
-                        // This shows that our version of equivalence is equivalent to the
-                        // "bijective relation" variant in the HoTT book.
+                        // This shows that our version of equivalence implies the "bijective
+                        // relation" variant in the HoTT book.
                         sym: "FunRel_inst_unique : Π {A B : U}. Π f : FunRel A B. \
                                                    Π a : A. Π b : B. Π hRab : FunRel_MapsTo f a b. \
-                                                   FunRel_inst f a =[ap (FunRel_MapsTo f a) (FunRel_unique f a b hRab)] hRab",
+                                                   FunRel_inst f a \
+                                                   =[ap (FunRel_MapsTo f a) (FunRel_unique f a b hRab)] \
+                                                   hRab",
                         red: &["FunRel_inst_unique :≡ λ {A B}. λ f a b hRab. \
                                                       [h1 : inv ((FunRel_eq f) a b) (FunRel_unique f a b hRab) = \
                                                             hRab \
@@ -857,14 +860,15 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "FunRel_eq_by_fun : Π {A B : U}. Π f f' : FunRel A B. \
                                                  FunRel_fun f = FunRel_fun f' → f = f'",
                         red: &["FunRel_eq_by_fun :≡ λ {A B}. λ f f' h. \
-                                                    λ a : A. λ b : B. trans3 {U} \
-                                                                             {FunRel_MapsTo f a b} \
-                                                                             {FunRel_fun f a = b} \
-                                                                             {FunRel_fun f' a = b} \
-                                                                             {FunRel_MapsTo f' a b} \
-                                                                             ((FunRel_eq f) a b) \
-                                                                             (ap (λ f : A → B. f a = b) h) \
-                                                                             (symm ((FunRel_eq f') a b))"],
+                                                    λ a : A. λ b : B. \
+                                                    trans3 {U} \
+                                                           {FunRel_MapsTo f a b} \
+                                                           {FunRel_fun f a = b} \
+                                                           {FunRel_fun f' a = b} \
+                                                           {FunRel_MapsTo f' a b} \
+                                                           ((FunRel_eq f) a b) \
+                                                           (ap (λ f : A → B. f a = b) h) \
+                                                           (symm ((FunRel_eq f') a b))"],
                     }),
                 ],
             },
@@ -1721,7 +1725,7 @@ impl LambdaHandler for MLTTLambdaHandler {
     }
 
     fn placeholder_max_reduction_depth(&self) -> u32 {
-        1
+        4
     }
 }
 
@@ -1729,7 +1733,6 @@ impl LambdaHandler for MLTTLambdaHandler {
 mod tests {
     use anyhow::Result;
 
-    use slate_kernel_generic::context_object::*;
     use slate_kernel_metalogic::metalogic_context::*;
 
     use super::*;
@@ -1758,32 +1761,32 @@ mod tests {
 
         let univ = Expr::parse("U", &root_ctx)?;
 
-        let pi = mltt.get_constant("Pi").unwrap();
+        let pi = &mltt.get_constant("Pi").unwrap().param;
         assert_eq!(pi.type_expr.print(&root_ctx), "Π {A : U}. (A → U) → U");
 
-        let id_cmb = mltt.get_constant("id").unwrap();
+        let id_cmb = &mltt.get_constant("id").unwrap().param;
         assert_eq!(id_cmb.type_expr.print(&root_ctx), "Π A : U. A → A");
 
-        let const_cmb = mltt.get_constant("const").unwrap();
+        let const_cmb = &mltt.get_constant("const").unwrap().param;
         assert_eq!(
             const_cmb.type_expr.print(&root_ctx),
             "Π A : U. Π {B : U}. B → A → B"
         );
 
-        let subst_cmb = mltt.get_constant("substd").unwrap();
+        let subst_cmb = &mltt.get_constant("substd").unwrap().param;
         assert_eq!(
             subst_cmb.type_expr.print(&root_ctx),
             "Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. \
              Pi2d {A} {P} Q → (Π f : Pi {A} P. Π a : A. Q a (f a))"
         );
 
-        let refl = mltt.get_constant("refl").unwrap();
+        let refl = &mltt.get_constant("refl").unwrap().param;
         assert_eq!(
             refl.type_expr.print(&root_ctx),
             "Π {A : U}. Π a : A. a ={A} a"
         );
 
-        let symm = mltt.get_constant("symm").unwrap();
+        let symm = &mltt.get_constant("symm").unwrap().param;
         assert_eq!(
             symm.type_expr.print(&root_ctx),
             "Π {A : U}. Π {a : A}. Π {b : A}. a ={A} b → b ={A} a"
@@ -1808,7 +1811,7 @@ mod tests {
         assert_ne!(const_id_ctor_occ, const_ctor);
 
         let mut app_u = Expr::parse("λ F : U → U. F U", &root_ctx)?;
-        let app_u_type = app_u.get_type(&root_ctx)?;
+        let mut app_u_type = app_u.get_type(&root_ctx)?;
         assert_eq!(app_u_type.print(&root_ctx), "(U → U) → U");
 
         let mut id_fun = Expr::parse("λ A : U. λ a : A. a", &root_ctx)?;
@@ -1839,7 +1842,7 @@ mod tests {
             pair_fst_fun_type.print(&root_ctx),
             "Π A : U. Π B : U. A → B → A"
         );
-        let pair_fst_fun_reduced = pair_fst_fun.reduce(&root_ctx, -1)?;
+        let pair_fst_fun_reduced = pair_fst_fun.reduce_all(&root_ctx)?;
         assert!(pair_fst_fun_reduced);
         assert_eq!(
             pair_fst_fun.print(&root_ctx),
@@ -1861,8 +1864,7 @@ mod tests {
                     (id (Pi {U} (const U {U} U))) \
                     (const (Pi {U} (const U {U} U)) {U} U)"
         );
-        let app_u_cmb_type = app_u.get_type(&root_ctx)?;
-        assert!(app_u_cmb_type.compare(&app_u_type, &mltt.get_root_context())?);
+        assert!(app_u.has_type(&mut app_u_type, &mltt.get_root_context())?);
 
         id_fun.convert_to_combinators(&root_ctx, -1)?;
         assert_eq!(id_fun.print(&root_ctx), "id");
@@ -1935,7 +1937,7 @@ mod tests {
 
         let root_ctx = mltt.get_root_context();
         let mut pointed_type_eq = mltt.parse_expr("λ A B : PointedType. A = B")?;
-        pointed_type_eq.reduce(&root_ctx, -1)?;
+        pointed_type_eq.reduce_all(&root_ctx)?;
         assert_eq!(
             pointed_type_eq.print(&root_ctx),
             "λ A : (Σ A : U. A). λ B : (Σ A' : U. A'). \
@@ -1946,20 +1948,21 @@ mod tests {
 
         let root_ctx = mltt.get_root_context();
         let mut type_with_fun = mltt.parse_expr("λ A B : TypeWithFun. A = B")?;
-        type_with_fun.reduce(&root_ctx, -1)?;
+        type_with_fun.reduce_all(&root_ctx)?;
         //assert_eq!(type_with_fun.print(&root_ctx), "TODO");
 
         mltt.add_definition("Magma", mltt.parse_expr("Σ A : U. A → A → A")?)?;
 
         let root_ctx = mltt.get_root_context();
         let mut magma_eq = mltt.parse_expr("λ A B : Magma. A = B")?;
-        magma_eq.reduce(&root_ctx, -1)?;
+        magma_eq.reduce_all(&root_ctx)?;
         //assert_eq!(magma_eq.print(&root_ctx), "TODO");
 
         Ok(())
     }
 
     // TODO: check equality of variable names in defs
+    // TODO: fix implicit arguments before printing
     // TODO: check that `ap`/`apd` is defined for every irreducible function
     // TODO: test confluence (in general, or just of all concrete terms)
 }

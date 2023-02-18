@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 
-use slate_kernel_generic::{context::*, context_object::*};
+use slate_kernel_generic::context::*;
 
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
@@ -64,9 +64,9 @@ pub struct ParamTypeChecker;
 
 impl ExprVisitor for ParamTypeChecker {
     fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
-        let type_type = param.type_expr.get_type(ctx)?;
-        let cmp_type_type = ctx.lambda_handler().get_universe_type()?;
-        if type_type.compare(&cmp_type_type, ctx)? {
+        let mut type_type = param.type_expr.get_type(ctx)?;
+        let mut cmp_type_type = ctx.lambda_handler().get_universe_type()?;
+        if type_type.is_defeq(&mut cmp_type_type, ctx)? {
             Ok(())
         } else {
             let type_str = param.type_expr.print(ctx);

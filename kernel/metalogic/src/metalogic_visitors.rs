@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 
-use slate_kernel_generic::{context::*, context_object::*};
+use slate_kernel_generic::context::*;
 
 use crate::{expr::*, expr_visitors::*, metalogic::*, metalogic_context::*};
 
@@ -100,9 +100,9 @@ impl MetaLogicVisitor for ReductionRuleChecker {
     }
 
     fn reduction_body(&self, body: &ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        let source_type = body.source.get_type(ctx)?;
-        let target_type = body.target.get_type(ctx)?;
-        if source_type.compare(&target_type, ctx)? {
+        let mut source_type = body.source.get_type(ctx)?;
+        let mut target_type = body.target.get_type(ctx)?;
+        if source_type.is_defeq(&mut target_type, ctx)? {
             Ok(())
         } else {
             let source_str = body.source.print(ctx);
