@@ -282,7 +282,7 @@ impl PlaceholderFiller {
                     ctx,
                 )
             })? {
-                Self::apply_args(expr, args);
+                Self::apply_args(expr, args, ctx);
                 //dbg!("applied", fun.print(ctx));
             } else {
                 return Ok(false);
@@ -420,10 +420,19 @@ impl PlaceholderFiller {
         }
     }
 
-    fn apply_args(mut expr: &mut Expr, mut args: SmallVec<[Expr; INLINE_PARAMS]>) {
+    fn apply_args(
+        mut expr: &mut Expr,
+        mut args: SmallVec<[Expr; INLINE_PARAMS]>,
+        ctx: &MetaLogicContext,
+    ) {
         while let Expr::App(app) = expr {
-            if let Some(value) = args.pop() {
-                if app.param.expr.is_empty() {
+            if let Some(mut value) = args.pop() {
+                if app.param.expr != value {
+                    if let Expr::App(value_app) = &mut value {
+                        if let Some(beta_reduced) = value_app.beta_reduce(ctx) {
+                            value = beta_reduced;
+                        }
+                    }
                     app.param.expr = value;
                 }
                 expr = &mut app.body;
