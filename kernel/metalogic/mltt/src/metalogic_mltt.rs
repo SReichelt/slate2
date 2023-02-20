@@ -457,6 +457,61 @@ pub fn get_mltt() -> MetaLogic {
                                                λ ef : a = c. λ f : b = c. trans (symm e) ef = f"],
                     }),
                     ModuleInit::Def(DefInit {
+                        // Given an equality between `a` and `b`, obtain an arbitrary value that
+                        // is equal to `a` and `b` but not definitionally equal to a particular one
+                        // of them, unless both are already definitionally equal (and their equality
+                        // definitionally equal to `refl`). In other words, we obtain an arbitrary
+                        // point on the path between `a` and `b`.
+                        // The purpose of this definition is to avoid confluence problems stemming
+                        // from the need to choose between two equally good alternatives. In
+                        // particular, `arbitrary` can be considered symmetric in `a` and `b`,
+                        // which is important when using the result to define a relation that must
+                        // be definitionally symmetric (in particular, equality).
+                        sym: "arbitrary : Π {A : U}. Π {a b : A}. a = b → A",
+                        red: &[
+                            // Generic reductions.
+                            "∀ {A : U}. ∀ a : A. arbitrary (refl a) :≡ a",
+                            "∀ {A B : U}. ∀ f : A → B. ∀ {a a' : A}. ∀ e : a = a'. \
+                             arbitrary (ap f e) :≡ f (arbitrary e)",
+                            // Reductions for specific types.
+                            "arbitrary {Unit} :≡ λ {_ _}. λ _. unit",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             arbitrary {Pi P} :≡ λ {f g}. λ e. λ a : A. arbitrary (e a)",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             arbitrary {Sigma P} :≡ λ {p q}. λ e. Sigma_intro P \
+                                                                              (arbitrary (Sigma_fst e)) \
+                                                                              (sorry _)", // need dependent `arbitrary`
+                        ],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "arbitrary_eq_left : Π {A : U}. Π {a b : A}. Π e : a = b. \
+                                                  arbitrary e = a",
+                        red: &[
+                            "∀ {A : U}. ∀ a : A. arbitrary_eq_left (refl a) :≡ refl a",
+                            "∀ {A B : U}. ∀ f : A → B. ∀ {a a' : A}. ∀ e : a = a'. \
+                             arbitrary_eq_left (ap f e) :≡ ap f (arbitrary_eq_left e)",
+                            "arbitrary_eq_left {Unit} :≡ λ {_ _}. λ _. unit",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             arbitrary_eq_left {Pi P} :≡ λ {f g}. λ e. λ a : A. arbitrary_eq_left (e a)",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             arbitrary_eq_left {Sigma P} :≡ sorry _",
+                        ],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "arbitrary_eq_right : Π {A : U}. Π {a b : A}. Π e : a = b. \
+                                                   arbitrary e = b",
+                        red: &[
+                            "∀ {A : U}. ∀ a : A. arbitrary_eq_right (refl a) :≡ refl a",
+                            "∀ {A B : U}. ∀ f : A → B. ∀ {a a' : A}. ∀ e : a = a'. \
+                             arbitrary_eq_right (ap f e) :≡ ap f (arbitrary_eq_right e)",
+                            "arbitrary_eq_right {Unit} :≡ λ {_ _}. λ _. unit",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             arbitrary_eq_right {Pi P} :≡ λ {f g}. λ e. λ a : A. arbitrary_eq_right (e a)",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             arbitrary_eq_right {Sigma P} :≡ sorry _",
+                        ],
+                    }),
+                    ModuleInit::Def(DefInit {
                         sym: "Eq_Fun_nat : Π {A B : U}. Π {f g : A → B}. Π efg : f = g. \
                                            Π {a a' : A}. Π ea : a = a'. \
                                            trans' (efg a) (ap g ea) = trans (ap f ea) (efg a')",
@@ -556,7 +611,7 @@ pub fn get_mltt() -> MetaLogic {
                     }),
                 ],
             },
-            /*ModuleInit::Type {
+            ModuleInit::Type {
                 ctor: DefInit {
                     sym: "ContrSigma : Π {A : U}. (A → U) → U",
                     red: &["ContrSigma :≡ λ {A}. λ P. IsContr (Sigma P)"],
@@ -599,26 +654,26 @@ pub fn get_mltt() -> MetaLogic {
                                                                    {λ e : ContrSigma_fst h = a. ContrSigma_snd h =[ap P e] b} \
                                                                    (IsContr_unique h (Sigma_intro P a b))"],
                     }),
-                    ModuleInit::Def(DefInit {
+                    /*ModuleInit::Def(DefInit {
                         sym: "ContrSigma_isProp : Π {A : U}. Π P : A → U. IsProp (ContrSigma P)",
                         red: &["ContrSigma_isProp :≡ λ {A}. λ P. IsContr_isProp (Sigma P)"],
-                    }),
+                    }),*/
                     ModuleInit::Def(DefInit {
                         sym: "ContrSigma_Eq : Π {A : U}. Π a : A. ContrSigma (Eq a)",
                         red: &["ContrSigma_Eq :≡ λ {A}. λ a. \
                                                  ContrSigma_intro (Eq a) a (refl a) \
                                                                   (λ b : A. λ e : a = b. e) \
-                                                                  (λ b : A. λ e : a = b. refl e)"],
+                                                                  (λ b : A. λ e : a = b. trans'_refl e)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "ContrSigma_swap_Eq : Π {A : U}. Π a : A. ContrSigma ((Rel_swap (Eq {A})) a)",
                         red: &["ContrSigma_swap_Eq :≡ λ {A}. λ a. \
                                                       ContrSigma_intro ((Rel_swap (Eq {A})) a) a (refl a) \
                                                                        (λ b : A. λ e : b = a. symm e) \
-                                                                       (λ b : A. λ e : b = a. refl (symm e))"],
+                                                                       (λ b : A. λ e : b = a. symm (trans_1_symm e))"],
                     }),
                 ],
-            },*/
+            },
             ModuleInit::Type {
                 ctor: DefInit {
                     sym: "FunRel : U → U → U",
