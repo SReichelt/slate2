@@ -307,10 +307,14 @@ impl Expr {
         // We could first reduce just enough to be sure that the two expressions cannot possibly be
         // definitionally equal, but `is_defeq` is really only meant to be called for verification,
         // not for matching.
-        self.reduce_all(ctx)?;
-        expr.reduce_all(ctx)?;
+        let mut reduced = self.reduce_all(ctx)?;
+        reduced |= expr.reduce_all(ctx)?;
 
-        self.compare(expr, ctx)
+        if reduced {
+            self.compare(expr, ctx)
+        } else {
+            Ok(false)
+        }
     }
 
     pub fn convert_to_combinators(
