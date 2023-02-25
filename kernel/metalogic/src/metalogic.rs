@@ -137,7 +137,7 @@ impl MetaLogic {
     pub fn get_constant(&self, name: &str) -> Option<&Constant> {
         let symbol = self.symbol_table.intern(name);
         let var_idx = self.constants.get_var_index(symbol, 0)?;
-        Some(&self.constants.get_var(var_idx))
+        Some(self.constants.get_var(var_idx))
     }
 
     pub fn get_display_name(&self, obj: &impl NamedObject<Symbol>) -> &str {
@@ -159,7 +159,7 @@ impl MetaLogic {
                 let name = self.get_display_name(constant);
 
                 trace_start(&visitor.get_constant_title(name));
-                if let Err(error) = visitor.constant(&constant, &root_ctx).with_prefix(|| {
+                if let Err(error) = visitor.constant(constant, &root_ctx).with_prefix(|| {
                     let param_str = constant.param.print(&root_ctx);
                     visitor.get_constant_error_prefix(name, &param_str)
                 }) {
@@ -199,8 +199,8 @@ impl MetaLogic {
             let name = self.get_display_name(constant);
 
             trace_start(&manipulator.get_constant_title(name));
-            if let Err(error) = manipulator.constant(constant, &root_ctx).with_prefix(|| {
-                let param_str = constant.param.print(&root_ctx);
+            if let Err(error) = manipulator.constant(constant, root_ctx).with_prefix(|| {
+                let param_str = constant.param.print(root_ctx);
                 manipulator.get_constant_error_prefix(name, &param_str)
             }) {
                 errors.push(error);
@@ -213,8 +213,8 @@ impl MetaLogic {
 
             trace_start(&manipulator.get_rules_title(name));
             for rule in &mut constant.reduction_rules {
-                if let Err(error) = manipulator.reduction_rule(rule, &root_ctx).with_prefix(|| {
-                    let rule_str = rule.print(&root_ctx);
+                if let Err(error) = manipulator.reduction_rule(rule, root_ctx).with_prefix(|| {
+                    let rule_str = rule.print(root_ctx);
                     manipulator.get_rule_error_prefix(name, &rule_str)
                 }) {
                     errors.push(error);
@@ -250,7 +250,7 @@ impl MetaLogic {
     }
 
     fn insert_implicit_args(&mut self) -> Result<()> {
-        self.manipulate_exprs(&mut ImplicitArgInserter {
+        self.manipulate_exprs(&ImplicitArgInserter {
             max_depth: self.lambda_handler.implicit_arg_max_depth(),
         })
     }
@@ -262,7 +262,7 @@ impl MetaLogic {
             force: false,
             has_unfilled_placeholders: AtomicBool::new(false),
         };
-        self.manipulate_exprs(&mut placeholder_filler)?;
+        self.manipulate_exprs(&placeholder_filler)?;
 
         if placeholder_filler
             .has_unfilled_placeholders
@@ -273,7 +273,7 @@ impl MetaLogic {
             placeholder_filler
                 .has_unfilled_placeholders
                 .store(false, Ordering::Relaxed);
-            self.manipulate_exprs(&mut placeholder_filler)?;
+            self.manipulate_exprs(&placeholder_filler)?;
         }
 
         Ok(())
@@ -282,7 +282,7 @@ impl MetaLogic {
     fn reduce_reduction_rule_args(&mut self) -> Result<()> {
         let orig_reduce_with_reduction_rules = self.root_ctx_options.reduce_with_reduction_rules;
         self.root_ctx_options.reduce_with_reduction_rules = true;
-        let result = self.manipulate_exprs(&mut ReductionRuleArgReducer);
+        let result = self.manipulate_exprs(&ReductionRuleArgReducer);
         self.root_ctx_options.reduce_with_reduction_rules = orig_reduce_with_reduction_rules;
         result
     }
@@ -415,7 +415,7 @@ impl CanPrint for ReductionRule {
     fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         PrintingContext::print(&mut result, ctx, |printing_context| {
-            printing_context.print_reduction_rule(&self)
+            printing_context.print_reduction_rule(self)
         })
         .unwrap();
         result

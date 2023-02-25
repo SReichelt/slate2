@@ -208,7 +208,7 @@ impl Expr {
 
                         if let Some(eta_reduced) =
                             ctx.with_local(&lambda.param, |body_ctx| -> Result<Option<Expr>> {
-                                reduced |= lambda.body.reduce(&body_ctx, head_only, max_depth)?;
+                                reduced |= lambda.body.reduce(body_ctx, head_only, max_depth)?;
 
                                 // Eta-reduction isn't really important, but it makes printed
                                 // expressions easier to read.
@@ -341,7 +341,7 @@ impl Expr {
                         .type_expr
                         .convert_to_combinators(ctx, max_depth)?;
                     ctx.with_local(&lambda.param, |body_ctx| {
-                        lambda.body.convert_to_combinators(&body_ctx, max_depth)
+                        lambda.body.convert_to_combinators(body_ctx, max_depth)
                     })?;
 
                     *self = lambda.convert_to_combinator(ctx)?;
@@ -745,7 +745,7 @@ impl CanPrint for Expr {
     fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         PrintingContext::print(&mut result, ctx, |printing_context| {
-            printing_context.print_expr(&self)
+            printing_context.print_expr(self)
         })
         .unwrap();
         result
@@ -896,7 +896,7 @@ impl IsLambda for LambdaExpr {
 }
 
 fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> Result<Expr> {
-    ctx.with_local(&param, |body_ctx| {
+    ctx.with_local(param, |body_ctx| {
         //dbg!(body.print(body_ctx));
 
         if let Some(shifted_body) = body.shifted_to_supercontext(body_ctx, ctx) {
@@ -993,7 +993,7 @@ impl ContextObject for Param {
 
     fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         Param {
-            name: self.name.clone(),
+            name: self.name,
             type_expr: self.type_expr.shifted_impl(start, end, shift),
             implicit: self.implicit,
         }
@@ -1057,7 +1057,7 @@ impl CanPrint for Param {
     fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
         PrintingContext::print(&mut result, ctx, |printing_context| {
-            printing_context.print_param(&self)
+            printing_context.print_param(self)
         })
         .unwrap();
         result

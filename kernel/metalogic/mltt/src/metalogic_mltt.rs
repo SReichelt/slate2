@@ -471,25 +471,40 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[
                             // Generic reductions.
                             "∀ {A : U}. ∀ a : A. arbitrary (refl a) :≡ a",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. arbitrary (symm e) :≡ arbitrary e",
+                            // TODO: Make sure that this always holds.
                             "∀ {A B : U}. ∀ f : A → B. ∀ {a a' : A}. ∀ e : a = a'. \
                              arbitrary (ap f e) :≡ f (arbitrary e)",
                             // Reductions for specific types.
+                            "∀ A : U. arbitrary {U} {A} {A} (Equiv_refl A) :≡ A",
+                            "∀ {A B : U}. ∀ e : A = B. arbitrary {U} {B} {A} (Equiv_symm e) :≡ arbitrary e",
                             "arbitrary {Unit} :≡ λ {_ _}. λ _. unit",
                             "∀ {A : U}. ∀ P : A → U. \
                              arbitrary {Pi P} :≡ λ {f g}. λ e. λ a : A. arbitrary (e a)",
                             "∀ {A : U}. ∀ P : A → U. \
-                             arbitrary {Sigma P} :≡ λ {p q}. λ e. Sigma_intro P \
-                                                                              (arbitrary (Sigma_fst e)) \
-                                                                              (sorry _)", // need dependent `arbitrary`
+                             arbitrary {Sigma P} :≡ λ {p q}. λ e. \
+                                                    Sigma_intro P \
+                                                                (arbitrary (Sigma_fst e)) \
+                                                                (arbitraryd {P (Sigma_fst p)} {P (Sigma_fst q)} \
+                                                                            {ap P (Sigma_fst e)} \
+                                                                            {Sigma_snd p} {Sigma_snd q} \
+                                                                            (Sigma_snd e))",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "arbitrary_eq_left : Π {A : U}. Π {a b : A}. Π e : a = b. \
                                                   arbitrary e = a",
                         red: &[
+                            // Generic reductions.
                             "∀ {A : U}. ∀ a : A. arbitrary_eq_left (refl a) :≡ refl a",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. \
+                             arbitrary_eq_left (symm e) :≡ arbitrary_eq_right e",
                             "∀ {A B : U}. ∀ f : A → B. ∀ {a a' : A}. ∀ e : a = a'. \
                              arbitrary_eq_left (ap f e) :≡ ap f (arbitrary_eq_left e)",
+                            // Reductions for specific types.
+                            "∀ A : U. arbitrary_eq_left {U} {A} {A} (Equiv_refl A) :≡ refl A",
+                            "∀ {A B : U}. ∀ e : A = B. \
+                             arbitrary_eq_left {U} {B} {A} (Equiv_symm e) :≡ arbitrary_eq_right e",
                             "arbitrary_eq_left {Unit} :≡ λ {_ _}. λ _. unit",
                             "∀ {A : U}. ∀ P : A → U. \
                              arbitrary_eq_left {Pi P} :≡ λ {f g}. λ e. λ a : A. arbitrary_eq_left (e a)",
@@ -501,9 +516,16 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "arbitrary_eq_right : Π {A : U}. Π {a b : A}. Π e : a = b. \
                                                    arbitrary e = b",
                         red: &[
+                            // Generic reductions.
                             "∀ {A : U}. ∀ a : A. arbitrary_eq_right (refl a) :≡ refl a",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. \
+                             arbitrary_eq_right (symm e) :≡ arbitrary_eq_left e",
                             "∀ {A B : U}. ∀ f : A → B. ∀ {a a' : A}. ∀ e : a = a'. \
                              arbitrary_eq_right (ap f e) :≡ ap f (arbitrary_eq_right e)",
+                            // Reductions for specific types.
+                            "∀ A : U. arbitrary_eq_right {U} {A} {A} (Equiv_refl A) :≡ refl A",
+                            "∀ {A B : U}. ∀ e : A = B. \
+                             arbitrary_eq_right {U} {B} {A} (Equiv_symm e) :≡ arbitrary_eq_left e",
                             "arbitrary_eq_right {Unit} :≡ λ {_ _}. λ _. unit",
                             "∀ {A : U}. ∀ P : A → U. \
                              arbitrary_eq_right {Pi P} :≡ λ {f g}. λ e. λ a : A. arbitrary_eq_right (e a)",
@@ -537,6 +559,34 @@ pub fn get_mltt() -> MetaLogic {
                                            Π {a a' : A}. Π ea : a = a'. \
                                            trans (ef a) ea = trans' (ap f ea) (ef a')",
                         red: &["Eq_id_nat' :≡ λ {A f}. Eq_Fun_nat' {A} {A} {f} {id A}"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "Eq_Pi_nat : Π {A : U}. Π {P : A → U}. Π {f g : Pi P}. Π efg : f = g. \
+                                          Π {a a' : A}. Π ea : a = a'. \
+                                          DepEq_trans_Eq (efg a) (apd g ea) = DepEq_trans'_Eq (apd f ea) (efg a')",
+                        red: &["Eq_Pi_nat :≡ λ {A P f g}. sorry _"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "congr : Π {A B : U}. Π {f g : A → B}. f = g → \
+                                      Π {a a' : A}. a = a' → f a = g a'",
+                        red: &["congr :≡ λ {A B f g}. λ efg. λ {a a'}. λ ea. \
+                                         arbitrary (Eq_Fun_nat efg ea)"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        // TODO: We need this to be a definitional equality.
+                        sym: "congr_assoc : Π {A B C : U}. Π {g g' : B → C}. Π eg : g = g'. \
+                                            Π {f f' : A → B}. Π ef : f = f'. \
+                                            Π {a a' : A}. Π ea : a = a'. \
+                                            congr {A} {C} {comp g f} {comp g' f'} \
+                                                  (congr (λ f : A → B. λ a : A. eg (f a)) ef) ea = \
+                                            congr eg (congr ef ea)",
+                        red: &["congr_assoc :≡ sorry _"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "congrd : Π {A : U}. Π {P : A → U}. Π {f g : Pi P}. f = g → \
+                                       Π {a a' : A}. Π ea : a = a'. f a =[ap P ea] g a'",
+                        red: &["congrd :≡ λ {A P f g}. λ efg. λ {a a'}. λ ea. \
+                                          arbitrary (Eq_Pi_nat efg ea)"],
                     }),
                 ],
             },
@@ -1182,6 +1232,17 @@ pub fn get_mltt() -> MetaLogic {
                                                         DepEq_trans'_Eq {A} {B} {eAB} {a} {b} {inv eBC c} \
                                                                         e (DepEq_as_inv_eq f)"],
                             }),
+                            ModuleInit::Def(DefInit {
+                                sym: "arbitraryd : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. \
+                                                   a =[eAB] b → arbitrary eAB",
+                                red: &[
+                                    "∀ A : U. arbitraryd {A} {A} {refl A} :≡ arbitrary {A}",
+                                    "∀ {A : U}. ∀ {P : A → U}. ∀ f : Pi P. ∀ {a a' : A}. ∀ e : a = a'. \
+                                     arbitraryd (apd f e) :≡ f (arbitrary e)",
+                                    // TODO more reductions
+                                ],
+                            }),
+                            // TODO left & right
                         ],
                     },
                     ModuleInit::Def(DefInit {
@@ -1349,9 +1410,7 @@ pub fn get_mltt() -> MetaLogic {
             ModuleInit::Def(DefInit {
                 sym: "ap_subst : Π {A B C : U}. Π g : A → B → C. Π f : A → B. Π {a a' : A}. Π e : a = a'. \
                                  subst g f a = subst g f a'",
-                red: &["ap_subst :≡ λ {A B C}. λ g f. λ {a a'}. λ e. \
-                                    trans {C} {g a (f a)} {g a' (f a)} {g a' (f a')} \
-                                          ((ap g e) (f a)) (ap (g a') (ap f e))"],
+                red: &["ap_subst :≡ λ {A B C}. λ g f. λ {a a'}. λ e. ap2 g e (ap f e)"],
             }),
             ModuleInit::Def(DefInit {
                 sym: "ap_subst' : Π {A B C : U}. Π g : A → B → C. Π f : A → B. Π {a a' : A}. Π e : a = a'. \
@@ -1359,15 +1418,17 @@ pub fn get_mltt() -> MetaLogic {
                 // Note: It is important that we use `trans'` here, not `trans`, so that `ap` on
                 // function composition reduces nicely due to the second argument of `trans'`
                 // becoming `refl` when `g` is constant on `A`.
-                red: &["ap_subst' :≡ λ {A B C}. λ g f. λ {a a'}. λ e. \
-                                     trans' {C} {g a (f a)} {g a (f a')} {g a' (f a')} \
-                                            (ap (g a) (ap f e)) ((ap g e) (f a'))"],
+                red: &["ap_subst' :≡ λ {A B C}. λ g f. λ {a a'}. λ e. ap2' g e (ap f e)"],
             }),
             ModuleInit::Def(DefInit {
                 sym: "ap_subst_nat : Π {A B C : U}. Π g : A → B → C. Π f : A → B. Π {a a' : A}. Π e : a = a'. \
                                      ap_subst g f e = ap_subst' g f e",
-                red: &["ap_subst_nat :≡ λ {A B C}. λ g f. λ {a a'}. λ e. \
-                                        Eq_Fun_nat' {B} {C} {g a} {g a'} (ap g e) (ap f e)"],
+                red: &["ap_subst_nat :≡ λ {A B C}. λ g f. λ {a a'}. λ e. ap2_nat g e (ap f e)"],
+            }),
+            ModuleInit::Def(DefInit {
+                sym: "ap_subst'' : Π {A B C : U}. Π g : A → B → C. Π f : A → B. Π {a a' : A}. Π e : a = a'. \
+                                   subst g f a = subst g f a'",
+                red: &["ap_subst'' :≡ λ {A B C}. λ g f. λ {a a'}. λ e. ap2'' g e (ap f e)"],
             }),
             ModuleInit::Def(DefInit {
                 sym: "ap_substd : Π {A : U}. Π {P : A → U}. Π {C : U}. \
@@ -1462,6 +1523,31 @@ pub fn get_mltt() -> MetaLogic {
                 red: &["ap_f_symm :≡ sorry6 _"],
             }),
             ModuleInit::Def(DefInit {
+                sym: "ap2 : Π {A B C : U}. Π f : A → B → C. \
+                            Π {a a' : A}. a = a' → Π {b b' : B}. b = b' → f a b = f a' b'",
+                red: &["ap2 :≡ λ {A B C}. λ f. λ {a a'}. λ ea. λ {b b'}. λ eb. \
+                               trans ((ap f ea) b) (ap (f a') eb)"],
+            }),
+            ModuleInit::Def(DefInit {
+                sym: "ap2' : Π {A B C : U}. Π f : A → B → C. \
+                             Π {a a' : A}. a = a' → Π {b b' : B}. b = b' → f a b = f a' b'",
+                red: &["ap2' :≡ λ {A B C}. λ f. λ {a a'}. λ ea. λ {b b'}. λ eb. \
+                                trans' (ap (f a) eb) ((ap f ea) b')"],
+            }),
+            ModuleInit::Def(DefInit {
+                sym: "ap2_nat : Π {A B C : U}. Π f : A → B → C. \
+                                Π {a a' : A}. Π ea : a = a'. Π {b b' : B}. Π eb : b = b'.
+                                ap2 f ea eb = ap2' f ea eb",
+                red: &["ap2_nat :≡ λ {A B C}. λ f. λ {a a'}. λ ea. λ {b b'}. λ eb. \
+                                   Eq_Fun_nat' (ap f ea) eb"],
+            }),
+            ModuleInit::Def(DefInit {
+                sym: "ap2'' : Π {A B C : U}. Π f : A → B → C. \
+                              Π {a a' : A}. a = a' → Π {b b' : B}. b = b' → f a b = f a' b'",
+                red: &["ap2'' :≡ λ {A B C}. λ f. λ {a a'}. λ ea. λ {b b'}. λ eb. \
+                                 congr (ap f ea) eb"],
+            }),
+            ModuleInit::Def(DefInit {
                 sym: "apd : Π {A : U}. Π {P : A → U}. Π f : Pi P. Π {a a' : A}. Π e : a = a'. f a =[ap P e] f a'",
                 red: &[
                     "∀ A B : U. apd {A} {const A B} :≡ ap {A} {B}", // See comment at `ap`.
@@ -1469,14 +1555,30 @@ pub fn get_mltt() -> MetaLogic {
                     "apd Pi :≡ Equiv_apd_Pi_1",
                     // TODO
                     // -- Combinators --
+                    "∀ {A B : U}. ∀ {Q : B → U}. ∀ g : Pi Q. ∀ f : A → B. \
+                     apd {A} {{λ a. Q (f a)}} (substd {A} {const A B} {const A Q} (const A g) f) :≡ \
+                     apd_compd g f",
                     "∀ {A : U}. ∀ {P : A → U}. ∀ {Q : (Π a : A. P a → U)}. ∀ g : Pi2d Q. ∀ f : Pi P. \
                      apd {A} {{λ a. Q a (f a)}} (substd g f) :≡ sorry7 _",
+                    /*"∀ {A B : U}. ∀ {Q : B → U}. ∀ g : Pi Q. \
+                     apd {A → B} {{λ f. Π a : A. Q (f a)}} (substd {A} {const A B} {const A Q} (const A g)) :≡ \
+                     λ {f f'}. λ e. λ a : A. apd g (e a)",
+                    "∀ {A : U}. ∀ {P : A → U}. ∀ {Q : (Π a : A. P a → U)}. ∀ g : Pi2d Q. \
+                     apd {Pi P} {{λ f. Π a : A. Q a (f a)}} (substd g) :≡ λ {f f'}. λ e. λ a : A. apd (g a) (e a)",
+                    "∀ {A : U}. ∀ P : A → U. ∀ Q : (Π a : A. P a → U). apd (substd {A} {P} {Q}) :≡ \
+                     λ {g g'}. λ e. λ f : Pi P. λ a : A. e a (f a)",*/
                     // TODO
                     // -- Other functions --
                     // TODO
                 ],
             }),
-            /*DefInit {
+            ModuleInit::Def(DefInit {
+                sym: "apd_compd : Π {A B : U}. Π {Q : B → U}. Π g : Pi Q. Π f : A → B. \
+                                  Π {a a' : A}. Π e : a = a'. \
+                                  compd g f a =[ap Q (ap f e)] compd g f a'",
+                red: &["apd_compd :≡ λ {A B Q}. λ g f. λ {a a'}. λ e. apd g (ap f e)"],
+            }),
+            /*ModuleInit::Def(DefInit {
                 sym: "apd_substd : Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. \
                                    Π g : Pi2d Q. Π f : Pi P. Π {a a' : A}. Π e : a = a'. \
                                    substd g f a =[] substd g f a'",
@@ -1982,6 +2084,24 @@ mod tests {
 
     fn test_reduction_rule_types(mltt: &MetaLogic) -> Result<()> {
         mltt.check_reduction_rule_types()
+    }
+
+    #[test]
+    fn test_confluence_related_reductions() -> Result<()> {
+        let mltt = get_mltt();
+        let root_ctx = mltt.get_root_context();
+
+        let mut congr_assoc_left = mltt.parse_expr(
+            "λ {A B C : U}. λ {g g' : B → C}. λ eg : g = g'. \
+             λ {f f' : A → B}. λ ef : f = f'. \
+             λ {a a' : A}. λ ea : a = a'. \
+             congr {A} {C} {comp g f} {comp g' f'} \
+                   (congr (λ f : A → B. λ a : A. eg (f a)) ef) ea",
+        )?;
+        congr_assoc_left.reduce_all(&root_ctx)?;
+        assert_eq!(congr_assoc_left.print(&root_ctx), "TODO");
+
+        Ok(())
     }
 
     #[test]

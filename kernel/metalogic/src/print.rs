@@ -140,7 +140,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 if let Expr::Var(Var(type_idx)) = param.type_expr {
                     let type_param = self.context.get_var(type_idx);
                     let type_name = self.context.get_display_name(type_param);
-                    if type_name.len() == 1 && type_name.starts_with(|c| c >= 'A' && c <= 'H') {
+                    if type_name.len() == 1 && type_name.starts_with(|c| ('A'..'I').contains(&c)) {
                         name_str = type_name.to_lowercase();
                         name = self.context.intern_name(&name_str);
                     }
@@ -244,7 +244,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     output: self.output,
                     context: body_ctx,
                 };
-                body_printing_ctx.print_expr(&body)
+                body_printing_ctx.print_expr(body)
             })
         } else {
             self.output.write_str("; ")?;
@@ -272,7 +272,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             self.output.write_char(' ')?;
             self.print_param(param)?;
             self.output.write_str(". ")?;
-            self.context.with_local(&param, |rest_ctx| {
+            self.context.with_local(param, |rest_ctx| {
                 let mut rest_printing_ctx = PrintingContext {
                     output: self.output,
                     context: rest_ctx,
