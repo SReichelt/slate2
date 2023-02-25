@@ -39,10 +39,6 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "Empty_elim : Π A : U. Empty → A",
                         red: &[],
                     }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Empty_isProp : IsProp Empty",
-                        red: &["Empty_isProp :≡ λ a : Empty. Empty_elim (Π b : Empty. a = b) a"],
-                    }),
                 ],
             },
             ModuleInit::Type {
@@ -54,16 +50,6 @@ pub fn get_mltt() -> MetaLogic {
                     ModuleInit::Def(DefInit {
                         sym: "unit : Unit",
                         red: &[],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Unit_isProp : IsProp Unit",
-                        red: &["Unit_isProp :≡ λ _ _ : Unit. unit"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Unit_isContr : IsContr Unit",
-                        red: &["Unit_isContr :≡ Sigma_intro (λ a : Unit. Π b : Unit. a = b) \
-                                                            unit \
-                                                            (λ _ : Unit. unit)"],
                     }),
                 ],
             },
@@ -587,140 +573,6 @@ pub fn get_mltt() -> MetaLogic {
                                        Π {a a' : A}. Π ea : a = a'. f a =[ap P ea] g a'",
                         red: &["congrd :≡ λ {A P f g}. λ efg. λ {a a'}. λ ea. \
                                           arbitrary (Eq_Pi_nat efg ea)"],
-                    }),
-                ],
-            },
-            ModuleInit::Type {
-                ctor: DefInit {
-                    sym: "IsUnique : Π {A : U}. A → U",
-                    red: &["IsUnique :≡ λ {A}. λ a. Π b : A. a = b"],
-                },
-                defs: &[
-                    ModuleInit::Def(DefInit {
-                        sym: "IsUnique_isProp : Π {A : U}. IsProp A → Π a : A. IsProp (IsUnique a)",
-                        red: &["IsUnique_isProp :≡ λ {A}. λ h a. sorry _"],
-                    }),
-                ],
-            },
-            ModuleInit::Type {
-                ctor: DefInit {
-                    sym: "IsProp : U → U",
-                    red: &["IsProp :≡ λ A. Pi (IsUnique {A})"],
-                },
-                defs: &[
-                    ModuleInit::Def(DefInit {
-                        sym: "IsProp_to_IsSet : Π A : U. IsProp A → IsSet A",
-                        red: &["IsProp_to_IsSet :≡ λ A h. sorry _"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "IsProp_isProp : Π A : U. IsProp (IsProp A)",
-                        red: &["IsProp_isProp :≡ λ A. sorry _"],
-                    }),
-                ],
-            },
-            ModuleInit::Type {
-                ctor: DefInit {
-                    sym: "IsSet : U → U",
-                    red: &["IsSet :≡ λ A. Π a b : A. IsProp (a = b)"],
-                },
-                defs: &[
-                    ModuleInit::Def(DefInit {
-                        sym: "IsSet_isProp : Π A : U. IsProp (IsSet A)",
-                        red: &["IsSet_isProp :≡ λ A. sorry _"],
-                    }),
-                ],
-            },
-            ModuleInit::Type {
-                ctor: DefInit {
-                    sym: "IsContr : U → U",
-                    red: &["IsContr :≡ λ A. Sigma (IsUnique {A})"],
-                },
-                defs: &[
-                    ModuleInit::Def(DefInit {
-                        sym: "IsContr_center : Π {A : U}. IsContr A → A",
-                        red: &["IsContr_center :≡ λ {A}. Sigma_fst {A} {IsUnique {A}}"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "IsContr_unique : Π {A : U}. Π h : IsContr A. IsUnique (IsContr_center h)",
-                        red: &["IsContr_unique :≡ λ {A}. Sigma_snd {A} {IsUnique {A}}"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "IsContr_to_IsProp : Π A : U. IsContr A → IsProp A",
-                        red: &["IsContr_to_IsProp :≡ λ A h. \
-                                                     λ a b : A. trans {A} {a} {IsContr_center h} {b} \
-                                                                      (symm (IsContr_unique h a)) \
-                                                                      (IsContr_unique h b)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "IsContr_isProp : Π A : U. IsProp (IsContr A)",
-                        red: &["IsContr_isProp :≡ λ A. sorry _"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "IsContr_eq_Eq_Unit : Π A : U. IsContr A = (A = Unit)",
-                        red: &["IsContr_eq_Eq_Unit :≡ λ A. sorry _"],
-                    }),
-                ],
-            },
-            ModuleInit::Type {
-                ctor: DefInit {
-                    sym: "ContrSigma : Π {A : U}. (A → U) → U",
-                    red: &["ContrSigma :≡ λ {A}. λ P. IsContr (Sigma P)"],
-                },
-                defs: &[
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_intro : Π {A : U}. Π P : A → U. Π a : A. Π b : P a. \
-                                                 Π ha : (Π a' : A. P a' → a = a'). \
-                                                 (Π a' : A. Π b' : P a'. b =[ap P (ha a' b')] b') → \
-                                                 ContrSigma P",
-                        red: &["ContrSigma_intro :≡ λ {A}. λ P a b ha hb. \
-                                                    Sigma_intro (IsUnique {Sigma P}) \
-                                                                (Sigma_intro P a b) \
-                                                                (λ p' : Sigma P. \
-                                                                 Sigma_intro (λ e : a = Sigma_fst p'. b =[ap P e] Sigma_snd p') \
-                                                                             (ha (Sigma_fst p') (Sigma_snd p')) \
-                                                                             (hb (Sigma_fst p') (Sigma_snd p')))"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_fst : Π {A : U}. Π {P : A → U}. ContrSigma P → A",
-                        red: &["ContrSigma_fst :≡ λ {A P}. λ h. Sigma_fst {A} {P} (IsContr_center h)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_snd : Π {A : U}. Π {P : A → U}. Π h : ContrSigma P. P (ContrSigma_fst h)",
-                        red: &["ContrSigma_snd :≡ λ {A P}. λ h. Sigma_snd {A} {P} (IsContr_center h)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_unique_fst : Π {A : U}. Π {P : A → U}. Π h : ContrSigma P. Π a : A. P a → \
-                                                      ContrSigma_fst h = a",
-                        red: &["ContrSigma_unique_fst :≡ λ {A P}. λ h a b. \
-                                                         Sigma_fst {ContrSigma_fst h = a} \
-                                                                   {λ e : ContrSigma_fst h = a. ContrSigma_snd h =[ap P e] b} \
-                                                                   (IsContr_unique h (Sigma_intro P a b))"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_unique_snd : Π {A : U}. Π {P : A → U}. Π h : ContrSigma P. Π a : A. Π b : P a. \
-                                                      ContrSigma_snd h =[ap P (ContrSigma_unique_fst h a b)] b",
-                        red: &["ContrSigma_unique_snd :≡ λ {A P}. λ h a b. \
-                                                         Sigma_snd {ContrSigma_fst h = a} \
-                                                                   {λ e : ContrSigma_fst h = a. ContrSigma_snd h =[ap P e] b} \
-                                                                   (IsContr_unique h (Sigma_intro P a b))"],
-                    }),
-                    /*ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_isProp : Π {A : U}. Π P : A → U. IsProp (ContrSigma P)",
-                        red: &["ContrSigma_isProp :≡ λ {A}. λ P. IsContr_isProp (Sigma P)"],
-                    }),*/
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_Eq : Π {A : U}. Π a : A. ContrSigma (Eq a)",
-                        red: &["ContrSigma_Eq :≡ λ {A}. λ a. \
-                                                 ContrSigma_intro (Eq a) a (refl a) \
-                                                                  (λ b : A. λ e : a = b. e) \
-                                                                  (λ b : A. λ e : a = b. trans'_refl e)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "ContrSigma_swap_Eq : Π {A : U}. Π a : A. ContrSigma ((Rel_swap (Eq {A})) a)",
-                        red: &["ContrSigma_swap_Eq :≡ λ {A}. λ a. \
-                                                      ContrSigma_intro ((Rel_swap (Eq {A})) a) a (refl a) \
-                                                                       (λ b : A. λ e : b = a. symm e) \
-                                                                       (λ b : A. λ e : b = a. symm (trans_1_symm e))"],
                     }),
                 ],
             },
