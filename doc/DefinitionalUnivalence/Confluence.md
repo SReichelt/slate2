@@ -17,7 +17,8 @@ dependent equality where it does not hold.
 The third property is more or less unavoidable if dependent equality is defined as the relation
 underlying type equivalence, as `symm` on a type equivalence will always swap the relation. A
 "one-sided" definition of dependent equality breaks the property but results in suboptimal terms,
-and may also cause confluence problems on its own.
+and may also cause confluence problems on its own. A conditionally reducing definition of dependent
+equality can solve it.
 
 Giving up the first seems reasonable, but potentially leads to confluence problems with the constant
 combinator (see below); its definition of `ap` probably needs to reduce to an `arbitrary` value
