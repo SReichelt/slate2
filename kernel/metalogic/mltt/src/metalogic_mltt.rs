@@ -514,20 +514,32 @@ pub fn get_mltt() -> MetaLogic {
                     ModuleInit::Def(DefInit {
                         sym: "trans_2_symm : Π {A : U}. Π {a b : A}. Π e : a = b. trans e (symm e) = refl a",
                         red: &[
-                            "trans_2_symm {U} :≡ λ {A B}. λ e. sorry _",
+                            "trans_2_symm {U} :≡ λ {A B}. λ e. sorry1 _",
                             "trans_2_symm {Unit} :≡ λ {_ _}. λ _. unit",
-                            "∀ {A : U}. ∀ P : A → U. trans_2_symm {Pi P} :≡ λ {f g}. λ e. \
-                                                                            λ a : A. trans_2_symm (e a)",
-                            "∀ {A : U}. ∀ P : A → U. trans_2_symm {Sigma P} :≡ λ {p q}. λ e. sorry _",
-                            "∀ A B : U. trans_2_symm {A = B} :≡ \
-                                        λ {e f}. trans_2_symm {A → B → U} {Eqd e} {Eqd f}",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             trans_2_symm {Pi P} :≡ λ {f g}. λ e. λ a : A. trans_2_symm (e a)",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             trans_2_symm {Sigma P} :≡ λ {p q}. λ e. sorry1 _",
+                            "∀ A B : U. \
+                             trans_2_symm {A = B} :≡ λ {e f}. trans_2_symm {A → B → U} {Eqd e} {Eqd f}",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans_assoc : Π {A : U}. Π {a b c d : A}. \
                                             Π e : a = b. Π f : b = c. Π g : c = d. \
                                             trans (trans e f) g = trans e (trans f g)",
-                        red: &["trans_assoc :≡ sorry _"],
+                        red: &[
+                            "trans_assoc {U} :≡ λ {A B C D}. λ e f g. sorry1 _",
+                            "trans_assoc {Unit} :≡ λ {_ _ _ _}. λ _ _ _. unit",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             trans_assoc {Pi P} :≡ λ {f g h i}. λ efg egh ehi. \
+                                                   λ a : A. trans_assoc (efg a) (egh a) (ehi a)",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             trans_assoc {Sigma P} :≡ λ {p q r s}. λ epq eqr ers. sorry1 _",
+                            "∀ A B : U. \
+                             trans_assoc {A = B} :≡ \
+                             λ {e f g h}. trans_assoc {A → B → U} {Eqd e} {Eqd f} {Eqd g} {Eqd h}",
+                        ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans3 : Π {A : U}. Π {a b c d : A}. a = b → b = c → c = d → a = d",
