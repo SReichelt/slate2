@@ -771,7 +771,7 @@ pub fn get_mltt() -> MetaLogic {
                                           Sigma_snd q) \
                                          (right (Sigma_fst e)) \
                                          (rightd {P (Sigma_fst p)} {P (Sigma_fst q)} {ap P (Sigma_fst e)} \
-                                                {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))",
+                                                 {Sigma_snd p} {Sigma_snd q} (Sigma_snd e))",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -783,6 +783,12 @@ pub fn get_mltt() -> MetaLogic {
                                          P (mid e)",
                         red: &["mid_elim :≡ λ {A a b}. λ e P ha hb. \
                                             midd {P a} {P b} {ap P e} {ha} {hb}"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "mid_eq : Π {A : U}. Π {a b : A}. Π e : a = b. \
+                                       Π c : A. Π ha : c = a. Π hb : c = b. ha =[trans_1_eq c e] hb → \
+                                       c = mid e",
+                        red: &["mid_eq :≡ λ {A a b}. λ e c. mid_elim e (Eq c)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Eq_Fun_nat : Π {A B : U}. Π {f g : A → B}. Π efg : f = g. \
@@ -885,6 +891,7 @@ pub fn get_mltt() -> MetaLogic {
                              transd (symmd (leftd e)) (rightd e) :≡ e",
                             "∀ {A B : U}. ∀ {eAB : A = B}. ∀ {a : A}. ∀ {b : B}. ∀ e : a =[eAB] b. \
                              transd (symmd (rightd e)) (leftd e) :≡ symmd e",
+                            // TODO: Reduce to a proof in the general case? (Must be confluent then.)
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -944,6 +951,7 @@ pub fn get_mltt() -> MetaLogic {
                              symmd (transd e f) :≡ transd (symmd f) (symmd e)",
                             "∀ {A B : U}. ∀ {eAB : A = B}. ∀ {a : A}. ∀ {b : B}. ∀ e : a =[eAB] b. \
                              symmd (symmd e) :≡ e",
+                            // TODO: Reduce to a proof in the general case?
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -951,32 +959,16 @@ pub fn get_mltt() -> MetaLogic {
                                          (a =[eAB] b) = (b =[symm eAB] a)",
                         red: &[],
                     }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Eqd_mid_eq : Π {A B : U}. Π eAB : A = B. Π a : A. Π b : B. \
-                                           (a =[eAB] b) = mid (to_inv_congr eAB a b)",
-                        red: &["Eqd_mid_eq :≡ λ {A B}. λ eAB a b. sorry2 _"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Eqd_elim : Π {A B : U}. Π eAB : A = B. Π a : A. Π b : B. Π P : U → U. \
-                                         Π hTo : P (to eAB a = b). Π hInv : P (a = inv eAB b). \
-                                         hTo =[ap P (to_inv_congr eAB a b)] hInv → P (a =[eAB] b)",
-                        red: &["Eqd_elim :≡ λ {A B}. λ eAB a b P hTo hInv i. \
-                                            ap_rl P (Eqd_mid_eq eAB a b) \
-                                                  (mid_elim (to_inv_congr eAB a b) P hTo hInv i)"],
-                    }),
+                    // TODO: Prove by cases.
                     ModuleInit::Def(DefInit {
                         sym: "Eqd_to_eq_eq : Π {A B : U}. Π eAB : A = B. Π a : A. Π b : B. \
                                              (a =[eAB] b) = (to eAB a = b)",
-                        red: &["Eqd_to_eq_eq :≡ λ {A B}. λ eAB a b. \
-                                                trans (Eqd_mid_eq eAB a b) \
-                                                      (left (to_inv_congr eAB a b))"],
+                        red: &["Eqd_to_eq_eq :≡ sorry2 _"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Eqd_inv_eq_eq : Π {A B : U}. Π eAB : A = B. Π a : A. Π b : B. \
                                               (a =[eAB] b) = (a = inv eAB b)",
-                        red: &["Eqd_inv_eq_eq :≡ λ {A B}. λ eAB a b. \
-                                                 trans (Eqd_mid_eq eAB a b) \
-                                                       (right (to_inv_congr eAB a b))"],
+                        red: &["Eqd_inv_eq_eq :≡ sorry2 _"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Eqd_as_to_eq : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. \
@@ -1038,6 +1030,24 @@ pub fn get_mltt() -> MetaLogic {
                                                trans3 (symm (symmd_eq eAB a b)) \
                                                       h \
                                                       (symmd_eq eAB' a b)"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "Eqd_mid_eq : Π {A B : U}. Π eAB : A = B. Π a : A. Π b : B. \
+                                           (a =[eAB] b) = mid (to_inv_congr eAB a b)",
+                        red: &["Eqd_mid_eq :≡ λ {A B}. λ eAB a b. \
+                                              mid_eq (to_inv_congr eAB a b) \
+                                                     (a =[eAB] b) \
+                                                     (Eqd_to_eq_eq eAB a b) \
+                                                     (Eqd_inv_eq_eq eAB a b) \
+                                                     (sorry _)"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "Eqd_elim : Π {A B : U}. Π eAB : A = B. Π a : A. Π b : B. Π P : U → U. \
+                                         Π hTo : P (to eAB a = b). Π hInv : P (a = inv eAB b). \
+                                         hTo =[ap P (to_inv_congr eAB a b)] hInv → P (a =[eAB] b)",
+                        red: &["Eqd_elim :≡ λ {A B}. λ eAB a b P hTo hInv i. \
+                                            ap_rl P (Eqd_mid_eq eAB a b) \
+                                                  (mid_elim (to_inv_congr eAB a b) P hTo hInv i)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "midd : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. \
