@@ -1133,7 +1133,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Arg {
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
-        if self.match_all || target.match_all {
+        if self.match_all {
             return Ok(true);
         }
         self.expr
@@ -1150,7 +1150,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
-        if self.match_all || target.match_all {
+        if self.match_all {
             return Ok(true);
         }
         self.expr.substitute_and_shift_and_compare_impl(

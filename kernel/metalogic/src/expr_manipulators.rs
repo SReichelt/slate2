@@ -116,15 +116,16 @@ impl ExprManipulator for ImplicitArgInserter {
 pub struct PlaceholderFiller {
     pub max_reduction_depth: u32,
     pub force: bool,
+    pub match_var_ctx: Option<MinimalContext>,
     pub has_unfilled_placeholders: AtomicBool,
 }
 
 impl PlaceholderFiller {
     pub fn try_fill_placeholders(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<Expr> {
         let sub_filler = PlaceholderFiller {
-            max_reduction_depth: self.max_reduction_depth,
             force: false,
             has_unfilled_placeholders: AtomicBool::new(false),
+            ..*self
         };
         sub_filler.fill_placeholders(expr, Expr::Placeholder, ctx)
     }
@@ -282,7 +283,7 @@ impl PlaceholderFiller {
                     ctx,
                 )
             })? {
-                Self::apply_args(expr, args, ctx);
+                self.apply_args(expr, args, ctx);
                 //dbg!("applied", fun.print(ctx));
             } else {
                 return Ok(false);
@@ -330,8 +331,8 @@ impl PlaceholderFiller {
                         //dbg!(initial_arg_type.print(ctx));
                         let sub_filler = PlaceholderFiller {
                             max_reduction_depth: self.max_reduction_depth - 1,
-                            force: self.force,
                             has_unfilled_placeholders: AtomicBool::new(false),
+                            ..*self
                         };
                         let result = sub_filler.fill_arg_placeholders_in_fun(
                             fun,
@@ -421,6 +422,7 @@ impl PlaceholderFiller {
     }
 
     fn apply_args(
+        &self,
         mut expr: &mut Expr,
         mut args: SmallVec<[Expr; INLINE_PARAMS]>,
         ctx: &MetaLogicContext,
@@ -431,6 +433,18 @@ impl PlaceholderFiller {
                     if let Expr::App(value_app) = &mut value {
                         if let Some(beta_reduced) = value_app.beta_reduce(ctx) {
                             value = beta_reduced;
+                        }
+                    }
+                    if app.param.expr.is_empty() {
+                        if let Some(match_var_ctx) = &self.match_var_ctx {
+                            let is_match_var = if let Expr::Var(var) = &value {
+                                var.valid_in_superctx(&ctx.as_minimal(), match_var_ctx)
+                            } else {
+                                false
+                            };
+                            if !is_match_var {
+                                app.param.match_all = true;
+                            }
                         }
                     }
                     app.param.expr = value;

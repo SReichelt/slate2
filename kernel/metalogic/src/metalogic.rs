@@ -260,6 +260,7 @@ impl MetaLogic {
         let mut placeholder_filler = PlaceholderFiller {
             max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
             force: false,
+            match_var_ctx: None,
             has_unfilled_placeholders: AtomicBool::new(false),
         };
         self.manipulate_exprs(&placeholder_filler)?;
@@ -347,6 +348,7 @@ impl MetaLogic {
         let placeholder_filler = PlaceholderFiller {
             max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
             force: true,
+            match_var_ctx: None,
             has_unfilled_placeholders: AtomicBool::new(false),
         };
         let expr_type = placeholder_filler.fill_placeholders(expr, Expr::Placeholder, &root_ctx)?;

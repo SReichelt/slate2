@@ -1,6 +1,8 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::{anyhow, Result};
 
-use slate_kernel_generic::{context::*, context_object::ContextObject};
+use slate_kernel_generic::{context::*, expr_parts::*};
 
 use crate::{expr::*, expr_manipulators::*, metalogic::*, metalogic_context::*};
 
@@ -118,9 +120,40 @@ impl MetaLogicManipulator for PlaceholderFiller {
     }
 
     fn reduction_body(&self, body: &mut ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
-        let source_type = self.fill_placeholders(&mut body.source, Expr::Placeholder, ctx)?;
+        let source_manipulator = PlaceholderFiller {
+            force: false,
+            match_var_ctx: Some(ctx.as_minimal()),
+            has_unfilled_placeholders: AtomicBool::new(false),
+            ..*self
+        };
+        let mut source_type =
+            source_manipulator.fill_placeholders(&mut body.source, Expr::Placeholder, ctx)?;
+        if source_manipulator
+            .has_unfilled_placeholders
+            .load(Ordering::Relaxed)
+        {
+            source_type =
+                self.fill_placeholders(&mut body.source.clone(), Expr::Placeholder, ctx)?;
+        }
         self.fill_placeholders(&mut body.target, source_type, ctx)?;
         Ok(())
+    }
+}
+
+impl ReductionRuleArgReducer {
+    fn has_matchable_ref(expr: &Expr, var_idx: VarIndex) -> bool {
+        match expr {
+            Expr::Var(Var(idx)) => *idx == var_idx,
+            Expr::App(app) => {
+                Self::has_matchable_ref(&app.body, var_idx)
+                    || (!app.param.match_all && Self::has_matchable_ref(&app.param.expr, var_idx))
+            }
+            Expr::Lambda(lambda) => {
+                Self::has_matchable_ref(&lambda.param.type_expr, var_idx)
+                    || Self::has_matchable_ref(&lambda.body, var_idx - 1)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -132,12 +165,13 @@ impl MetaLogicManipulator for ReductionRuleArgReducer {
 
         let mut idx = -(rule.params.len() as VarIndex);
         for param in &rule.params {
-            let next_idx = idx + 1;
-            if !rule.body.source.has_refs_impl(idx, next_idx) {
+            if !Self::has_matchable_ref(&rule.body.source, idx) {
                 let name = ctx.get_display_name(param);
-                return Err(anyhow!("match expression does not reference «{name}»"));
+                return Err(anyhow!(
+                    "match expression does not reference «{name}» in a suitable way"
+                ));
             }
-            idx = next_idx;
+            idx += 1;
         }
 
         Ok(())
