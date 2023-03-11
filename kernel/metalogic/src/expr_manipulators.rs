@@ -65,17 +65,10 @@ impl ImplicitArgInserter {
                 let mut fun_type = self.insert_implicit_args_and_get_type(fun, ctx)?;
                 self.arg(arg, ctx)?;
                 while let Some(lambda) =
-                    fun_type.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx)
+                    fun_type.match_type_as_lambda(StandardTypeCtorKind::Pi, ctx)
                 {
                     if lambda.param.implicit && !arg.implicit {
-                        *fun = Expr::app(
-                            take(fun),
-                            Arg {
-                                expr: Expr::Placeholder,
-                                implicit: true,
-                                match_all: false,
-                            },
-                        );
+                        *fun = Expr::app(take(fun), Arg::implicit(Expr::Placeholder));
                         fun_type = lambda.apply(arg.clone(), ctx);
                     } else if arg.implicit && !lambda.param.implicit {
                         let name = ctx.get_display_name(&lambda.param);
@@ -91,7 +84,7 @@ impl ImplicitArgInserter {
                 ctx.with_local(&lambda.param, |body_ctx| {
                     let body_type =
                         self.insert_implicit_args_and_get_type(&mut lambda.body, body_ctx)?;
-                    Expr::get_fun_type(&lambda.param, body_type, ctx)
+                    Expr::get_fun_type(&lambda.param, body_type, ctx, body_ctx)
                 })
             }
         }
@@ -182,7 +175,20 @@ impl PlaceholderFiller {
                 let fun = &mut app.body;
                 let arg = &mut app.param;
 
+                //dbg!(
+                //    "start",
+                //    fun.print(ctx),
+                //    arg.expr.print(ctx),
+                //    expected_type.print(ctx),
+                //);
+
                 let initial_arg_type = self.try_fill_placeholders(&mut arg.expr, ctx)?;
+                //dbg!(
+                //    "arg",
+                //    fun.print(ctx),
+                //    arg.expr.print(ctx),
+                //    initial_arg_type.print(ctx),
+                //);
                 let initial_fun_type = self.fill_arg_placeholders_in_fun(
                     fun,
                     arg,
@@ -190,6 +196,12 @@ impl PlaceholderFiller {
                     initial_arg_type,
                     ctx,
                 )?;
+                //dbg!(
+                //    "fun",
+                //    fun.print(ctx),
+                //    arg.expr.print(ctx),
+                //    initial_fun_type.print(ctx),
+                //);
 
                 let fun_type_result = self.fill_inner_placeholders(fun, initial_fun_type, ctx);
                 // Report errors in arguments first, to better support the "underscore trick".
@@ -197,13 +209,6 @@ impl PlaceholderFiller {
                     Ok(fun_type) => (fun_type, Ok(())),
                     Err(err) => (self.try_fill_placeholders(fun, ctx)?, Err(err)),
                 };
-                //dbg!(
-                //    "start",
-                //    fun.print(ctx),
-                //    arg.expr.print(ctx),
-                //    expected_type.print(ctx),
-                //    initial_fun_type.print(ctx)
-                //);
                 let lambda = self.get_fun_type_lambda(&mut fun_type, arg.implicit, ctx)?;
                 //dbg!(
                 //    "fill arg placeholders",
@@ -218,7 +223,7 @@ impl PlaceholderFiller {
                 //    fun.print(ctx),
                 //    arg.expr.print(ctx),
                 //    fun_type.print(ctx),
-                //    arg_type.print(ctx),
+                //    lambda.param.type_expr.print(ctx),
                 //);
                 fun_type_err?;
                 Ok(lambda.apply(arg.clone(), ctx))
@@ -242,7 +247,7 @@ impl PlaceholderFiller {
                         expected_type_lambda.body,
                         body_ctx,
                     )?;
-                    Expr::get_fun_type(&lambda.param, body_type, ctx)
+                    Expr::get_fun_type(&lambda.param, body_type, ctx, body_ctx)
                 })
             }
         }
@@ -261,7 +266,7 @@ impl PlaceholderFiller {
         let mut params = SmallVec::new();
         let mut args = SmallVec::new();
         let mut has_unfilled_args = false;
-        let innermost_fun_type =
+        let result_type =
             self.analyze_app(expr, ctx, &mut params, &mut args, &mut has_unfilled_args)?;
 
         if has_unfilled_args {
@@ -269,23 +274,12 @@ impl PlaceholderFiller {
                 info!("unfilled arguments in last pass: {}", expr.print(ctx));
             }
 
-            if ctx.with_locals(&params, |ctx_with_params| {
-                //dbg!(
-                //    "apply",
-                //    fun.print(ctx),
-                //    innermost_fun_type.print(ctx_with_params),
-                //    expected_fun_type.print(ctx)
-                //);
-                innermost_fun_type.substitute_and_compare(
-                    ctx_with_params,
-                    &mut args,
-                    expected_type,
-                    ctx,
-                )
-            })? {
+            if Self::match_app_expected_type(expected_type, &result_type, ctx, &params, &mut args)?
+            {
                 self.apply_args(expr, args, ctx);
-                //dbg!("applied", fun.print(ctx));
+                //dbg!("applied", expr.print(ctx));
             } else {
+                //dbg!("compare fail", expr.print(ctx));
                 return Ok(false);
             }
         }
@@ -313,17 +307,6 @@ impl PlaceholderFiller {
 
         if has_arg_type {
             if !self.fill_arg_placeholders(fun, &mut initial_fun_type, ctx)? {
-                //dbg!(
-                //    "compare fail",
-                //    fun.print(ctx),
-                //    fun_params
-                //        .iter()
-                //        .map(|param| param.get_name_or_placeholder())
-                //        .collect::<Vec<&str>>(),
-                //    ctx.with_locals(&fun_params, |ctx_with_params| innermost_fun_type
-                //        .print(ctx_with_params)),
-                //    expected_fun_type.print(ctx)
-                //);
                 if self.max_reduction_depth > 0 {
                     //dbg!("reduce");
                     let mut initial_arg_type = self.try_fill_placeholders(&mut arg.expr, ctx)?;
@@ -366,7 +349,7 @@ impl PlaceholderFiller {
         let min_ctx = ctx.as_minimal();
         let mut expected_param = Param {
             name: None,
-            type_expr: initial_arg_type.clone(),
+            type_expr: initial_arg_type,
             implicit,
         };
         let expected_body_type = if let Expr::Lambda(lambda) = fun {
@@ -378,12 +361,9 @@ impl PlaceholderFiller {
         } else {
             Expr::Placeholder
         };
-        ctx.lambda_handler().get_dep_type(
-            initial_arg_type,
-            Expr::lambda(expected_param, expected_body_type),
-            DependentTypeCtorKind::Pi,
-            min_ctx,
-        )
+        ctx.with_local(&expected_param, |body_ctx| {
+            Expr::get_fun_type(&expected_param, expected_body_type, ctx, body_ctx)
+        })
     }
 
     /// Decomposes the type of the innermost function within `expr` (i.e. of the expression returned
@@ -419,6 +399,47 @@ impl PlaceholderFiller {
             // Skip unnecessary work if we don't have any arguments to fill.
             Ok(Expr::Placeholder)
         }
+    }
+
+    fn match_app_expected_type(
+        expected_type: &mut Expr,
+        result_type: &Expr,
+        ctx: &MetaLogicContext,
+        params: &SmallVec<[Param; INLINE_PARAMS]>,
+        args: &mut SmallVec<[Expr; INLINE_PARAMS]>,
+    ) -> Result<bool> {
+        ctx.with_locals(params, |ctx_with_params| {
+            //dbg!(
+            //    "apply",
+            //    expr.print(ctx),
+            //    params
+            //        .iter()
+            //        .map(|param| ctx.get_display_name(param))
+            //        .collect::<Vec<&str>>(),
+            //    result_type.print(ctx_with_params),
+            //    expected_type.print(ctx),
+            //);
+
+            // When the expected type is a function type with known domain but unknown prop/codomain, we
+            // declare it as a dependent function type, but the actual function type may be independent.
+            // Adapt the expected type in that case, to make the match operation succeed.
+            if let Some((expected_domain, _)) =
+                expected_type.match_dep_type(StandardTypeCtorKind::Pi, ctx)
+            {
+                if result_type
+                    .match_indep_type(StandardTypeCtorKind::Pi, ctx_with_params)
+                    .is_some()
+                {
+                    *expected_type = ctx.config().get_indep_type(
+                        expected_domain.clone(),
+                        Expr::Placeholder,
+                        StandardTypeCtorKind::Pi,
+                    )?;
+                }
+            }
+
+            result_type.substitute_and_compare(ctx_with_params, args, expected_type, ctx)
+        })
     }
 
     fn apply_args(
@@ -463,9 +484,7 @@ impl PlaceholderFiller {
         ctx: &MetaLogicContext,
     ) -> Result<LambdaExpr> {
         fun_type.reduce(ctx, true, self.max_reduction_depth as i32)?;
-        if let Some(lambda) =
-            fun_type.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx)
-        {
+        if let Some(lambda) = fun_type.match_type_as_lambda(StandardTypeCtorKind::Pi, ctx) {
             Ok(lambda)
         } else {
             Ok(LambdaExpr {
@@ -536,7 +555,7 @@ impl ExprManipulator for PlaceholderFiller {
     }
 
     fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
-        let expected_type = ctx.lambda_handler().get_universe_type()?;
+        let expected_type = ctx.config().universe_type.clone();
         self.fill_placeholders(&mut param.type_expr, expected_type, ctx)?;
         Ok(())
     }

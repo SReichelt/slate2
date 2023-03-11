@@ -15,16 +15,13 @@ pub enum ModuleInit<'a> {
 }
 
 impl MetaLogic {
-    pub fn construct_semantically<F>(
-        modules_init: &[ModuleInit],
-        create_lambda_handler: F,
-    ) -> Result<Self>
+    pub fn construct_semantically<F>(modules_init: &[ModuleInit], get_config: F) -> Result<Self>
     where
-        F: FnOnce(&HashMap<&str, VarIndex>) -> Box<dyn LambdaHandler>,
+        F: FnOnce(&HashMap<&str, VarIndex>) -> MetaLogicConfig,
     {
         let mut constants_init: Vec<Cow<DefInit>> = Vec::new();
         Self::add_modules(modules_init, &mut constants_init);
-        Self::construct(&constants_init, create_lambda_handler)
+        Self::construct(&constants_init, get_config)
     }
 
     fn add_modules<'a>(

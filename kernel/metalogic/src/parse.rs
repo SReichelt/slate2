@@ -34,12 +34,10 @@ impl ParsingContext<'_, '_, '_> {
         let mut expr = self.parse_prod()?;
         if self.input.try_read_char('→') {
             let codomain = self.parse_expr()?;
-            expr = self.context.lambda_handler().get_indep_type(
-                expr,
-                codomain,
-                DependentTypeCtorKind::Pi,
-                self.context.as_minimal(),
-            )?;
+            expr =
+                self.context
+                    .config()
+                    .get_indep_type(expr, codomain, StandardTypeCtorKind::Pi)?;
         }
         Ok(expr)
     }
@@ -48,12 +46,10 @@ impl ParsingContext<'_, '_, '_> {
         let mut expr = self.parse_eq()?;
         if self.input.try_read_char('×') {
             let right = self.parse_eq()?;
-            expr = self.context.lambda_handler().get_indep_type(
-                expr,
-                right,
-                DependentTypeCtorKind::Sigma,
-                self.context.as_minimal(),
-            )?;
+            expr =
+                self.context
+                    .config()
+                    .get_indep_type(expr, right, StandardTypeCtorKind::Sigma)?;
         }
         Ok(expr)
     }
@@ -75,22 +71,19 @@ impl ParsingContext<'_, '_, '_> {
                     self.input.read_char('}')?;
                 }
                 let right = self.parse_app()?;
-                expr = self.context.lambda_handler().get_dep_eq_type(
+                expr = self.context.config().get_dep_eq_type(
                     domain,
                     right_domain,
                     domain_eq,
                     expr,
                     right,
-                    self.context.as_minimal(),
                 )?;
             } else {
                 let right = self.parse_app()?;
-                expr = self.context.lambda_handler().get_indep_eq_type(
-                    domain,
-                    expr,
-                    right,
-                    self.context.as_minimal(),
-                )?;
+                expr = self
+                    .context
+                    .config()
+                    .get_indep_eq_type(domain, expr, right)?;
             }
         }
         Ok(expr)
@@ -124,15 +117,15 @@ impl ParsingContext<'_, '_, '_> {
                 };
                 body_parsing_ctx.parse_expr()
             })?;
-            Ok(Some(Expr::let_binding(params, args, body)))
+            Ok(Some(Expr::dyn_let_binding(params, args, body)))
         } else if self.input.try_read_char('λ') {
             let (params, body) = self.parse_lambda()?;
-            Ok(Some(Expr::multi_lambda(params, body)))
+            Ok(Some(Expr::dyn_multi_lambda(params, body)))
         } else if self.input.try_read_char('Π') {
-            let expr = self.parse_dep_type(DependentTypeCtorKind::Pi)?;
+            let expr = self.parse_dep_type(StandardTypeCtorKind::Pi)?;
             Ok(Some(expr))
         } else if self.input.try_read_char('Σ') {
-            let expr = self.parse_dep_type(DependentTypeCtorKind::Sigma)?;
+            let expr = self.parse_dep_type(StandardTypeCtorKind::Sigma)?;
             Ok(Some(expr))
         } else if let Some(name) = self.input.try_read_name() {
             if name == "_" {
@@ -305,7 +298,7 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn parse_dep_type(&mut self, kind: DependentTypeCtorKind) -> Result<Expr> {
+    fn parse_dep_type(&mut self, kind: StandardTypeCtorKind) -> Result<Expr> {
         let (mut params, body) = self.parse_lambda()?;
         self.create_multi_dep_type(&mut params, body, kind, self.context.as_minimal())
     }
@@ -314,7 +307,7 @@ impl ParsingContext<'_, '_, '_> {
         &self,
         params: &mut [Param],
         body: Expr,
-        kind: DependentTypeCtorKind,
+        kind: StandardTypeCtorKind,
         ctx: MinimalContext,
     ) -> Result<Expr> {
         if let Some((param, rest_params)) = params.split_first_mut() {
@@ -323,9 +316,7 @@ impl ParsingContext<'_, '_, '_> {
             })?;
             let domain = param.type_expr.clone();
             let prop = Expr::lambda(take(param), rest);
-            self.context
-                .lambda_handler()
-                .get_dep_type(domain, prop, kind, ctx)
+            self.context.config().get_dep_type(domain, prop, kind)
         } else {
             Ok(body)
         }

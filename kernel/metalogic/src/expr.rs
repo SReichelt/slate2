@@ -31,27 +31,16 @@ impl Expr {
         }))
     }
 
-    pub fn explicit_app(fun: Expr, arg: Expr) -> Self {
-        Self::app(
-            fun,
-            Arg {
-                expr: arg,
-                implicit: false,
-                match_all: false,
-            },
-        )
-    }
-
-    pub fn multi_app(mut fun: Expr, args: SmallVec<[Arg; INLINE_PARAMS]>) -> Self {
+    pub fn multi_app<const LEN: usize>(mut fun: Expr, args: [Arg; LEN]) -> Self {
         for arg in args {
             fun = Self::app(fun, arg);
         }
         fun
     }
 
-    pub fn explicit_multi_app(mut fun: Expr, args: SmallVec<[Expr; INLINE_PARAMS]>) -> Self {
+    pub fn dyn_multi_app<const LEN: usize>(mut fun: Expr, args: SmallVec<[Arg; LEN]>) -> Self {
         for arg in args {
-            fun = Self::explicit_app(fun, arg);
+            fun = Self::app(fun, arg);
         }
         fun
     }
@@ -64,18 +53,21 @@ impl Expr {
         }
     }
 
-    pub fn multi_apply(mut self, args: SmallVec<[Arg; INLINE_PARAMS]>, ctx: &impl Context) -> Self {
-        for arg in args {
-            self = Self::apply(self, arg, ctx);
-        }
-        self
-    }
-
     pub fn lambda(param: Param, body: Expr) -> Self {
         Expr::Lambda(Box::new(Lambda { param, body }))
     }
 
-    pub fn multi_lambda(params: SmallVec<[Param; INLINE_PARAMS]>, mut body: Expr) -> Self {
+    pub fn multi_lambda<const LEN: usize>(params: [Param; LEN], mut body: Expr) -> Self {
+        for param in params.into_iter().rev() {
+            body = Self::lambda(param, body);
+        }
+        body
+    }
+
+    pub fn dyn_multi_lambda<const LEN: usize>(
+        params: SmallVec<[Param; LEN]>,
+        mut body: Expr,
+    ) -> Self {
         for param in params.into_iter().rev() {
             body = Self::lambda(param, body);
         }
@@ -92,12 +84,20 @@ impl Expr {
         Self::lambda(param, body)
     }
 
-    pub fn let_binding(
-        params: SmallVec<[Param; INLINE_PARAMS]>,
-        args: SmallVec<[Arg; INLINE_PARAMS]>,
+    pub fn let_binding<const LEN: usize>(
+        params: [Param; LEN],
+        args: [Arg; LEN],
         body: Expr,
     ) -> Self {
         Expr::multi_app(Expr::multi_lambda(params, body), args)
+    }
+
+    pub fn dyn_let_binding<const LEN: usize>(
+        params: SmallVec<[Param; LEN]>,
+        args: SmallVec<[Arg; LEN]>,
+        body: Expr,
+    ) -> Self {
+        Expr::dyn_multi_app(Expr::dyn_multi_lambda(params, body), args)
     }
 
     pub fn is_small(&self) -> bool {
@@ -371,104 +371,88 @@ impl Expr {
         Ok(None)
     }
 
-    pub fn match_expr_1<Ctx: ComparisonContext>(
-        &self,
-        ctx: &Ctx,
-        match_param: Param,
-        match_expr: &Expr,
-    ) -> Result<Option<Expr>> {
-        if let Some(mut result_vec) = self.match_expr(ctx, &[match_param], match_expr)? {
-            Ok(result_vec.pop())
+    pub fn match_app<const LEN: usize>(&self, match_fun: &Expr) -> Option<[&Expr; LEN]> {
+        let mut result = [self; LEN];
+        let mut expr = self;
+        for i in (0..LEN).rev() {
+            if let Expr::App(app) = expr {
+                expr = &app.body;
+                result[i] = &app.param.expr;
+            } else {
+                return None;
+            }
+        }
+        if expr == match_fun {
+            Some(result)
         } else {
-            Ok(None)
+            None
         }
     }
 
-    pub fn match_expr_2<Ctx: ComparisonContext>(
-        &self,
-        ctx: &Ctx,
-        match_param_1: Param,
-        match_param_2: Param,
-        match_expr: &Expr,
-    ) -> Result<Option<(Expr, Expr)>> {
-        if let Some(mut result_vec) =
-            self.match_expr(ctx, &[match_param_1, match_param_2], match_expr)?
-        {
-            let result_2 = result_vec.pop().unwrap();
-            let result_1 = result_vec.pop().unwrap();
-            Ok(Some((result_1, result_2)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn get_fun_type(param: &Param, body_type: Expr, ctx: &MetaLogicContext) -> Result<Expr> {
-        let prop = Expr::lambda(param.clone(), body_type);
-        ctx.lambda_handler().get_dep_type(
-            param.type_expr.clone(),
-            prop,
-            DependentTypeCtorKind::Pi,
-            ctx.as_minimal(),
-        )
-    }
-
-    pub fn match_generic_indep_type(
-        &self,
-        kind: DependentTypeCtorKind,
+    pub fn get_fun_type(
+        param: &Param,
+        mut body_type: Expr,
         ctx: &MetaLogicContext,
-    ) -> Option<(Expr, Expr)> {
+        body_ctx: &MetaLogicContext,
+    ) -> Result<Expr> {
+        if !param.implicit && !body_type.is_empty() && body_type.valid_in_superctx(body_ctx, ctx) {
+            body_type.shift_to_supercontext(body_ctx, ctx);
+            ctx.config().get_indep_type(
+                param.type_expr.clone(),
+                body_type,
+                StandardTypeCtorKind::Pi,
+            )
+        } else {
+            let prop = Expr::lambda(param.clone(), body_type);
+            ctx.config()
+                .get_dep_type(param.type_expr.clone(), prop, StandardTypeCtorKind::Pi)
+        }
+    }
+
+    pub fn match_indep_type(
+        &self,
+        kind: StandardTypeCtorKind,
+        ctx: &MetaLogicContext,
+    ) -> Option<(&Expr, &Expr)> {
         if *self != Expr::Placeholder {
-            let min_ctx = ctx.as_minimal();
-            if let Ok((domain_param, codomain_param, generic_indep_type)) =
-                ctx.lambda_handler().get_generic_indep_type(kind, min_ctx)
-            {
-                if let Ok(Some((domain, codomain))) =
-                    self.match_expr_2(&min_ctx, domain_param, codomain_param, &generic_indep_type)
-                {
-                    // If the codomain is a placeholder, we don't really know whether this should
-                    // be a dependent type instead.
-                    if !codomain.is_empty() {
-                        return Some((domain, codomain));
-                    }
+            if let Some(ctor) = ctx.config().get_indep_ctor(kind) {
+                if let Some([domain, codomain]) = self.match_app(ctor) {
+                    return Some((domain, codomain));
                 }
             }
         }
         None
     }
 
-    pub fn match_generic_dep_type(
+    pub fn match_dep_type(
         &self,
-        kind: DependentTypeCtorKind,
+        kind: StandardTypeCtorKind,
         ctx: &MetaLogicContext,
-    ) -> Option<(Expr, Expr)> {
+    ) -> Option<(&Expr, &Expr)> {
         if *self != Expr::Placeholder {
-            let min_ctx = ctx.as_minimal();
-            if let Ok((domain_param, prop_param, generic_dep_type)) =
-                ctx.lambda_handler().get_generic_dep_type(kind, min_ctx)
-            {
-                if let Ok(result) =
-                    self.match_expr_2(&min_ctx, domain_param, prop_param, &generic_dep_type)
-                {
-                    return result;
+            if let Some(ctor) = ctx.config().get_dep_ctor(kind) {
+                if let Some([domain, prop]) = self.match_app(ctor) {
+                    return Some((domain, prop));
                 }
             }
         }
         None
     }
 
-    pub fn match_generic_dep_type_as_lambda(
+    pub fn match_dep_type_as_lambda(
         &self,
-        kind: DependentTypeCtorKind,
+        kind: StandardTypeCtorKind,
         convert_to_lambda: bool,
         ctx: &MetaLogicContext,
     ) -> Option<LambdaExpr> {
-        if let Some((domain, mut prop)) = self.match_generic_dep_type(kind, ctx) {
+        if let Some((domain, prop)) = self.match_dep_type(kind, ctx) {
             if let Expr::Lambda(lambda) = prop {
-                return Some(*lambda);
+                return Some((**lambda).clone());
             } else if convert_to_lambda {
+                let mut prop = prop.clone();
                 let param = Param {
                     name: None,
-                    type_expr: domain,
+                    type_expr: domain.clone(),
                     implicit: false,
                 };
                 ctx.with_local(&param, |subctx| {
@@ -476,8 +460,59 @@ impl Expr {
                 });
                 return Some(Lambda {
                     param,
-                    body: Expr::explicit_app(prop, Expr::var(-1)),
+                    body: Expr::app(prop, Arg::explicit(Expr::var(-1))),
                 });
+            }
+        }
+        None
+    }
+
+    pub fn match_type_as_lambda(
+        &self,
+        kind: StandardTypeCtorKind,
+        ctx: &MetaLogicContext,
+    ) -> Option<LambdaExpr> {
+        if let Some((domain, codomain)) = self.match_indep_type(kind, ctx) {
+            let mut codomain = codomain.clone();
+            let param = Param {
+                name: None,
+                type_expr: domain.clone(),
+                implicit: false,
+            };
+            ctx.with_local(&param, |subctx| {
+                codomain.shift_to_subcontext(ctx, subctx);
+            });
+            return Some(Lambda {
+                param,
+                body: codomain,
+            });
+        }
+
+        self.match_dep_type_as_lambda(kind, true, ctx)
+    }
+
+    pub fn match_indep_eq_type(&self, ctx: &MetaLogicContext) -> Option<(&Expr, &Expr, &Expr)> {
+        if *self != Expr::Placeholder {
+            if let Some(ctor) = &ctx.config().eq_ctor {
+                if let Some([domain, left, right]) = self.match_app(ctor) {
+                    return Some((domain, left, right));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn match_dep_eq_type(
+        &self,
+        ctx: &MetaLogicContext,
+    ) -> Option<(&Expr, &Expr, &Expr, &Expr, &Expr)> {
+        if *self != Expr::Placeholder {
+            if let Some(ctor) = &ctx.config().eqd_ctor {
+                if let Some([left_domain, right_domain, domain_eq, left, right]) =
+                    self.match_app(ctor)
+                {
+                    return Some((left_domain, right_domain, domain_eq, left, right));
+                }
             }
         }
         None
@@ -490,8 +525,8 @@ impl Expr {
     ) -> Result<()> {
         if *type_1 != Expr::Placeholder && *type_2 != Expr::Placeholder {
             if let (Some(lambda_1), Some(lambda_2)) = (
-                type_1.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx),
-                type_2.match_generic_dep_type_as_lambda(DependentTypeCtorKind::Pi, true, ctx),
+                type_1.match_type_as_lambda(StandardTypeCtorKind::Pi, ctx),
+                type_2.match_type_as_lambda(StandardTypeCtorKind::Pi, ctx),
             ) {
                 if lambda_1.param.implicit != lambda_2.param.implicit {
                     let name_1 = ctx.get_display_name(&lambda_1.param);
@@ -767,8 +802,13 @@ impl HasType for AppExpr {
         // application itself does not include the type parameters of its function. Instead,
         // to determine the property we need to match the type of the function against a term that
         // denotes a generic pi type. Then we apply the property to the argument of the application.
-        let (_, prop) = self.get_type_parts(ctx, false)?;
-        Ok(prop.apply(self.param.clone(), ctx))
+        if self.body.is_empty() {
+            return Ok(Expr::Placeholder);
+        }
+        match self.get_type_parts(ctx, false)? {
+            TypeArgs::Indep(_, codomain) => Ok(codomain),
+            TypeArgs::Dep(_, prop) => Ok(prop.apply(self.param.clone(), ctx)),
+        }
     }
 }
 
@@ -778,7 +818,13 @@ pub trait IsApp {
 
     fn eta_reduce<Ctx: Context>(&mut self, ctx: &Ctx, body_ctx: &Ctx) -> Option<Expr>;
 
-    fn get_type_parts(&self, ctx: &MetaLogicContext, reduce_all: bool) -> Result<(Expr, Expr)>;
+    fn get_type_parts(&self, ctx: &MetaLogicContext, reduce_all: bool) -> Result<TypeArgs>;
+    fn check_domain(
+        &self,
+        ctx: &MetaLogicContext,
+        domain: &mut Expr,
+        fun_type: &Expr,
+    ) -> Result<()>;
 }
 
 impl IsApp for AppExpr {
@@ -813,25 +859,20 @@ impl IsApp for AppExpr {
         None
     }
 
-    fn get_type_parts(&self, ctx: &MetaLogicContext, reduce_all: bool) -> Result<(Expr, Expr)> {
+    fn get_type_parts(&self, ctx: &MetaLogicContext, reduce_all: bool) -> Result<TypeArgs> {
         let fun = &self.body;
         let arg = &self.param;
         let mut fun_type = fun.get_type(ctx)?;
         fun_type.reduce(ctx, !reduce_all, -1)?;
-        if let Some((mut domain, prop)) =
-            fun_type.match_generic_dep_type(DependentTypeCtorKind::Pi, ctx)
+        if let Some((domain, codomain)) = fun_type.match_indep_type(StandardTypeCtorKind::Pi, ctx) {
+            let mut domain = domain.clone();
+            self.check_domain(ctx, &mut domain, &fun_type)?;
+            Ok(TypeArgs::Indep(domain, codomain.clone()))
+        } else if let Some((domain, prop)) = fun_type.match_dep_type(StandardTypeCtorKind::Pi, ctx)
         {
-            let mut arg_type = arg.expr.get_type(ctx)?;
-            if arg_type.is_defeq(&mut domain, ctx)? {
-                Ok((domain, prop))
-            } else {
-                let fun_str = fun.print(ctx);
-                let fun_type_str = fun_type.print(ctx);
-                let domain_str = domain.print(ctx);
-                let arg_str = arg.expr.print(ctx);
-                let arg_type_str = arg_type.print(ctx);
-                Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\nwith domain «{domain_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
-            }
+            let mut domain = domain.clone();
+            self.check_domain(ctx, &mut domain, &fun_type)?;
+            Ok(TypeArgs::Dep(domain, prop.clone()))
         } else {
             let fun_str = fun.print(ctx);
             let fun_type_str = fun_type.print(ctx);
@@ -839,6 +880,32 @@ impl IsApp for AppExpr {
             Err(anyhow!("invalid application: «{fun_str} : {fun_type_str}»\nis being applied to «{arg_str}» but is not a function"))
         }
     }
+
+    fn check_domain(
+        &self,
+        ctx: &MetaLogicContext,
+        domain: &mut Expr,
+        fun_type: &Expr,
+    ) -> Result<()> {
+        let fun = &self.body;
+        let arg = &self.param;
+        let mut arg_type = arg.expr.get_type(ctx)?;
+        if arg_type.is_defeq(domain, ctx)? {
+            Ok(())
+        } else {
+            let fun_str = fun.print(ctx);
+            let fun_type_str = fun_type.print(ctx);
+            let domain_str = domain.print(ctx);
+            let arg_str = arg.expr.print(ctx);
+            let arg_type_str = arg_type.print(ctx);
+            Err(anyhow!("application type mismatch: «{fun_str} : {fun_type_str}»\nwith domain «{domain_str}»\ncannot be applied to «{arg_str} : {arg_type_str}»"))
+        }
+    }
+}
+
+pub enum TypeArgs {
+    Indep(Expr, Expr),
+    Dep(Expr, Expr),
 }
 
 pub type LambdaExpr = Lambda<Param, Expr>;
@@ -847,7 +914,7 @@ impl HasType for LambdaExpr {
     fn get_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
         ctx.with_local(&self.param, |body_ctx| {
             let body_type = self.body.get_type(body_ctx)?;
-            Expr::get_fun_type(&self.param, body_type, ctx)
+            Expr::get_fun_type(&self.param, body_type, ctx, body_ctx)
         })
     }
 }
@@ -895,39 +962,117 @@ impl IsLambda for LambdaExpr {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum StandardTypeCtorKind {
+    Pi,
+    Sigma,
+}
+
 fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> Result<Expr> {
     ctx.with_local(param, |body_ctx| {
         //dbg!(body.print(body_ctx));
 
         if let Some(shifted_body) = body.shifted_to_supercontext(body_ctx, ctx) {
             let body_type = shifted_body.get_type(ctx)?;
-            let cmb = ctx.lambda_handler().get_const_cmb(
-                param.type_expr.clone(),
-                body_type,
-                ctx.as_minimal(),
-            )?;
-            return Ok(Expr::explicit_app(cmb, shifted_body));
+            if let Some(cmb) = &ctx.config().const_cmb {
+                return Ok(Expr::multi_app(
+                    cmb.clone(),
+                    [
+                        Arg::explicit(param.type_expr.clone()),
+                        Arg::implicit(body_type),
+                        Arg::explicit(shifted_body),
+                    ],
+                ));
+            } else {
+                return Err(anyhow!("const combinator not provided"));
+            }
         }
 
         match body {
-            Expr::Var(Var(-1)) => ctx
-                .lambda_handler()
-                .get_id_cmb(param.type_expr.clone(), ctx.as_minimal()),
+            Expr::Var(Var(-1)) => {
+                if let Some(id_cmb) = &ctx.config().id_cmb {
+                    Ok(Expr::app(
+                        id_cmb.clone(),
+                        Arg::explicit(param.type_expr.clone()),
+                    ))
+                } else {
+                    Err(anyhow!("id combinator not provided"))
+                }
+            }
             Expr::App(app) => {
-                if let Expr::Var(Var(-1)) = app.param.expr {
+                let fun = &app.body;
+                let arg = &app.param.expr;
+                if let Expr::Var(Var(-1)) = arg {
                     // If the expression can be eta-reduced, do that instead of outputting a
                     // combinator.
-                    if let Some(shifted_fun) = app.body.shifted_to_supercontext(body_ctx, ctx) {
+                    if let Some(shifted_fun) = fun.shifted_to_supercontext(body_ctx, ctx) {
                         return Ok(shifted_fun);
                     }
                 }
-                let cmb = get_subst_cmb(param, ctx, app, body_ctx)?;
-                let fun_lambda = Expr::lambda(param.clone(), app.body.clone());
-                let arg_lambda = Expr::lambda(param.clone(), app.param.expr.clone());
-                Ok(Expr::explicit_multi_app(
-                    cmb,
-                    smallvec![fun_lambda, arg_lambda],
-                ))
+                let fun_lambda = Expr::lambda(param.clone(), fun.clone());
+                let arg_lambda = Expr::lambda(param.clone(), arg.clone());
+                match app.get_type_parts(body_ctx, true)? {
+                    TypeArgs::Indep(mut domain, mut codomain) => {
+                        if domain.valid_in_superctx(body_ctx, ctx)
+                            && codomain.valid_in_superctx(body_ctx, ctx)
+                        {
+                            domain.shift_to_supercontext(body_ctx, ctx);
+                            codomain.shift_to_supercontext(body_ctx, ctx);
+                            if let Some(subst_cmb) = &ctx.config().subst_cmb {
+                                Ok(Expr::multi_app(
+                                    subst_cmb.clone(),
+                                    [
+                                        Arg::implicit(param.type_expr.clone()),
+                                        Arg::implicit(domain),
+                                        Arg::implicit(codomain),
+                                        Arg::explicit(fun_lambda),
+                                        Arg::explicit(arg_lambda),
+                                    ],
+                                ))
+                            } else {
+                                Err(anyhow!("subst combinator not provided"))
+                            }
+                        } else {
+                            if let Some(substd_cmb) = &ctx.config().substd_cmb {
+                                let prop1 = Expr::lambda(param.clone(), domain.clone());
+                                let rel2 = Expr::lambda(
+                                    param.clone(),
+                                    Expr::const_lambda(domain, codomain, body_ctx),
+                                );
+                                Ok(Expr::multi_app(
+                                    substd_cmb.clone(),
+                                    [
+                                        Arg::implicit(param.type_expr.clone()),
+                                        Arg::implicit(prop1),
+                                        Arg::implicit(rel2),
+                                        Arg::explicit(fun_lambda),
+                                        Arg::explicit(arg_lambda),
+                                    ],
+                                ))
+                            } else {
+                                Err(anyhow!("substd combinator not provided"))
+                            }
+                        }
+                    }
+                    TypeArgs::Dep(domain, prop) => {
+                        if let Some(substd_cmb) = &ctx.config().substd_cmb {
+                            let prop1 = Expr::lambda(param.clone(), domain);
+                            let rel2 = Expr::lambda(param.clone(), prop);
+                            Ok(Expr::multi_app(
+                                substd_cmb.clone(),
+                                [
+                                    Arg::implicit(param.type_expr.clone()),
+                                    Arg::implicit(prop1),
+                                    Arg::implicit(rel2),
+                                    Arg::explicit(fun_lambda),
+                                    Arg::explicit(arg_lambda),
+                                ],
+                            ))
+                        } else {
+                            Err(anyhow!("substd combinator not provided"))
+                        }
+                    }
+                }
             }
             Expr::Lambda(lambda) => {
                 let body_cmb = lambda.convert_to_combinator(body_ctx)?;
@@ -937,19 +1082,6 @@ fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> 
             _ => unreachable!("constant body should have been detected"),
         }
     })
-}
-
-fn get_subst_cmb(
-    param: &Param,
-    ctx: &MetaLogicContext,
-    app: &AppExpr,
-    body_ctx: &MetaLogicContext,
-) -> Result<Expr> {
-    let (domain, prop) = app.get_type_parts(body_ctx, true)?;
-    let prop1 = Expr::lambda(param.clone(), domain);
-    let rel2 = Expr::lambda(param.clone(), prop);
-    ctx.lambda_handler()
-        .get_subst_cmb(param.type_expr.clone(), prop1, rel2, ctx.as_minimal())
 }
 
 #[derive(Clone, Default)]
@@ -1071,6 +1203,24 @@ pub struct Arg {
     pub match_all: bool,
 }
 
+impl Arg {
+    pub fn explicit(expr: Expr) -> Self {
+        Arg {
+            expr,
+            implicit: false,
+            match_all: false,
+        }
+    }
+
+    pub fn implicit(expr: Expr) -> Self {
+        Arg {
+            expr,
+            implicit: true,
+            match_all: false,
+        }
+    }
+}
+
 impl PartialEq for Arg {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
@@ -1098,8 +1248,7 @@ impl ContextObject for Arg {
     fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
         Arg {
             expr: self.expr.shifted_impl(start, end, shift),
-            implicit: self.implicit,
-            match_all: self.match_all,
+            ..*self
         }
     }
 

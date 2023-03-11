@@ -65,7 +65,7 @@ pub struct ParamTypeChecker;
 impl ExprVisitor for ParamTypeChecker {
     fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
         let mut type_type = param.type_expr.get_type(ctx)?;
-        let mut cmp_type_type = ctx.lambda_handler().get_universe_type()?;
+        let mut cmp_type_type = ctx.config().universe_type.clone();
         if type_type.is_defeq(&mut cmp_type_type, ctx)? {
             Ok(())
         } else {

@@ -1,11 +1,10 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fmt::Debug,
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Error, Result};
+use anyhow::{anyhow, Error, Result};
 use log::{trace, warn};
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -28,14 +27,14 @@ pub struct DefInit<'a> {
 pub struct MetaLogic {
     symbol_table: SymbolTable,
     constants: Vec<Constant>,
-    lambda_handler: Box<dyn LambdaHandler>,
+    config: MetaLogicConfig,
     pub root_ctx_options: MetaLogicContextOptions,
 }
 
 impl MetaLogic {
-    pub fn construct<F>(constants_init: &[Cow<DefInit>], create_lambda_handler: F) -> Result<Self>
+    pub fn construct<F>(constants_init: &[Cow<DefInit>], get_config: F) -> Result<Self>
     where
-        F: FnOnce(&HashMap<&str, VarIndex>) -> Box<dyn LambdaHandler>,
+        F: FnOnce(&HashMap<&str, VarIndex>) -> MetaLogicConfig,
     {
         let symbol_table = SymbolTable::new();
 
@@ -57,7 +56,7 @@ impl MetaLogic {
             }
         }
 
-        let lambda_handler = create_lambda_handler(&constants_map);
+        let config = get_config(&constants_map);
 
         let mut metalogic = MetaLogic {
             symbol_table,
@@ -68,7 +67,7 @@ impl MetaLogic {
                     reduction_rules: Vec::new(),
                 })
                 .collect(),
-            lambda_handler,
+            config,
             root_ctx_options: MetaLogicContextOptions {
                 reduce_with_reduction_rules: false,
                 reduce_with_combinators: false,
@@ -251,14 +250,14 @@ impl MetaLogic {
 
     fn insert_implicit_args(&mut self) -> Result<()> {
         self.manipulate_exprs(&ImplicitArgInserter {
-            max_depth: self.lambda_handler.implicit_arg_max_depth(),
+            max_depth: self.config.implicit_arg_max_depth,
         })
     }
 
     fn fill_placeholders(&mut self) -> Result<()> {
         // Run two placeholder filling passes, to improve "unfilled placeholder" messages.
         let mut placeholder_filler = PlaceholderFiller {
-            max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
+            max_reduction_depth: self.config.placeholder_max_reduction_depth,
             force: false,
             match_var_ctx: None,
             has_unfilled_placeholders: AtomicBool::new(false),
@@ -302,7 +301,7 @@ impl MetaLogic {
         let mut expr = Expr::parse(s, &root_ctx)?;
 
         let arg_inserter = ImplicitArgInserter {
-            max_depth: self.lambda_handler.implicit_arg_max_depth(),
+            max_depth: self.config.implicit_arg_max_depth,
         };
         arg_inserter.expr(&mut expr, &root_ctx)?;
 
@@ -346,7 +345,7 @@ impl MetaLogic {
         let root_ctx = self.get_root_context();
 
         let placeholder_filler = PlaceholderFiller {
-            max_reduction_depth: self.lambda_handler.placeholder_max_reduction_depth(),
+            max_reduction_depth: self.config.placeholder_max_reduction_depth,
             force: true,
             match_var_ctx: None,
             has_unfilled_placeholders: AtomicBool::new(false),
@@ -378,8 +377,8 @@ pub trait MetaLogicRef {
         &self.metalogic().constants
     }
 
-    fn lambda_handler(&self) -> &dyn LambdaHandler {
-        self.metalogic().lambda_handler.as_ref()
+    fn config(&self) -> &MetaLogicConfig {
+        &self.metalogic().config
     }
 
     fn get_named_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex>
@@ -431,225 +430,116 @@ pub struct ReductionBody {
     pub source_app_len: usize,
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum DependentTypeCtorKind {
-    Pi,
-    Sigma,
+pub struct MetaLogicConfig {
+    pub universe_type: Expr,
+
+    pub fun_ctor: Option<Expr>,
+    pub pi_ctor: Option<Expr>,
+
+    pub id_cmb: Option<Expr>,
+    pub const_cmb: Option<Expr>,
+    pub subst_cmb: Option<Expr>,
+    pub substd_cmb: Option<Expr>,
+
+    pub pair_ctor: Option<Expr>,
+    pub sigma_ctor: Option<Expr>,
+
+    pub eq_ctor: Option<Expr>,
+    pub eqd_ctor: Option<Expr>,
+
+    pub implicit_arg_max_depth: u32,
+    pub placeholder_max_reduction_depth: u32,
 }
 
-pub trait LambdaHandler: Sync {
-    fn get_universe_type(&self) -> Result<Expr>;
+impl MetaLogicConfig {
+    pub fn get_indep_ctor(&self, kind: StandardTypeCtorKind) -> &Option<Expr> {
+        match kind {
+            StandardTypeCtorKind::Pi => &self.fun_ctor,
+            StandardTypeCtorKind::Sigma => &self.pair_ctor,
+        }
+    }
 
-    fn get_indep_type(
+    pub fn get_dep_ctor(&self, kind: StandardTypeCtorKind) -> &Option<Expr> {
+        match kind {
+            StandardTypeCtorKind::Pi => &self.pi_ctor,
+            StandardTypeCtorKind::Sigma => &self.sigma_ctor,
+        }
+    }
+
+    pub fn get_indep_type(
         &self,
         domain: Expr,
         codomain: Expr,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
+        kind: StandardTypeCtorKind,
     ) -> Result<Expr> {
-        self.get_dep_type(
-            domain.clone(),
-            Expr::const_lambda(domain, codomain, &ctx),
-            kind,
-            ctx,
-        )
+        if let Some(ctor) = self.get_indep_ctor(kind) {
+            Ok(Expr::multi_app(
+                ctor.clone(),
+                [Arg::explicit(domain), Arg::explicit(codomain)],
+            ))
+        } else {
+            Err(anyhow!("specified type not defined"))
+        }
     }
 
-    fn get_prop_type(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr> {
-        self.get_indep_type(
-            domain,
-            self.get_universe_type()?,
-            DependentTypeCtorKind::Pi,
-            ctx,
-        )
+    pub fn get_prop_type(&self, domain: Expr) -> Result<Expr> {
+        self.get_indep_type(domain, self.universe_type.clone(), StandardTypeCtorKind::Pi)
     }
 
-    fn get_dep_type(
+    pub fn get_dep_type(
         &self,
         domain: Expr,
         prop: Expr,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<Expr>;
-
-    fn get_generic_indep_type(
-        &self,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr)> {
-        let params = [
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-                implicit: false,
-            },
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-                implicit: false,
-            },
-        ];
-        let indep_type = ctx.with_locals(&params, |subctx| {
-            let domain_var = Expr::var(-2);
-            let codomain_var = Expr::var(-1);
-            self.get_indep_type(domain_var, codomain_var, kind, *subctx)
-        })?;
-        let [domain_param, codomain_param] = params;
-        Ok((domain_param, codomain_param, indep_type))
+        kind: StandardTypeCtorKind,
+    ) -> Result<Expr> {
+        if let Some(ctor) = self.get_dep_ctor(kind) {
+            Ok(Expr::multi_app(
+                ctor.clone(),
+                [Arg::implicit(domain), Arg::explicit(prop)],
+            ))
+        } else {
+            Err(anyhow!("specified dependent type not defined"))
+        }
     }
 
-    fn get_generic_dep_type(
-        &self,
-        kind: DependentTypeCtorKind,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Expr)> {
-        let params = [
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-                implicit: true,
-            },
-            Param {
-                name: None,
-                type_expr: Expr::var(-1),
-                implicit: false,
-            },
-        ];
-        let dep_type = ctx.with_locals(&params, |subctx| {
-            let domain_var = Expr::var(-2);
-            let prop_var = Expr::var(-1);
-            self.get_dep_type(domain_var, prop_var, kind, *subctx)
-        })?;
-        let [domain_param, prop_param] = params;
-        Ok((domain_param, prop_param, dep_type))
+    pub fn get_indep_eq_type(&self, domain: Expr, left: Expr, right: Expr) -> Result<Expr> {
+        if let Some(ctor) = &self.eq_ctor {
+            Ok(Expr::multi_app(
+                ctor.clone(),
+                [
+                    Arg::implicit(domain),
+                    Arg::explicit(left),
+                    Arg::explicit(right),
+                ],
+            ))
+        } else {
+            Err(anyhow!("equality type not defined"))
+        }
     }
 
-    fn get_id_cmb(&self, domain: Expr, ctx: MinimalContext) -> Result<Expr>;
-
-    fn get_const_cmb(&self, domain: Expr, codomain: Expr, ctx: MinimalContext) -> Result<Expr>;
-
-    fn get_subst_cmb(
-        &self,
-        domain: Expr,
-        prop1: Expr,
-        rel2: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr>;
-
-    fn get_indep_eq_type(
-        &self,
-        domain: Expr,
-        left: Expr,
-        right: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr>;
-
-    fn get_dep_eq_type(
+    pub fn get_dep_eq_type(
         &self,
         left_domain: Expr,
         right_domain: Expr,
         domain_eq: Expr,
         left: Expr,
         right: Expr,
-        ctx: MinimalContext,
-    ) -> Result<Expr>;
-
-    fn get_generic_indep_eq_type(
-        &self,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Param, Expr)> {
-        let params = [
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-                implicit: true,
-            },
-            Param {
-                name: None,
-                type_expr: Expr::var(-1),
-                implicit: false,
-            },
-            Param {
-                name: None,
-                type_expr: Expr::var(-2),
-                implicit: false,
-            },
-        ];
-        let eq_type = ctx.with_locals(&params, |subctx| {
-            let domain_var = Expr::var(-3);
-            let left_var = Expr::var(-2);
-            let right_var = Expr::var(-1);
-            self.get_indep_eq_type(domain_var, left_var, right_var, *subctx)
-        })?;
-        let [domain_param, left_param, right_param] = params;
-        Ok((domain_param, left_param, right_param, eq_type))
+    ) -> Result<Expr> {
+        if let Some(ctor) = &self.eqd_ctor {
+            Ok(Expr::multi_app(
+                ctor.clone(),
+                [
+                    Arg::implicit(left_domain),
+                    Arg::implicit(right_domain),
+                    Arg::explicit(domain_eq),
+                    Arg::explicit(left),
+                    Arg::explicit(right),
+                ],
+            ))
+        } else {
+            Err(anyhow!("dependent equality type not defined"))
+        }
     }
-
-    fn get_generic_dep_eq_type(
-        &self,
-        ctx: MinimalContext,
-    ) -> Result<(Param, Param, Param, Param, Param, Expr)> {
-        let params = [
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-                implicit: true,
-            },
-            Param {
-                name: None,
-                type_expr: self.get_universe_type()?,
-                implicit: true,
-            },
-            Param {
-                name: None,
-                type_expr: self.get_indep_eq_type(
-                    self.get_universe_type()?,
-                    Expr::var(-2),
-                    Expr::var(-1),
-                    ctx,
-                )?,
-                implicit: false,
-            },
-            Param {
-                name: None,
-                type_expr: Expr::var(-3),
-                implicit: false,
-            },
-            Param {
-                name: None,
-                type_expr: Expr::var(-3),
-                implicit: false,
-            },
-        ];
-        let eq_type = ctx.with_locals(&params, |subctx| {
-            let left_domain_var = Expr::var(-5);
-            let right_domain_var = Expr::var(-4);
-            let domain_eq_var = Expr::var(-3);
-            let left_var = Expr::var(-2);
-            let right_var = Expr::var(-1);
-            self.get_dep_eq_type(
-                left_domain_var,
-                right_domain_var,
-                domain_eq_var,
-                left_var,
-                right_var,
-                *subctx,
-            )
-        })?;
-        let [left_domain_param, right_domain_param, domain_eq_param, left_param, right_param] =
-            params;
-        Ok((
-            left_domain_param,
-            right_domain_param,
-            domain_eq_param,
-            left_param,
-            right_param,
-            eq_type,
-        ))
-    }
-
-    fn implicit_arg_max_depth(&self) -> u32;
-    fn placeholder_max_reduction_depth(&self) -> u32;
 }
 
 pub trait MetaLogicVisitorBase: Sync {

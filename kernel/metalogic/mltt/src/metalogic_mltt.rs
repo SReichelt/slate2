@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
 use mimalloc::MiMalloc;
-use smallvec::smallvec;
 
 use slate_kernel_generic::context::*;
 use slate_kernel_metalogic::{expr::*, helpers::*, metalogic::*};
@@ -55,22 +53,16 @@ pub fn get_mltt() -> MetaLogic {
             },
             ModuleInit::Type {
                 ctor: DefInit {
-                    sym: "Pi : Π {A : U}. (A → U) → U",
+                    sym: "Fun : U → U → U",
                     red: &[],
                 },
                 defs: &[
-                    ModuleInit::Def(DefInit {
-                        sym: "Pi_eq : Π {A : U}. Π {P P' : A → U}. P = P' → Pi P = Pi P'",
-                        red: &[],
-                    }),
                     ModuleInit::Def(DefInit {
                         sym: "Fun_1_eq : Π {A A' : U}. Π eA : A = A'. Π B : U. (A → B) = (A' → B)",
                         red: &[],
                     }),
                     ModuleInit::Def(DefInit {
-                        sym: "Pi_1_eq : Π {A A' : U}. Π eA : A = A'. Π P : A → U. Π P' : A' → U. \
-                                        (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a') → \
-                                        Pi P = Pi P'",
+                        sym: "Fun_2_eq : Π A : U. Π {B B' : U}. B = B' → (A → B) = (A → B')",
                         red: &[],
                     }),
                     // Combinators. These should only reduce when all arguments are provided, as
@@ -84,43 +76,68 @@ pub fn get_mltt() -> MetaLogic {
                         red: &["∀ A : U. ∀ {B : U}. ∀ b : B. ∀ a : A. (const A b) a :≡ b"],
                     }),
                     ModuleInit::Def(DefInit {
-                        sym: "substd : Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. \
-                                       Pi2d Q → Π f : Pi P. Π a : A. Q a (f a)",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ {Q : (Π a : A. P a → U)}. \
-                                ∀ g : Pi2d Q. ∀ f : Pi P. ∀ a : A. \
-                                (substd g f) a :≡ g a (f a)"],
-                    }),
-                    ModuleInit::Def(DefInit {
                         sym: "subst : Π {A B C : U}. (A → B → C) → (A → B) → (A → C)",
-                        red: &["subst :≡ λ {A B C}. substd {A} {const A B} {const A (const B C)}"],
+                        red: &["∀ {A B C : U}. ∀ g : A → B → C. ∀ f : A → B. ∀ a : A. \
+                                (subst g f) a :≡ g a (f a)"],
                     }),
                     // In contrast, these are just definitions. We could define them in terms of the
                     // above, but that leads to problems because we currently don't reduce
                     // combinators to other combinators.
                     ModuleInit::Def(DefInit {
-                        sym: "compd : Π {A B : U}. Π {Q : B → U}. Pi Q → Π f : A → B. Π a : A. Q (f a)",
-                        red: &["compd :≡ λ {A B Q}. λ g f a. g (f a)"],
-                    }),
-                    ModuleInit::Def(DefInit {
                         sym: "comp : Π {A B C : U}. (B → C) → (A → B) → (A → C)",
                         red: &["comp :≡ λ {A B C}. λ g f a. g (f a)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "swapd : Π {A B : U}. Π {Q : A → B → U}. Pi2 Q → Pi2 (Rel_swap Q)",
-                        red: &["swapd :≡ λ {A B Q}. λ g. λ b : B. λ a : A. g a b"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "swap : Π {A B C : U}. (A → B → C) → (B → A → C)",
                         red: &["swap :≡ λ {A B C}. λ g b a. g a b"],
                     }),
                     ModuleInit::Def(DefInit {
-                        sym: "swapd_eq : Π {A B : U}. Π Q : A → B → U. \
-                                         Pi2 Q = Pi2 (Rel_swap Q)",
+                        sym: "swap_eq : Π A B C : U. (A → B → C) = (B → A → C)",
+                        red: &["swap_eq :≡ λ A B C. swapd_eq (const A (const B C))"],
+                    }),
+                ],
+            },
+            ModuleInit::Type {
+                ctor: DefInit {
+                    sym: "Pi : Π {A : U}. (A → U) → U",
+                    red: &["∀ A B : U. Pi (const A B) :≡ A → B"],
+                },
+                defs: &[
+                    ModuleInit::Def(DefInit {
+                        sym: "Pi_1_eq : Π {A A' : U}. Π eA : A = A'. Π P : A → U. Π P' : A' → U. \
+                                        (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a') → \
+                                        Pi P = Pi P'",
                         red: &[],
                     }),
                     ModuleInit::Def(DefInit {
-                        sym: "swap_eq : Π A B C : U. (A → B → C) = (B → A → C)",
-                        red: &["swap_eq :≡ λ A B C. swapd_eq (const A (const B C))"],
+                        sym: "Pi_eq : Π {A : U}. Π {P P' : A → U}. P = P' → Pi P = Pi P'",
+                        red: &[],
+                    }),
+                    // Dependend S combinator.
+                    ModuleInit::Def(DefInit {
+                        sym: "substd : Π {A : U}. Π {P : A → U}. Π {Q : (Π a : A. P a → U)}. \
+                                       Pi2d Q → Π f : Pi P. Π a : A. Q a (f a)",
+                        red: &[
+                            "∀ {A : U}. ∀ {P : A → U}. ∀ {Q : (Π a : A. P a → U)}. \
+                             ∀ g : Pi2d Q. ∀ f : Pi P. ∀ a : A. \
+                             (substd g f) a :≡ g a (f a)",
+                            "∀ A B C : U. \
+                             substd {A} {const A B} {const A (const B C)} :≡ subst {A} {B} {C}",
+                        ],
+                    }),
+                    // Definitions.
+                    ModuleInit::Def(DefInit {
+                        sym: "compd : Π {A B : U}. Π {Q : B → U}. Pi Q → Π f : A → B. Π a : A. Q (f a)",
+                        red: &["compd :≡ λ {A B Q}. λ g f a. g (f a)"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "swapd : Π {A B : U}. Π {Q : A → B → U}. Pi2 Q → Pi2 (Rel_swap Q)",
+                        red: &["swapd :≡ λ {A B Q}. λ g. λ b : B. λ a : A. g a b"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "swapd_eq : Π {A B : U}. Π Q : A → B → U. \
+                                         Pi2 Q = Pi2 (Rel_swap Q)",
+                        red: &[],
                     }),
                 ],
             },
@@ -145,39 +162,53 @@ pub fn get_mltt() -> MetaLogic {
             },
             ModuleInit::Type {
                 ctor: DefInit {
-                    sym: "Sigma : Π {A : U}. (A → U) → U",
+                    sym: "Pair : U → U → U",
                     red: &[],
                 },
                 defs: &[
                     ModuleInit::Def(DefInit {
-                        sym: "Sigma_intro : Π {A : U}. Π P : A → U. Π a : A. P a → Sigma P",
+                        sym: "Pair_intro : Π A B : U. A → B → (A × B)",
                         red: &[],
                     }),
                     ModuleInit::Def(DefInit {
-                        sym: "Sigma_fst : Π {A : U}. Π {P : A → U}. Sigma P → A",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. \
-                                Sigma_fst (Sigma_intro P a b) :≡ a"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Sigma_snd : Π {A : U}. Π {P : A → U}. Π p : Sigma P. P (Sigma_fst p)",
-                        red: &["∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. \
-                                Sigma_snd (Sigma_intro P a b) :≡ b"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Pair_intro : Π A B : U. A → B → (A × B)",
-                        red: &["Pair_intro :≡ λ A B. Sigma_intro {A} (λ _. B)"],
-                    }),
-                    ModuleInit::Def(DefInit {
                         sym: "Pair_fst : Π {A B : U}. (A × B) → A",
-                        red: &["Pair_fst :≡ λ {A B}. Sigma_fst {A} {λ _. B}"],
+                        red: &["∀ {A B : U}. ∀ a : A. ∀ b : B. Pair_fst (Pair_intro A B a b) :≡ a"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Pair_snd : Π {A B : U}. (A × B) → B",
-                        red: &["Pair_snd :≡ λ {A B}. Sigma_snd {A} {λ _. B}"],
+                        red: &["∀ {A B : U}. ∀ a : A. ∀ b : B. Pair_snd (Pair_intro A B a b) :≡ b"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Pair_swap : Π {A B : U}. (A × B) → (B × A)",
                         red: &["Pair_swap :≡ λ {A B}. λ p. Pair_intro B A (Pair_snd p) (Pair_fst p)"],
+                    }),
+                ],
+            },
+            ModuleInit::Type {
+                ctor: DefInit {
+                    sym: "Sigma : Π {A : U}. (A → U) → U",
+                    red: &["∀ A B : U. Sigma (const A B) :≡ A × B"],
+                },
+                defs: &[
+                    ModuleInit::Def(DefInit {
+                        sym: "Sigma_intro : Π {A : U}. Π P : A → U. Π a : A. P a → Sigma P",
+                        red: &["∀ A B : U. Sigma_intro (const A B) :≡ Pair_intro A B"],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "Sigma_fst : Π {A : U}. Π {P : A → U}. Sigma P → A",
+                        red: &[
+                            "∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. \
+                             Sigma_fst (Sigma_intro P a b) :≡ a",
+                            "∀ A B : U. Sigma_fst {A} {const A B} :≡ Pair_fst {A} {B}",
+                        ],
+                    }),
+                    ModuleInit::Def(DefInit {
+                        sym: "Sigma_snd : Π {A : U}. Π {P : A → U}. Π p : Sigma P. P (Sigma_fst p)",
+                        red: &[
+                            "∀ {A : U}. ∀ {P : A → U}. ∀ a : A. ∀ b : P a. \
+                             Sigma_snd (Sigma_intro P a b) :≡ b",
+                            "∀ A B : U. Sigma_snd {A} {const A B} :≡ Pair_snd {A} {B}",
+                        ],
                     }),
                 ],
             },
@@ -192,7 +223,10 @@ pub fn get_mltt() -> MetaLogic {
                         // duplication because we need to match on `Equiv_refl` in addition whenever
                         // we really just want to match on `refl`.
                         "Eq {Unit} :≡ λ _ _. Unit",
+                        "∀ A B : U. Eq {A → B} :≡ λ f g. Π a : A. f a = g a",
                         "∀ {A : U}. ∀ P : A → U. Eq {Pi P} :≡ λ f g. Π a : A. f a = g a",
+                        "∀ A B : U. Eq {A × B} :≡ λ p q. (Pair_fst p = Pair_fst q) × \
+                                                         (Pair_snd p = Pair_snd q)",
                         "∀ {A : U}. ∀ P : A → U. \
                          Eq {Sigma P} :≡ λ p q. Σ e_fst : Sigma_fst p = Sigma_fst q. \
                                                 Sigma_snd p =[ap P e_fst] Sigma_snd q",
@@ -215,7 +249,14 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "refl : Π {A : U}. Π a : A. a = a",
                         red: &[
                             "refl {Unit} :≡ λ _. unit",
+                            "∀ A B : U. refl {A → B} :≡ λ f. λ a : A. refl (f a)",
                             "∀ {A : U}. ∀ P : A → U. refl {Pi P} :≡ λ f. λ a : A. refl (f a)",
+                            "∀ A B : U. \
+                             refl {A × B} :≡ \
+                             λ p. Pair_intro (Pair_fst p = Pair_fst p) \
+                                             (Pair_snd p = Pair_snd p) \
+                                             (refl (Pair_fst p)) \
+                                             (refl (Pair_snd p))",
                             "∀ {A : U}. ∀ P : A → U. \
                              refl {Sigma P} :≡ \
                              λ p. Sigma_intro (λ e_fst : Sigma_fst p = Sigma_fst p. \
@@ -231,10 +272,20 @@ pub fn get_mltt() -> MetaLogic {
                             // Generic reductions.
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans (refl a) e :≡ e",
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. trans e (refl b) :≡ e",
+                            "∀ {A : U}. ∀ {a b c d : A}. ∀ e : a = b. ∀ f : b = c. ∀ g : c = d. \
+                             trans (trans e f) g :≡ trans e (trans f g)",
                             // Definitions for each type.
                             "trans {Unit} :≡ λ {_ _ _}. λ _ _. unit",
+                            "∀ A B : U. \
+                             trans {A → B} :≡ λ {f g h}. λ efg egh. λ a : A. trans (efg a) (egh a)",
                             "∀ {A : U}. ∀ P : A → U. \
                              trans {Pi P} :≡ λ {f g h}. λ efg egh. λ a : A. trans (efg a) (egh a)",
+                            "∀ A B : U. \
+                             trans {A × B} :≡ λ {p q r}. λ epq eqr. \
+                                              Pair_intro (Pair_fst p = Pair_fst r) \
+                                                         (Pair_snd p = Pair_snd r) \
+                                                         (trans (Pair_fst epq) (Pair_fst eqr)) \
+                                                         (trans (Pair_snd epq) (Pair_snd eqr))",
                             "∀ {A : U}. ∀ P : A → U. \
                              trans {Sigma P} :≡ \
                              λ {p q r}. λ epq eqr. \
@@ -252,12 +303,24 @@ pub fn get_mltt() -> MetaLogic {
                     ModuleInit::Def(DefInit {
                         sym: "trans_1_eq : Π {A : U}. Π a : A. Π {b c : A}. b = c → \
                                            (a = b) = (a = c)",
-                        red: &[],
+                        red: &[
+                            "∀ {A : U}. ∀ a b : A. trans_1_eq a (refl b) :≡ refl (a = b)",
+                            "∀ {A : U}. ∀ a : A. ∀ {b c d : A}. ∀ e : b = c. ∀ f : c = d. \
+                             trans_1_eq a (trans e f) :≡ trans (trans_1_eq a e) (trans_1_eq a f)",
+                            "∀ {A : U}. ∀ a : A. ∀ {b c : A}. ∀ e : b = c. \
+                             trans_1_eq a (symm e) :≡ symm (trans_1_eq a e)",
+                        ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans_2_eq : Π {A : U}. Π {a b : A}. a = b → Π c : A. \
                                            (a = c) = (b = c)",
-                        red: &[],
+                        red: &[
+                            "∀ {A : U}. ∀ a b : A. trans_2_eq (refl a) b :≡ refl (a = b)",
+                            "∀ {A : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ f : b = c. ∀ d : A. \
+                             trans_2_eq (trans e f) d :≡ trans (trans_2_eq e d) (trans_2_eq f d)",
+                            "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. ∀ c : A. \
+                             trans_2_eq (symm e) c :≡ symm (trans_2_eq e c)",
+                        ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "symm : Π {A : U}. Π {a b : A}. a = b → b = a",
@@ -269,7 +332,16 @@ pub fn get_mltt() -> MetaLogic {
                             "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. symm (symm e) :≡ e",
                             // Definitions for each type.
                             "symm {Unit} :≡ λ {_ _}. λ _. unit",
-                            "∀ {A : U}. ∀ P : A → U. symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
+                            "∀ A B : U. \
+                             symm {A → B} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
+                            "∀ {A : U}. ∀ P : A → U. \
+                             symm {Pi P} :≡ λ {f g}. λ e. λ a : A. symm (e a)",
+                            "∀ A B : U. \
+                             symm {A × B} :≡ λ {p q}. λ e. \
+                                             Pair_intro (Pair_fst q = Pair_fst p) \
+                                                        (Pair_snd q = Pair_snd p) \
+                                                        (symm (Pair_fst e)) \
+                                                        (symm (Pair_snd e))",
                             "∀ {A : U}. ∀ P : A → U. \
                              symm {Sigma P} :≡ \
                              λ {p q}. λ e. \
@@ -325,17 +397,19 @@ pub fn get_mltt() -> MetaLogic {
                              ∀ {a : A}. ∀ {b : B}. ∀ e : a =[eAB] b. ∀ c : C. \
                              to (transd_2_eq eAB eBC e c) :≡ \
                              λ f : a =[trans eAB eBC] c. \
-                             to (ap_Eqd (trans3_1_symm' eAB eBC) b c) (transd (symmd e) f)",
+                             to (ap_Eqd (trans3_1_symm eAB eBC) b c) (transd (symmd e) f)",
                             "∀ {A B : U}. ∀ eAB : A = B. ∀ a : A. ∀ b : B. \
                              to (symmd_eq eAB a b) :≡ symmd {A} {B} {eAB} {a} {b}",
-                            "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
-                             to (Pi_eq eP) :≡ λ f a. to (eP a) (f a)",
                             "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
                              to (Fun_1_eq eA B) :≡ λ f a'. f (inv eA a')",
+                            "∀ A : U. ∀ {B B' : U}. ∀ eB : B = B'. \
+                             to (Fun_2_eq A eB) :≡ λ f a. to eB (f a)",
                             "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
                              ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
                              to (Pi_1_eq eA P P' hP) :≡ \
                              λ f a'. to (hP (Eqd_refl_inv eA a')) (f (inv eA a'))",
+                            "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
+                             to (Pi_eq eP) :≡ λ f a. to (eP a) (f a)",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -370,20 +444,22 @@ pub fn get_mltt() -> MetaLogic {
                              ∀ a : A. ∀ {b : B}. ∀ {c : C}. ∀ f : b =[eBC] c. \
                              inv (transd_1_eq eAB eBC a f) :≡ \
                              λ e : a =[trans eAB eBC] c. \
-                             to (ap_Eqd (trans3_3_symm' eAB eBC) a b) (transd e (symmd f))",
+                             to (ap_Eqd (trans3_3_symm eAB eBC) a b) (transd e (symmd f))",
                             "∀ {A B C : U}. ∀ eAB : A = B. ∀ eBC : B = C. \
                              ∀ {a : A}. ∀ {b : B}. ∀ e : a =[eAB] b. ∀ c : C. \
                              inv (transd_2_eq eAB eBC e c) :≡ λ f : b =[eBC] c. transd e f",
                             "∀ {A B : U}. ∀ eAB : A = B. ∀ a : A. ∀ b : B. \
                              inv (symmd_eq eAB a b) :≡ symmd {B} {A} {symm eAB} {b} {a}",
-                            "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
-                             inv (Pi_eq eP) :≡ λ f' a. inv (eP a) (f' a)",
                             "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
                              inv (Fun_1_eq eA B) :≡ λ f' a. f' (to eA a)",
+                            "∀ A : U. ∀ {B B' : U}. ∀ eB : B = B'. \
+                             inv (Fun_2_eq A eB) :≡ λ f a. inv eB (f a)",
                             "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
                              ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
                              inv (Pi_1_eq eA P P' hP) :≡ \
                              λ f' a. inv (hP (Eqd_refl_to eA a)) (f' (to eA a))",
+                            "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
+                             inv (Pi_eq eP) :≡ λ f' a. inv (eP a) (f' a)",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -425,18 +501,20 @@ pub fn get_mltt() -> MetaLogic {
                              to_inv_congr (transd_2_eq eAB eBC e c) :≡ sorry _",
                             "∀ {A B : U}. ∀ eAB : A = B. ∀ a : A. ∀ b : B. \
                              to_inv_congr (symmd_eq eAB a b) :≡ sorry _",
-                            // TODO: For the following three definitions, we should go via the
+                            // TODO: For the following four definitions, we should go via the
                             // midpoint instead.
+                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
+                             to_inv_congr (Fun_1_eq eA B) :≡ sorry _",
+                            "∀ A : U. ∀ {B B' : U}. ∀ eB : B = B'. \
+                             to_inv_congr (Fun_2_eq A eB) :≡ sorry _",
+                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
+                             ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
+                             to_inv_congr (Pi_1_eq eA P P' hP) :≡ sorry _",
                             "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
                              to_inv_congr (Pi_eq eP) :≡ \
                              λ f f'. Pi_eq {A} {λ a. to (eP a) (f a) = f' a} \
                                                {λ a. f a = inv (eP a) (f' a)} \
                                            (λ a : A. to_inv_congr (eP a) (f a) (f' a))",
-                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
-                             to_inv_congr (Fun_1_eq eA B) :≡ sorry _",
-                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
-                             ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
-                             to_inv_congr (Pi_1_eq eA P P' hP) :≡ sorry _",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -482,16 +560,18 @@ pub fn get_mltt() -> MetaLogic {
                              inv_to_congr (transd_2_eq eAB eBC e c) :≡ sorry _",
                             "∀ {A B : U}. ∀ eAB : A = B. ∀ a : A. ∀ b : B. \
                              inv_to_congr (symmd_eq eAB a b) :≡ sorry _",
+                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
+                             inv_to_congr (Fun_1_eq eA B) :≡ sorry _",
+                            "∀ A : U. ∀ {B B' : U}. ∀ eB : B = B'. \
+                             inv_to_congr (Fun_2_eq A eB) :≡ sorry _",
+                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
+                             ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
+                             inv_to_congr (Pi_1_eq eA P P' hP) :≡ sorry _",
                             "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
                              inv_to_congr (Pi_eq eP) :≡  \
                              λ f' f. Pi_eq {A} {λ a. inv (eP a) (f' a) = f a} \
                                                {λ a. f' a = to (eP a) (f a)} \
                                            (λ a : A. inv_to_congr (eP a) (f' a) (f a))",
-                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
-                             inv_to_congr (Fun_1_eq eA B) :≡ sorry _",
-                            "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
-                             ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
-                             inv_to_congr (Pi_1_eq eA P P' hP) :≡ sorry _",
                         ],
                     }),
                     ModuleInit::Def(DefInit {
@@ -550,8 +630,12 @@ pub fn get_mltt() -> MetaLogic {
                         red: &[
                             "trans_2_symm {U} :≡ Eqd_trans_2_symm",
                             "trans_2_symm {Unit} :≡ λ {_ _}. λ _. unit",
+                            "∀ A B : U. \
+                             trans_2_symm {A → B} :≡ λ {f g}. λ e. λ a : A. trans_2_symm (e a)",
                             "∀ {A : U}. ∀ P : A → U. \
                              trans_2_symm {Pi P} :≡ λ {f g}. λ e. λ a : A. trans_2_symm (e a)",
+                            "∀ A B : U. \
+                             trans_2_symm {A × B} :≡ λ {p q}. λ e. sorry1 _",
                             "∀ {A : U}. ∀ P : A → U. \
                              trans_2_symm {Sigma P} :≡ λ {p q}. λ e. sorry1 _",
                             "∀ A B : U. \
@@ -559,65 +643,20 @@ pub fn get_mltt() -> MetaLogic {
                         ],
                     }),
                     ModuleInit::Def(DefInit {
-                        sym: "trans_assoc : Π {A : U}. Π {a b c d : A}. \
-                                            Π e : a = b. Π f : b = c. Π g : c = d. \
-                                            trans (trans e f) g = trans e (trans f g)",
-                        red: &[
-                            "trans_assoc {U} :≡ Eqd_trans_assoc",
-                            "trans_assoc {Unit} :≡ λ {_ _ _ _}. λ _ _ _. unit",
-                            "∀ {A : U}. ∀ P : A → U. \
-                             trans_assoc {Pi P} :≡ λ {f g h i}. λ efg egh ehi. \
-                                                   λ a : A. trans_assoc (efg a) (egh a) (ehi a)",
-                            "∀ {A : U}. ∀ P : A → U. \
-                             trans_assoc {Sigma P} :≡ λ {p q r s}. λ epq eqr ers. sorry1 _",
-                            "∀ A B : U. \
-                             trans_assoc {A = B} :≡ \
-                             λ {e f g h}. trans_assoc {A → B → U} {Eqd e} {Eqd f} {Eqd g} {Eqd h}",
-                        ],
-                    }),
-                    ModuleInit::Def(DefInit {
                         sym: "trans3 : Π {A : U}. Π {a b c d : A}. a = b → b = c → c = d → a = d",
-                        red: &["trans3 :≡ λ {A a b c d}. λ e f g. any (trans_assoc e f g)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "trans3_12 : Π {A : U}. Π {a b c d : A}. \
-                                         Π e : a = b. Π f : b = c. Π g : c = d. \
-                                         trans3 e f g = trans (trans e f) g",
-                        red: &["trans3_12 :≡ λ {A a b c d}. λ e f g. any_left (trans_assoc e f g)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "trans3_23 : Π {A : U}. Π {a b c d : A}. \
-                                          Π e : a = b. Π f : b = c. Π g : c = d. \
-                                          trans3 e f g = trans e (trans f g)",
-                        red: &["trans3_23 :≡ λ {A a b c d}. λ e f g. any_right (trans_assoc e f g)"],
+                        red: &["trans3 :≡ λ {A a b c d}. λ e f g. trans e (trans f g)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans3_1_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. \
                                               trans3 (symm e) e f = f",
                         red: &["trans3_1_symm :≡ λ {A a b c}. λ e f. \
-                                                 trans (trans3_12 (symm e) e f) \
-                                                       (ap_trans_1 (trans_1_symm e) f)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "trans3_1_symm' : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. \
-                                               trans (symm e) (trans e f) = f",
-                        red: &["trans3_1_symm' :≡ λ {A a b c}. λ e f. \
-                                                  trans (symm (trans_assoc (symm e) e f)) \
-                                                        (ap_trans_1 (trans_1_symm e) f)"],
+                                                 ap_trans_1 (trans_1_symm e) f"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans3_3_symm : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. \
                                               trans3 e f (symm f) = e",
                         red: &["trans3_3_symm :≡ λ {A a b c}. λ e f. \
-                                                 trans (trans3_23 e f (symm f)) \
-                                                       (ap_trans_2 e (trans_2_symm f))"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "trans3_3_symm' : Π {A : U}. Π {a b c : A}. Π e : a = b. Π f : b = c. \
-                                               trans (trans e f) (symm f) = e",
-                        red: &["trans3_3_symm' :≡ λ {A a b c}. λ e f. \
-                                                  trans (trans_assoc e f (symm f)) \
-                                                        (ap_trans_2 e (trans_2_symm f))"],
+                                                 ap_trans_2 e (trans_2_symm f)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans_1_shift_lr : Π {A : U}. Π {a b c : A}. \
@@ -631,7 +670,7 @@ pub fn get_mltt() -> MetaLogic {
                                                  Π {e : a = c}. Π {f : a = b}. Π {g : b = c}. \
                                                  e = trans f g → trans (symm f) e = g",
                         red: &["trans_1_shift_rl :≡ λ {A a b c e f g}. λ h. \
-                                                    trans (ap_trans_2 (symm f) h) (trans3_1_symm' f g)"],
+                                                    trans (ap_trans_2 (symm f) h) (trans3_1_symm f g)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans_1_shift_eq : Π {A : U}. Π {a b c : A}. \
@@ -651,7 +690,7 @@ pub fn get_mltt() -> MetaLogic {
                                                  Π {e : a = c}. Π {f : a = b}. Π {g : b = c}. \
                                                  e = trans f g → trans e (symm g) = f",
                         red: &["trans_2_shift_rl :≡ λ {A a b c e f g}. λ h. \
-                                                    trans (ap_trans_1 h (symm g)) (trans3_3_symm' f g)"],
+                                                    trans (ap_trans_1 h (symm g)) (trans3_3_symm f g)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans_2_shift_eq : Π {A : U}. Π {a b c : A}. \
@@ -663,13 +702,13 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "trans_1_cancel : Π {A : U}. Π {a b c : A}. Π {e : a = b}. Π {f f' : b = c}. \
                                                trans e f = trans e f' → f = f'",
                         red: &["trans_1_cancel :≡ λ {A a b c e f f'}. λ h. \
-                                                  trans (symm (trans3_1_symm' e f)) (trans_1_shift_rl h)"],
+                                                  trans (symm (trans3_1_symm e f)) (trans_1_shift_rl h)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "trans_2_cancel : Π {A : U}. Π {a b c : A}. Π {e e' : a = b}. Π {f : b = c}. \
                                                trans e f = trans e' f → e = e'",
                         red: &["trans_2_cancel :≡ λ {A a b c e e' f}. λ h. \
-                                                  trans (trans_2_shift_lr h) (trans3_3_symm' e' f)"],
+                                                  trans (trans_2_shift_lr h) (trans3_3_symm e' f)"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "symm_shift_lr : Π {A : U}. Π {a b : A}. Π {e : a = b}. Π {f : b = a}. \
@@ -795,28 +834,53 @@ pub fn get_mltt() -> MetaLogic {
                         "∀ {A : U}. ∀ a : A. ∀ {b c : A}. ∀ f : b = c. \
                          Eqd (trans_1_eq a f) :≡ \
                          λ e : a = b. λ ef : a = c. trans e f = ef",
+                        "∀ {A : U}. ∀ a : A. ∀ {b c : A}. ∀ f : b = c. \
+                         Eqd (symm (trans_1_eq a f)) :≡ \
+                         λ ef : a = c. λ e : a = b. ef = trans e f",
                         "∀ {A X : U}. ∀ {a b c : A}. ∀ f : b = c. ∀ h : (a = c) = X. \
                          Eqd (trans (trans_1_eq a f) h) :≡ \
                          λ e : a = b. λ x : X. trans e f =[h] x",
+                        "∀ {X A : U}. ∀ {a b c : A}. ∀ h : X = (a = c). ∀ f : b = c. \
+                         Eqd (trans h (symm (trans_1_eq a f))) :≡ \
+                         λ x : X. λ e : a = b. x =[h] trans e f",
                         "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. ∀ c : A. \
                          Eqd (trans_2_eq e c) :≡ \
                          λ ef : a = c. λ f : b = c. ef = trans e f",
+                        "∀ {A : U}. ∀ {a b : A}. ∀ e : a = b. ∀ c : A. \
+                         Eqd (symm (trans_2_eq e c)) :≡ \
+                         λ f : b = c. λ ef : a = c. trans e f = ef",
                         "∀ {X A : U}. ∀ {a b c : A}. ∀ h : X = (a = c). ∀ e : a = b. \
                          Eqd (trans h (trans_2_eq e c)) :≡ \
                          λ x : X. λ f : b = c. x =[h] trans e f",
+                        "∀ {A X : U}. ∀ {a b c : A}. ∀ e : a = b. ∀ h : (a = c) = X. \
+                         Eqd (trans (symm (trans_2_eq e c)) h) :≡ \
+                         λ f : b = c. λ x : X. trans e f =[h] x",
                         "∀ {A : U}. ∀ {a b c d : A}. ∀ e : a = b. ∀ f : c = d. \
                          Eqd (trans (trans_2_eq e c) (trans_1_eq b f)) :≡ \
                          λ e' : a = c. λ f' : b = d. trans e' f = trans e f'",
+                        "∀ {A : U}. ∀ {a b c d : A}. ∀ f : c = d. ∀ e : a = b. \
+                         Eqd (trans (symm (trans_1_eq b f)) (symm (trans_2_eq e c))) :≡ \
+                         λ f' : b = d. λ e' : a = c. trans e f' = trans e' f",
                         // -- Symmetric equalities --
-                        "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
-                         Eqd (Pi_eq eP) :≡ λ f f'. Π a : A. f a =[eP a] f' a",
                         "∀ {A A' : U}. ∀ eA : A = A'. ∀ B : U. \
                          Eqd (Fun_1_eq eA B) :≡ \
                          λ f f'. Π {a : A}. Π {a' : A'}. a =[eA] a' → f a = f' a'",
+                        "∀ A : U. ∀ {B B' : U}. ∀ eB : B = B'. \
+                         Eqd (Fun_2_eq A eB) :≡ λ f f'. Π a : A. f a =[eB] f' a",
+                        // TODO: We need to reduce `Fun_1_eq` etc. on `refl`. But then we can't use
+                        // implication. Use `a : any eA` instead?
+                        "∀ {A A' : U}. ∀ eA : A = A'. ∀ {B B' : U}. ∀ eB : B = B'. \
+                         Eqd (trans (Fun_1_eq eA B) (Fun_2_eq A' eB)) :≡ \
+                         λ f f'. Π {a : A}. Π {a' : A'}. a =[eA] a' → f a =[eB] f' a'",
+                        "∀ {A A' : U}. ∀ eA : A = A'. ∀ {B B' : U}. ∀ eB : B = B'. \
+                         Eqd (trans (Fun_2_eq A eB) (Fun_1_eq eA B')) :≡ \
+                         λ f f'. Π {a : A}. Π {a' : A'}. a =[eA] a' → f a =[eB] f' a'",
                         "∀ {A A' : U}. ∀ eA : A = A'. ∀ P : A → U. ∀ P' : A' → U. \
                          ∀ hP : (Π {a : A}. Π {a' : A'}. a =[eA] a' → P a = P' a'). \
                          Eqd (Pi_1_eq eA P P' hP) :≡ \
                          λ f f'. Π {a : A}. Π {a' : A'}. Π ea : a =[eA] a'. f a =[hP ea] f' a'",
+                        "∀ {A : U}. ∀ {P P' : A → U}. ∀ eP : P = P'. \
+                         Eqd (Pi_eq eP) :≡ λ f f'. Π a : A. f a =[eP a] f' a",
                     ],
                 },
                 defs: &[
@@ -835,6 +899,7 @@ pub fn get_mltt() -> MetaLogic {
                              transd (refld a) e :≡ e",
                             "∀ {A B : U}. ∀ {eAB : A = B}. ∀ {a : A}. ∀ {b : B}. ∀ e : a =[eAB] b. \
                              transd e (refld b) :≡ e",
+                            // TODO: associativity
                             // TODO: Reduce to a proof in the general case? (Must be confluent then.)
                         ],
                     }),
@@ -842,13 +907,17 @@ pub fn get_mltt() -> MetaLogic {
                         sym: "transd_1_eq : Π {A B C : U}. Π eAB : A = B. Π eBC : B = C. \
                                             Π a : A. Π {b : B}. Π {c : C}. b =[eBC] c → \
                                             (a =[eAB] b) = (a =[trans eAB eBC] c)",
-                        red: &[],
+                        red: &[
+                            // TODO
+                        ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "transd_2_eq : Π {A B C : U}. Π eAB : A = B. Π eBC : B = C. \
                                             Π {a : A}. Π {b : B}. a =[eAB] b → Π c : C. \
                                             (a =[trans eAB eBC] c) = (b =[eBC] c)",
-                        red: &[],
+                        red: &[
+                            // TODO
+                        ],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "transd1 : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b b' : B}. \
@@ -874,16 +943,6 @@ pub fn get_mltt() -> MetaLogic {
                                              (a =[eAB] b) = (a' =[eAB] b)",
                         red: &["transd2_2_eq :≡ λ {A B}. λ eAB. transd_2_eq (refl A) eAB"],
                     }),
-                    /*ModuleInit::Def(DefInit {
-                        sym: "transd_assoc : Π {A B C D : U}. \
-                                             Π {eAB : A = B}. Π {eBC : B = C}. Π {eCD : C = D}. \
-                                             Π {a : A}. Π {b : B}. Π {c : C}. Π {d : D}. \
-                                             Π e : a =[eAB] b. Π f : b =[eBC] c. Π g : c =[eCD] d. \
-                                             transd (transd e f) g = \
-                                             transd {A} {B} {D} {eAB} {trans eBC eCD} {a} {b} {d} \
-                                                    e (transd f g)",
-                        red: &["transd_assoc :≡ sorry _"],
-                    }),*/
                     ModuleInit::Def(DefInit {
                         sym: "symmd : Π {A B : U}. Π {eAB : A = B}. Π {a : A}. Π {b : B}. \
                                       a =[eAB] b → b =[symm eAB] a",
@@ -957,14 +1016,6 @@ pub fn get_mltt() -> MetaLogic {
                                                              (trans_2_eq (inv_to eAB a) a') \
                                                              (trans_1_eq a (inv_to eAB a')) \
                                                              (sorry3 _)"],
-                    }),
-                    ModuleInit::Def(DefInit {
-                        sym: "Eqd_trans_assoc : Π {A B C D : U}. \
-                                                Π eAB : A = B. Π eBC : B = C. Π eCD : C = D. \
-                                                Π a : A. Π d : D. \
-                                                (a =[trans (trans eAB eBC) eCD] d) = \
-                                                (a =[trans eAB (trans eBC eCD)] d)",
-                        red: &["Eqd_trans_assoc :≡ λ {A B C D}. λ eAB eBC eCD a d. sorry3 _"],
                     }),
                     ModuleInit::Def(DefInit {
                         sym: "Eqd_ap_symm : Π {A B : U}. Π eAB eAB' : A = B. Π a : A. Π b : B. \
@@ -1146,10 +1197,10 @@ pub fn get_mltt() -> MetaLogic {
                     "∀ {A B : U}. ∀ f : A → B. ∀ {a b : A}. ∀ e : a = b. \
                      ap f (symm e) :≡ symm (ap f e)",
                     // -- Type constructors --
+                    "∀ A : U. ap (Fun A) :≡ Fun_2_eq A",
                     "∀ A : U. ap (Pi {A}) :≡ Pi_eq {A}",
-                    "∀ B : U. ap (λ A : U. A → B) :≡ λ {A A'}. λ eA. Fun_1_eq eA B",
+                    "ap Fun :≡ Fun_1_eq",
                     // TODO: Make these specializations unnecessary.
-                    // This probably requires a dedicated `Fun` type in addition to `Pi`.
                     "∀ {A : U}. ∀ P : A → U. ∀ B : U. \
                      ap (λ a : A. P a → B) :≡ λ {a a'}. λ ea. Fun_1_eq (ap P ea) B",
                     "∀ B C : U. ap (λ A : U. (A → B) → C) :≡ λ {A A'}. λ eA. \
@@ -1239,9 +1290,14 @@ pub fn get_mltt() -> MetaLogic {
                     "ap_symm {U} :≡ λ {A B eAB eAB'}. λ h. \
                                     λ b : B. λ a : A. Eqd_ap_symm eAB eAB' a b (h a b)",
                     "ap_symm {Unit} :≡ λ {_ _ _ _}. λ _. unit",
+                    "∀ A B : U. \
+                     ap_symm {A → B} :≡ λ {f g e e'}. λ h. \
+                                        λ a : A. ap_symm {B} {f a} {g a} {e a} {e' a} (h a)",
                     "∀ {A : U}. ∀ P : A → U. \
                      ap_symm {Pi P} :≡ λ {f g e e'}. λ h. \
                                        λ a : A. ap_symm {P a} {f a} {g a} {e a} {e' a} (h a)",
+                    "∀ A B : U. \
+                     ap_symm {A × B} :≡ λ {p q e e'}. λ h. sorry5 _",
                     "∀ {A : U}. ∀ P : A → U. \
                      ap_symm {Sigma P} :≡ λ {p q e e'}. λ h. sorry5 _",
                     "∀ A B : U. \
@@ -1432,199 +1488,31 @@ pub fn get_mltt() -> MetaLogic {
                 red: &[],
             }),
         ],
-        |constants| Box::new(MLTTLambdaHandler::new(constants)),
+        get_mltt_config,
     )
     .unwrap()
 }
 
-struct MLTTLambdaHandler {
-    u_idx: VarIndex,
-    pi_idx: VarIndex,
-    sigma_idx: VarIndex,
-    id_idx: VarIndex,
-    const_idx: VarIndex,
-    substd_idx: VarIndex,
-    eq_idx: VarIndex,
-    eqd_idx: VarIndex,
-}
-
-impl MLTTLambdaHandler {
-    fn new(constants: &HashMap<&str, VarIndex>) -> Self {
-        MLTTLambdaHandler {
-            u_idx: *constants.get("U").unwrap(),
-            pi_idx: *constants.get("Pi").unwrap(),
-            sigma_idx: *constants.get("Sigma").unwrap(),
-            id_idx: *constants.get("id").unwrap(),
-            const_idx: *constants.get("const").unwrap(),
-            substd_idx: *constants.get("substd").unwrap(),
-            eq_idx: *constants.get("Eq").unwrap(),
-            eqd_idx: *constants.get("Eqd").unwrap(),
-        }
+fn get_mltt_config(constants: &HashMap<&str, VarIndex>) -> MetaLogicConfig {
+    MetaLogicConfig {
+        universe_type: make_const_expr(constants, "U"),
+        fun_ctor: Some(make_const_expr(constants, "Fun")),
+        pi_ctor: Some(make_const_expr(constants, "Pi")),
+        id_cmb: Some(make_const_expr(constants, "id")),
+        const_cmb: Some(make_const_expr(constants, "const")),
+        subst_cmb: Some(make_const_expr(constants, "subst")),
+        substd_cmb: Some(make_const_expr(constants, "substd")),
+        pair_ctor: Some(make_const_expr(constants, "Pair")),
+        sigma_ctor: Some(make_const_expr(constants, "Sigma")),
+        eq_ctor: Some(make_const_expr(constants, "Eq")),
+        eqd_ctor: Some(make_const_expr(constants, "Eqd")),
+        implicit_arg_max_depth: 1,
+        placeholder_max_reduction_depth: 4,
     }
 }
 
-impl LambdaHandler for MLTTLambdaHandler {
-    fn get_universe_type(&self) -> Result<Expr> {
-        Ok(Expr::var(self.u_idx))
-    }
-
-    fn get_dep_type(
-        &self,
-        domain: Expr,
-        prop: Expr,
-        kind: DependentTypeCtorKind,
-        _: MinimalContext,
-    ) -> Result<Expr> {
-        let idx = match kind {
-            DependentTypeCtorKind::Pi => self.pi_idx,
-            DependentTypeCtorKind::Sigma => self.sigma_idx,
-        };
-        let domain_arg = Arg {
-            expr: domain,
-            implicit: true,
-            match_all: false,
-        };
-        let prop_arg = Arg {
-            expr: prop,
-            implicit: false,
-            match_all: false,
-        };
-        Ok(Expr::multi_app(
-            Expr::var(idx),
-            smallvec![domain_arg, prop_arg],
-        ))
-    }
-
-    fn get_id_cmb(&self, domain: Expr, _: MinimalContext) -> Result<Expr> {
-        Ok(Expr::explicit_app(Expr::var(self.id_idx), domain))
-    }
-
-    fn get_const_cmb(&self, domain: Expr, codomain: Expr, _: MinimalContext) -> Result<Expr> {
-        let domain_arg = Arg {
-            expr: domain,
-            implicit: false,
-            match_all: false,
-        };
-        let codomain_arg = Arg {
-            expr: codomain,
-            implicit: true,
-            match_all: false,
-        };
-        Ok(Expr::multi_app(
-            Expr::var(self.const_idx),
-            smallvec![domain_arg, codomain_arg],
-        ))
-    }
-
-    fn get_subst_cmb(
-        &self,
-        domain: Expr,
-        prop1: Expr,
-        rel2: Expr,
-        _: MinimalContext,
-    ) -> Result<Expr> {
-        let domain_arg = Arg {
-            expr: domain,
-            implicit: true,
-            match_all: false,
-        };
-        let prop1_arg = Arg {
-            expr: prop1,
-            implicit: true,
-            match_all: false,
-        };
-        let rel2_arg = Arg {
-            expr: rel2,
-            implicit: true,
-            match_all: false,
-        };
-        Ok(Expr::multi_app(
-            Expr::var(self.substd_idx),
-            smallvec![domain_arg, prop1_arg, rel2_arg],
-        ))
-    }
-
-    fn get_indep_eq_type(
-        &self,
-        domain: Expr,
-        left: Expr,
-        right: Expr,
-        _: MinimalContext,
-    ) -> Result<Expr> {
-        let domain_arg = Arg {
-            expr: domain,
-            implicit: true,
-            match_all: false,
-        };
-        let left_arg = Arg {
-            expr: left,
-            implicit: false,
-            match_all: false,
-        };
-        let right_arg = Arg {
-            expr: right,
-            implicit: false,
-            match_all: false,
-        };
-        Ok(Expr::multi_app(
-            Expr::var(self.eq_idx),
-            smallvec![domain_arg, left_arg, right_arg],
-        ))
-    }
-
-    fn get_dep_eq_type(
-        &self,
-        left_domain: Expr,
-        right_domain: Expr,
-        domain_eq: Expr,
-        left: Expr,
-        right: Expr,
-        _: MinimalContext,
-    ) -> Result<Expr> {
-        let left_domain_arg = Arg {
-            expr: left_domain,
-            implicit: true,
-            match_all: false,
-        };
-        let right_domain_arg = Arg {
-            expr: right_domain,
-            implicit: true,
-            match_all: false,
-        };
-        let domain_eq_arg = Arg {
-            expr: domain_eq,
-            implicit: false,
-            match_all: false,
-        };
-        let left_arg = Arg {
-            expr: left,
-            implicit: false,
-            match_all: false,
-        };
-        let right_arg = Arg {
-            expr: right,
-            implicit: false,
-            match_all: false,
-        };
-        Ok(Expr::multi_app(
-            Expr::var(self.eqd_idx),
-            smallvec![
-                left_domain_arg,
-                right_domain_arg,
-                domain_eq_arg,
-                left_arg,
-                right_arg
-            ],
-        ))
-    }
-
-    fn implicit_arg_max_depth(&self) -> u32 {
-        1
-    }
-
-    fn placeholder_max_reduction_depth(&self) -> u32 {
-        4
-    }
+fn make_const_expr(constants: &HashMap<&str, VarIndex>, name: &str) -> Expr {
+    Expr::var(*constants.get(name).unwrap())
 }
 
 #[cfg(test)]
@@ -1756,11 +1644,7 @@ mod tests {
         app_u.convert_to_combinators(&root_ctx, -1)?;
         assert_eq!(
             app_u.print(&root_ctx),
-            "substd {Pi {U} (const U {U} U)} \
-                    {const (Pi {U} (const U {U} U)) {U} U} \
-                    {const (Pi {U} (const U {U} U)) {Pi {U} (const U {U} U)} (const U {U} U)} \
-                    (id (Pi {U} (const U {U} U))) \
-                    (const (Pi {U} (const U {U} U)) {U} U)"
+            "subst {U → U} {U} {U} (id (U → U)) (const (U → U) {U} U)"
         );
         assert!(app_u.has_type(&mut app_u_type, &mltt.get_root_context())?);
 
@@ -1768,19 +1652,21 @@ mod tests {
         assert_eq!(id_fun.print(&root_ctx), "id");
 
         let mut pi_type = pi.type_expr.clone();
-        pi_type.convert_to_combinators(&root_ctx, 2)?;
+        pi_type.convert_to_combinators(&root_ctx, -1)?;
         assert_eq!(
             pi_type.print(&root_ctx),
-            "Pi {U} (substd {U} {λ {A : U}. (A → U) → U} {λ {A : U}. λ _ : (A → U) → U. U} \
-                            (λ {A : U}. Pi {A → U}) (λ {A : U}. λ _ : A → U. U))"
+            "Pi {U} (subst {U} {U} {U} \
+                           (subst {U} {U} {U → U} \
+                                  (const U {U → U → U} Fun) \
+                                  (subst {U} {U} {U} Fun (const U {U} U))) \
+                           (const U {U} U))"
         );
 
         let mut id_cmb_type = id_cmb.type_expr.clone();
-        id_cmb_type.convert_to_combinators(&root_ctx, 2)?;
+        id_cmb_type.convert_to_combinators(&root_ctx, -1)?;
         assert_eq!(
             id_cmb_type.print(&root_ctx),
-            "Pi {U} (substd {U} {λ A : U. A → U} {λ A : U. λ _ : A → U. U} \
-                            (λ A : U. Pi {A}) (λ A : U. λ _ : A. A))"
+            "Pi {U} (subst {U} {U} {U} Fun (id U))"
         );
         assert_eq!(id_cmb_type.get_type(&root_ctx)?, univ);
 
@@ -1788,8 +1674,7 @@ mod tests {
         const_cmb_type.convert_to_combinators(&root_ctx, 2)?;
         assert_eq!(
             const_cmb_type.print(&root_ctx),
-            "Pi {U} (substd {U} {λ A : U. U → U} {λ A : U. λ _ : U → U. U} \
-                            (λ A : U. Pi {U}) (λ A : U. λ {B : U}. B → A → B))"
+            "Pi {U} (subst {U} {U → U} {U} (λ A : U. Pi {U}) (λ A : U. λ {B : U}. B → A → B))"
         );
         assert_eq!(const_cmb_type.get_type(&root_ctx)?, univ);
 
@@ -1852,27 +1737,40 @@ mod tests {
         mltt.add_definition("PointedType", mltt.parse_expr("Σ A : U. A")?)?;
 
         let root_ctx = mltt.get_root_context();
-        let mut pointed_type_eq = mltt.parse_expr("λ A B : PointedType. A = B")?;
+        let mut pointed_type_eq = mltt.parse_expr("λ X Y : PointedType. X = Y")?;
         pointed_type_eq.reduce_all(&root_ctx)?;
         assert_eq!(
             pointed_type_eq.print(&root_ctx),
-            "λ A : (Σ A : U. A). λ B : (Σ A' : U. A'). \
-             Σ e_fst : Sigma_fst A = Sigma_fst B. Sigma_snd A =[e_fst] Sigma_snd B"
+            "λ X : (Σ A : U. A). λ Y : (Σ A : U. A). \
+             Σ e_fst : Sigma_fst X = Sigma_fst Y. Sigma_snd X =[e_fst] Sigma_snd Y"
         );
 
         mltt.add_definition("TypeWithFun", mltt.parse_expr("Σ A : U. A → A")?)?;
 
         let root_ctx = mltt.get_root_context();
-        let mut type_with_fun = mltt.parse_expr("λ A B : TypeWithFun. A = B")?;
+        let mut type_with_fun = mltt.parse_expr("λ X Y : TypeWithFun. X = Y")?;
         type_with_fun.reduce_all(&root_ctx)?;
-        //assert_eq!(type_with_fun.print(&root_ctx), "TODO");
+        assert_eq!(
+            type_with_fun.print(&root_ctx),
+            "λ X : (Σ A : U. A → A). λ Y : (Σ A : U. A → A). \
+             Σ e_fst : Sigma_fst X = Sigma_fst Y. \
+             Π {a : Sigma_fst X}. Π {a' : Sigma_fst Y}. \
+             a =[e_fst] a' → Sigma_snd X a =[e_fst] Sigma_snd Y a'"
+        );
 
         mltt.add_definition("Magma", mltt.parse_expr("Σ A : U. A → A → A")?)?;
 
         let root_ctx = mltt.get_root_context();
-        let mut magma_eq = mltt.parse_expr("λ A B : Magma. A = B")?;
+        let mut magma_eq = mltt.parse_expr("λ X Y : Magma. X = Y")?;
         magma_eq.reduce_all(&root_ctx)?;
-        //assert_eq!(magma_eq.print(&root_ctx), "TODO");
+        assert_eq!(
+            magma_eq.print(&root_ctx),
+            "λ X : (Σ A : U. A → A → A). λ Y : (Σ A : U. A → A → A). \
+             Σ e_fst : Sigma_fst X = Sigma_fst Y. \
+             Π {a : Sigma_fst X}. Π {a' : Sigma_fst Y}. \
+             a =[e_fst] a' → (Π {a'' : Sigma_fst X}. Π {a''' : Sigma_fst Y}. \
+                              a'' =[e_fst] a''' → Sigma_snd X a a'' =[e_fst] Sigma_snd Y a' a''')"
+        );
 
         Ok(())
     }
