@@ -1091,7 +1091,7 @@ pub struct Param {
     pub implicit: bool,
 }
 
-impl NamedObject<Symbol> for Param {
+impl NamedObject<Option<Symbol>> for Param {
     fn get_name(&self) -> Option<Symbol> {
         self.name
     }

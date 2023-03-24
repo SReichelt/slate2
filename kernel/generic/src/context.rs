@@ -222,7 +222,7 @@ impl<ParamType, ExtraData: Copy + VarAccessor<ParamType>> VarAccessor<ParamType>
 }
 
 pub trait NamedObject<Name> {
-    fn get_name(&self) -> Option<Name>;
+    fn get_name(&self) -> Name;
 }
 
 pub trait NamedVarAccessor<Name, ParamType: NamedObject<Name>>: VarAccessor<ParamType> {
@@ -239,7 +239,7 @@ impl<Name: Copy + PartialEq, ParamType: NamedObject<Name>, T: VarAccessor<ParamT
 {
     fn get_var_index(&self, name: Name, mut occurrence: usize) -> Option<VarIndex> {
         self.for_each_var(|idx, param| {
-            if param.get_name() == Some(name) {
+            if param.get_name() == name {
                 if occurrence == 0 {
                     return Some(idx);
                 }

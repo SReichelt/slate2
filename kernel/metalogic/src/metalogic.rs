@@ -135,11 +135,11 @@ impl MetaLogic {
 
     pub fn get_constant(&self, name: &str) -> Option<&Constant> {
         let symbol = self.symbol_table.intern(name);
-        let var_idx = self.constants.get_var_index(symbol, 0)?;
+        let var_idx = self.constants.get_var_index(Some(symbol), 0)?;
         Some(self.constants.get_var(var_idx))
     }
 
-    pub fn get_display_name(&self, obj: &impl NamedObject<Symbol>) -> &str {
+    pub fn get_display_name(&self, obj: &impl NamedObject<Option<Symbol>>) -> &str {
         if let Some(name) = obj.get_name() {
             self.symbol_table.resolve(name)
         } else {
@@ -383,10 +383,10 @@ pub trait MetaLogicRef {
 
     fn get_named_var_index(&self, name: &str, occurrence: usize) -> Option<VarIndex>
     where
-        Self: NamedVarAccessor<Symbol, Param>,
+        Self: NamedVarAccessor<Option<Symbol>, Param>,
     {
         let symbol = self.metalogic().symbol_table.intern(name);
-        self.get_var_index(symbol, occurrence)
+        self.get_var_index(Some(symbol), occurrence)
     }
 
     fn get_display_name(&self, param: &Param) -> &str {
@@ -404,7 +404,7 @@ pub struct Constant {
     pub reduction_rules: Vec<ReductionRule>,
 }
 
-impl NamedObject<Symbol> for Constant {
+impl NamedObject<Option<Symbol>> for Constant {
     fn get_name(&self) -> Option<Symbol> {
         self.param.get_name()
     }

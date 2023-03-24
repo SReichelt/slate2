@@ -134,25 +134,24 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
     }
 
     fn disambiguate_param<'a>(&self, param: &'a Param) -> Cow<'a, Param> {
-        if let Some(mut name) = param.name {
-            if self.context.has_var(name) {
-                let mut name_str = self.context.get_display_name(param).to_owned();
-                if let Expr::Var(Var(type_idx)) = param.type_expr {
-                    let type_param = self.context.get_var(type_idx);
-                    let type_name = self.context.get_display_name(type_param);
-                    if type_name.len() == 1 && type_name.starts_with(|c| ('A'..'I').contains(&c)) {
-                        name_str = type_name.to_lowercase();
-                        name = self.context.intern_name(&name_str);
-                    }
+        let mut name = param.name;
+        if name.is_some() && self.context.has_var(name) {
+            let mut name_str = self.context.get_display_name(param).to_owned();
+            if let Expr::Var(Var(type_idx)) = param.type_expr {
+                let type_param = self.context.get_var(type_idx);
+                let type_name = self.context.get_display_name(type_param);
+                if type_name.len() == 1 && type_name.starts_with(|c| ('A'..'I').contains(&c)) {
+                    name_str = type_name.to_lowercase();
+                    name = Some(self.context.intern_name(&name_str));
                 }
-                while self.context.has_var(name) {
-                    name_str += "\'";
-                    name = self.context.intern_name(&name_str);
-                }
-                let mut new_param = param.clone();
-                new_param.name = Some(name);
-                return Cow::Owned(new_param);
             }
+            while self.context.has_var(name) {
+                name_str += "\'";
+                name = Some(self.context.intern_name(&name_str));
+            }
+            let mut new_param = param.clone();
+            new_param.name = name;
+            return Cow::Owned(new_param);
         }
         Cow::Borrowed(param)
     }
