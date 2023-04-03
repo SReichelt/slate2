@@ -111,6 +111,10 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     self.output.write_char(')')?;
                 }
             }
+            Expr::Cast(cast) => {
+                self.print_expr_with_parens(&cast.expr, true, true, true, true, true)?;
+                self.output.write_str("↑")?;
+            }
         }
 
         Ok(())

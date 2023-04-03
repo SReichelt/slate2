@@ -4,6 +4,7 @@ use slate_kernel_generic::context::*;
 
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
+// TODO: Split into different traits, to handle recursion better
 pub trait ExprVisitor {
     fn expr(&self, _expr: &Expr, _ctx: &MetaLogicContext) -> Result<()> {
         Ok(())
@@ -42,6 +43,7 @@ impl<Visitor: ExprVisitor> ExprVisitor for DeepExprVisitor<Visitor> {
                 self.param(&lambda.param, ctx)?;
                 ctx.with_local(&lambda.param, |body_ctx| self.expr(&lambda.body, body_ctx))?;
             }
+            Expr::Cast(cast) => self.expr(&cast.expr, ctx)?,
         }
 
         self.0.expr(expr, ctx)
@@ -66,7 +68,7 @@ impl ExprVisitor for ParamTypeChecker {
     fn param(&self, param: &Param, ctx: &MetaLogicContext) -> Result<()> {
         let mut type_type = param.type_expr.get_type(ctx)?;
         let mut cmp_type_type = ctx.config().universe_type.clone();
-        if type_type.is_defeq(&mut cmp_type_type, ctx)? {
+        if type_type.is_defeq(&mut cmp_type_type, ctx)?.is_some() {
             Ok(())
         } else {
             let type_str = param.type_expr.print(ctx);

@@ -12,12 +12,11 @@ use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
 pub trait ExprManipulator {
-    fn expr(&self, _expr: &mut Expr, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
-    }
+    fn expr(&self, _expr: &mut Expr, _expected_type: Expr, _ctx: &MetaLogicContext) -> Result<()>;
 
-    fn param(&self, _param: &mut Param, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
+    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
+        let expected_type = ctx.config().universe_type.clone();
+        self.expr(&mut param.type_expr, expected_type, ctx)
     }
 
     fn params(&self, params: &mut [Param], ctx: &MetaLogicContext) -> Result<()> {
@@ -29,8 +28,8 @@ pub trait ExprManipulator {
         Ok(())
     }
 
-    fn arg(&self, _arg: &mut Arg, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
+    fn arg(&self, arg: &mut Arg, expected_type: Expr, ctx: &MetaLogicContext) -> Result<()> {
+        self.expr(&mut arg.expr, expected_type, ctx)
     }
 }
 
@@ -63,20 +62,22 @@ impl ImplicitArgInserter {
                 let fun = &mut app.body;
                 let arg = &mut app.param;
                 let mut fun_type = self.insert_implicit_args_and_get_type(fun, ctx)?;
-                self.arg(arg, ctx)?;
                 while let Some(lambda) =
                     fun_type.match_type_as_lambda(StandardTypeCtorKind::Pi, ctx)
                 {
                     if lambda.param.implicit && !arg.implicit {
-                        *fun = Expr::app(take(fun), Arg::implicit(Expr::Placeholder));
-                        fun_type = lambda.apply(arg.clone(), ctx);
+                        let inserted_arg = Arg::implicit(Expr::Placeholder);
+                        *fun = Expr::app(take(fun), inserted_arg.clone());
+                        fun_type = lambda.apply(inserted_arg, ctx);
                     } else if arg.implicit && !lambda.param.implicit {
                         let name = ctx.get_display_name(&lambda.param);
                         return Err(anyhow!("expected explicit argument for «{name}»"));
                     } else {
+                        self.arg(arg, lambda.param.type_expr.clone(), ctx)?;
                         return Ok(lambda.apply(arg.clone(), ctx));
                     }
                 }
+                self.arg(arg, Expr::Placeholder, ctx)?;
                 Ok(Expr::Placeholder)
             }
             Expr::Lambda(lambda) => {
@@ -87,22 +88,15 @@ impl ImplicitArgInserter {
                     Expr::get_fun_type(&lambda.param, body_type, ctx, body_ctx)
                 })
             }
+            Expr::Cast(cast) => self.insert_implicit_args(&mut cast.expr, ctx),
         }
     }
 }
 
 impl ExprManipulator for ImplicitArgInserter {
-    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
+    fn expr(&self, expr: &mut Expr, _expected_type: Expr, ctx: &MetaLogicContext) -> Result<()> {
         self.insert_implicit_args(expr, ctx)?;
         Ok(())
-    }
-
-    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut param.type_expr, ctx)
-    }
-
-    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut arg.expr, ctx)
     }
 }
 
@@ -151,10 +145,12 @@ impl PlaceholderFiller {
                     };
                     ctx.with_new_options(type_str_options, |type_str_ctx| {
                         let type_str = expected_type.print(type_str_ctx);
-                        if let Ok(true) = expected_type.reduce_all(type_str_ctx) {
-                            let reduced_type_str = expected_type.print(type_str_ctx);
-                            if reduced_type_str != type_str {
-                                return Err(anyhow!("unfilled placeholder of type «{type_str}»\n(reduced: «{reduced_type_str}»)"));
+                        if let Ok(reductions) = expected_type.reduce_all(type_str_ctx) {
+                            if !reductions.is_empty() {
+                                let reduced_type_str = expected_type.print(type_str_ctx);
+                                if reduced_type_str != type_str {
+                                    return Err(anyhow!("unfilled placeholder of type «{type_str}»\n(reduced: «{reduced_type_str}»)"));
+                                }
                             }
                         }
                         Err(anyhow!("unfilled placeholder of type «{type_str}»"))
@@ -250,6 +246,7 @@ impl PlaceholderFiller {
                     Expr::get_fun_type(&lambda.param, body_type, ctx, body_ctx)
                 })
             }
+            Expr::Cast(cast) => self.fill_inner_placeholders(&mut cast.expr, expected_type, ctx),
         }
     }
 
@@ -544,23 +541,23 @@ impl PlaceholderFiller {
                 })?;
                 Ok(Expr::Lambda(Box::new(Lambda { param, body })))
             }
+            Expr::Cast(cast) => Ok(Expr::Cast(Box::new(CastExpr {
+                expr: Self::replaced_or_shifted(&cast.expr, expr_ctx, match_expr, match_superctx)?,
+                target_type: Self::replaced_or_shifted(
+                    &cast.target_type,
+                    expr_ctx,
+                    match_expr,
+                    match_superctx,
+                )?,
+                type_defeq: cast.type_defeq.clone(),
+            }))),
         }
     }
 }
 
 impl ExprManipulator for PlaceholderFiller {
-    fn expr(&self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<()> {
-        self.fill_placeholders(expr, Expr::Placeholder, ctx)?;
+    fn expr(&self, expr: &mut Expr, expected_type: Expr, ctx: &MetaLogicContext) -> Result<()> {
+        self.fill_placeholders(expr, expected_type, ctx)?;
         Ok(())
-    }
-
-    fn param(&self, param: &mut Param, ctx: &MetaLogicContext) -> Result<()> {
-        let expected_type = ctx.config().universe_type.clone();
-        self.fill_placeholders(&mut param.type_expr, expected_type, ctx)?;
-        Ok(())
-    }
-
-    fn arg(&self, arg: &mut Arg, ctx: &MetaLogicContext) -> Result<()> {
-        self.expr(&mut arg.expr, ctx)
     }
 }

@@ -102,7 +102,7 @@ impl MetaLogicVisitor for ReductionRuleChecker {
     fn reduction_body(&self, body: &ReductionBody, ctx: &MetaLogicContext) -> Result<()> {
         let mut source_type = body.source.get_type(ctx)?;
         let mut target_type = body.target.get_type(ctx)?;
-        if source_type.is_defeq(&mut target_type, ctx)? {
+        if source_type.is_defeq(&mut target_type, ctx)?.is_some() {
             Ok(())
         } else {
             let source_str = body.source.print(ctx);

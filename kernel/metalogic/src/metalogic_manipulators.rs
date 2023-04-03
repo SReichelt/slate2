@@ -75,8 +75,10 @@ pub trait MetaLogicManipulator: MetaLogicVisitorBase {
         Ok(())
     }
 
-    fn reduction_rule(&self, _rule: &mut ReductionRule, _ctx: &MetaLogicContext) -> Result<()> {
-        Ok(())
+    fn reduction_rule(&self, rule: &mut ReductionRule, ctx: &MetaLogicContext) -> Result<()> {
+        ctx.with_locals(&rule.params, |body| {
+            self.reduction_body(&mut rule.body, body)
+        })
     }
 
     fn reduction_body(&self, _body: &mut ReductionBody, _ctx: &MetaLogicContext) -> Result<()> {
@@ -135,8 +137,7 @@ impl MetaLogicManipulator for PlaceholderFiller {
             source_type =
                 self.fill_placeholders(&mut body.source.clone(), Expr::Placeholder, ctx)?;
         }
-        self.fill_placeholders(&mut body.target, source_type, ctx)?;
-        Ok(())
+        self.expr(&mut body.target, source_type, ctx)
     }
 }
 

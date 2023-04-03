@@ -303,7 +303,7 @@ impl MetaLogic {
         let arg_inserter = ImplicitArgInserter {
             max_depth: self.config.implicit_arg_max_depth,
         };
-        arg_inserter.expr(&mut expr, &root_ctx)?;
+        arg_inserter.insert_implicit_args(&mut expr, &root_ctx)?;
 
         self.adapt_user_expr(&mut expr)?;
 

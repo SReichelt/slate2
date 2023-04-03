@@ -1629,7 +1629,7 @@ mod tests {
             "Π A : U. Π B : U. A → B → A"
         );
         let pair_fst_fun_reduced = pair_fst_fun.reduce_all(&root_ctx)?;
-        assert!(pair_fst_fun_reduced);
+        assert!(!pair_fst_fun_reduced.is_empty());
         assert_eq!(
             pair_fst_fun.print(&root_ctx),
             "λ A : U. λ B : U. λ a : A. λ b : B. a"

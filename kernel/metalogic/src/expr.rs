@@ -17,6 +17,7 @@ pub enum Expr {
     Var(Var), // includes primitive constants
     App(Box<AppExpr>),
     Lambda(Box<LambdaExpr>),
+    Cast(Box<CastExpr>),
 }
 
 impl Expr {
@@ -106,10 +107,11 @@ impl Expr {
             Expr::Var(_) => true,
             Expr::App(_) => false,
             Expr::Lambda(_) => false,
+            Expr::Cast(cast) => cast.expr.is_small(),
         }
     }
 
-    pub fn reduce_all(&mut self, ctx: &MetaLogicContext) -> Result<bool> {
+    pub fn reduce_all(&mut self, ctx: &MetaLogicContext) -> Result<ReductionTrace> {
         self.reduce(ctx, false, -1)
     }
 
@@ -118,44 +120,48 @@ impl Expr {
         ctx: &MetaLogicContext,
         head_only: bool,
         mut max_depth: i32,
-    ) -> Result<bool> {
+    ) -> Result<ReductionTrace> {
         if self.is_empty() {
-            return Ok(false);
+            return Ok(Vec::new());
         }
 
         if max_depth >= 0 {
             if max_depth == 0 {
-                return Ok(false);
+                return Ok(Vec::new());
             }
             max_depth -= 1;
         }
 
         let apply_reduction_rules = ctx.options().reduce_with_reduction_rules;
 
-        let mut reduced = false;
+        let mut reductions = Vec::new();
 
         loop {
-            reduced |= self.reduce_step_impl(ctx, head_only, max_depth)?;
+            self.reduce_step_impl(ctx, head_only, max_depth, &mut reductions)?;
 
             if apply_reduction_rules {
                 if let Some(applied_rule) = self.apply_reduction_rule(ctx)? {
                     if applied_rule {
-                        reduced = true;
+                        reductions.push(ReductionStep::ReductionRuleApplication);
                         continue;
                     }
                 } else if head_only {
                     // Indeterminate result with not-fully-reduced arguments: reduce them and retry.
-                    if self.reduce_step_impl(ctx, false, max_depth)? {
-                        reduced = true;
+                    let old_reductions_len = reductions.len();
+                    self.reduce_step_impl(ctx, false, max_depth, &mut reductions)?;
+                    if reductions.len() != old_reductions_len {
                         if let Some(true) = self.apply_reduction_rule(ctx)? {
+                            reductions.push(ReductionStep::ReductionRuleApplication);
                             continue;
                         }
                     }
                 }
             }
 
-            return Ok(reduced);
+            break;
         }
+
+        Ok(reductions)
     }
 
     fn reduce_step_impl(
@@ -163,9 +169,8 @@ impl Expr {
         ctx: &MetaLogicContext,
         head_only: bool,
         max_depth: i32,
-    ) -> Result<bool> {
-        let mut reduced = false;
-
+        reductions: &mut ReductionTrace,
+    ) -> Result<()> {
         loop {
             match self {
                 Expr::Placeholder => {}
@@ -178,37 +183,54 @@ impl Expr {
                     // argument if it is dropped.
                     if let Some(beta_reduced) = app.beta_reduce_if_trivial(ctx) {
                         *self = beta_reduced;
-                        reduced = true;
+                        reductions.push(ReductionStep::BetaReduction);
                         continue;
                     }
 
-                    reduced |= app.body.reduce(ctx, head_only, max_depth)?;
+                    let fun_reductions = app.body.reduce(ctx, head_only, max_depth)?;
+                    if !fun_reductions.is_empty() {
+                        reductions.push(ReductionStep::AppFunReduction(fun_reductions));
+                    }
 
                     if !head_only {
                         // Reduction of function may have made beta reduction possible.
                         if let Some(beta_reduced) = app.beta_reduce_if_trivial(ctx) {
                             *self = beta_reduced;
-                            reduced = true;
+                            reductions.push(ReductionStep::BetaReduction);
                             continue;
                         }
 
-                        reduced |= app.param.expr.reduce(ctx, head_only, max_depth)?;
+                        let arg_reductions = app.param.expr.reduce(ctx, head_only, max_depth)?;
+                        if !arg_reductions.is_empty() {
+                            reductions.push(ReductionStep::AppArgReduction(arg_reductions));
+                        }
                     }
 
                     // Now always beta-reduce if possible.
                     if let Some(beta_reduced) = app.beta_reduce(ctx) {
                         *self = beta_reduced;
-                        reduced = true;
+                        reductions.push(ReductionStep::BetaReduction);
                         continue;
                     }
                 }
                 Expr::Lambda(lambda) => {
                     if !head_only {
-                        reduced |= lambda.param.type_expr.reduce(ctx, head_only, max_depth)?;
+                        let param_type_reductions =
+                            lambda.param.type_expr.reduce(ctx, head_only, max_depth)?;
+                        if !param_type_reductions.is_empty() {
+                            reductions.push(ReductionStep::LambdaParamTypeReduction(
+                                param_type_reductions,
+                            ));
+                        }
 
                         if let Some(eta_reduced) =
                             ctx.with_local(&lambda.param, |body_ctx| -> Result<Option<Expr>> {
-                                reduced |= lambda.body.reduce(body_ctx, head_only, max_depth)?;
+                                let body_reductions =
+                                    lambda.body.reduce(body_ctx, head_only, max_depth)?;
+                                if !body_reductions.is_empty() {
+                                    reductions
+                                        .push(ReductionStep::LambdaBodyReduction(body_reductions));
+                                }
 
                                 // Eta-reduction isn't really important, but it makes printed
                                 // expressions easier to read.
@@ -222,15 +244,23 @@ impl Expr {
                             })?
                         {
                             *self = eta_reduced;
-                            reduced = true;
+                            reductions.push(ReductionStep::EtaReduction);
                             continue;
                         }
                     }
                 }
+                Expr::Cast(cast) => {
+                    let cast_expr_reductions = cast.expr.reduce(ctx, head_only, max_depth)?;
+                    if !cast_expr_reductions.is_empty() {
+                        reductions.push(ReductionStep::CastExprReduction(cast_expr_reductions));
+                    }
+                }
             }
 
-            return Ok(reduced);
+            break;
         }
+
+        Ok(())
     }
 
     fn apply_reduction_rule(&mut self, ctx: &MetaLogicContext) -> Result<Option<bool>> {
@@ -299,22 +329,30 @@ impl Expr {
         None
     }
 
-    pub fn is_defeq(&mut self, expr: &mut Expr, ctx: &MetaLogicContext) -> Result<bool> {
+    pub fn is_defeq(
+        &mut self,
+        expr: &mut Expr,
+        ctx: &MetaLogicContext,
+    ) -> Result<Option<DefinitionalEquality>> {
         if self.compare(expr, ctx)? {
-            return Ok(true);
+            return Ok(Some(DefinitionalEquality::trivial()));
         }
 
         // We could first reduce just enough to be sure that the two expressions cannot possibly be
         // definitionally equal, but `is_defeq` is really only meant to be called for verification,
         // not for matching.
-        let mut reduced = self.reduce_all(ctx)?;
-        reduced |= expr.reduce_all(ctx)?;
+        let self_reductions = self.reduce_all(ctx)?;
+        let expr_reductions = expr.reduce_all(ctx)?;
 
-        if reduced {
-            self.compare(expr, ctx)
-        } else {
-            Ok(false)
+        if !self_reductions.is_empty() || !expr_reductions.is_empty() && self.compare(expr, ctx)? {
+            // TODO: optimize
+            return Ok(Some(DefinitionalEquality {
+                left: self_reductions,
+                right: expr_reductions,
+            }));
         }
+
+        Ok(None)
     }
 
     pub fn convert_to_combinators(
@@ -346,6 +384,9 @@ impl Expr {
 
                     *self = lambda.convert_to_combinator(ctx)?;
                     continue;
+                }
+                Expr::Cast(cast) => {
+                    cast.expr.convert_to_combinators(ctx, max_depth)?;
                 }
             }
 
@@ -565,6 +606,7 @@ impl Debug for Expr {
             Self::Var(var) => var.fmt(f),
             Self::App(app) => app.fmt(f),
             Self::Lambda(lambda) => lambda.fmt(f),
+            Self::Cast(cast) => cast.fmt(f),
         }
     }
 }
@@ -576,6 +618,7 @@ impl ContextObject for Expr {
             Expr::Var(var) => var.shift_impl(start, end, shift),
             Expr::App(app) => app.shift_impl(start, end, shift),
             Expr::Lambda(lambda) => lambda.shift_impl(start, end, shift),
+            Expr::Cast(cast) => cast.shift_impl(start, end, shift),
         }
     }
 
@@ -585,6 +628,7 @@ impl ContextObject for Expr {
             Expr::Var(var) => Expr::Var(var.shifted_impl(start, end, shift)),
             Expr::App(app) => Expr::App(Box::new(app.shifted_impl(start, end, shift))),
             Expr::Lambda(lambda) => Expr::Lambda(Box::new(lambda.shifted_impl(start, end, shift))),
+            Expr::Cast(cast) => Expr::Cast(Box::new(cast.shifted_impl(start, end, shift))),
         }
     }
 
@@ -594,6 +638,7 @@ impl ContextObject for Expr {
             Expr::Var(var) => var.count_refs_impl(start, ref_counts),
             Expr::App(app) => app.count_refs_impl(start, ref_counts),
             Expr::Lambda(lambda) => lambda.count_refs_impl(start, ref_counts),
+            Expr::Cast(cast) => cast.count_refs_impl(start, ref_counts),
         }
     }
 
@@ -603,6 +648,7 @@ impl ContextObject for Expr {
             Expr::Var(var) => var.has_refs_impl(start, end),
             Expr::App(app) => app.has_refs_impl(start, end),
             Expr::Lambda(lambda) => lambda.has_refs_impl(start, end),
+            Expr::Cast(cast) => cast.has_refs_impl(start, end),
         }
     }
 }
@@ -630,6 +676,7 @@ impl ContextObjectWithSubst<Expr> for Expr {
             Expr::Lambda(lambda) => {
                 lambda.substitute_impl(shift_start, args_start, args, ref_counts)
             }
+            Expr::Cast(cast) => cast.substitute_impl(shift_start, args_start, args, ref_counts),
         }
     }
 }
@@ -660,6 +707,9 @@ impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for Expr {
                 } else {
                     Ok(false)
                 }
+            }
+            (Expr::Cast(cast), Expr::Cast(target_cast)) => {
+                cast.shift_and_compare_impl(ctx, orig_ctx, target_cast, target_subctx)
             }
             (_, Expr::Lambda(target_lambda)) => {
                 if let Some(target_cmb) = target_lambda.try_convert_to_combinator(ctx)? {
@@ -737,6 +787,14 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Expr {
                     Ok(false)
                 }
             }
+            (Expr::Cast(cast), Expr::Cast(target_cast)) => cast
+                .substitute_and_shift_and_compare_impl(
+                    ctx,
+                    args,
+                    subst_ctx,
+                    target_cast,
+                    target_subctx,
+                ),
             _ => Ok(false),
         }
     }
@@ -747,7 +805,7 @@ pub trait HasType {
 
     fn has_type(&self, expected_type: &mut Expr, ctx: &MetaLogicContext) -> Result<bool> {
         let mut expr_type = self.get_type(ctx)?;
-        expr_type.is_defeq(expected_type, ctx)
+        Ok(expr_type.is_defeq(expected_type, ctx)?.is_some())
     }
 }
 
@@ -758,6 +816,7 @@ impl HasType for Expr {
             Expr::Var(var) => var.get_type(ctx),
             Expr::App(app) => app.get_type(ctx),
             Expr::Lambda(lambda) => lambda.get_type(ctx),
+            Expr::Cast(cast) => cast.get_type(ctx),
         }
     }
 }
@@ -890,7 +949,7 @@ impl IsApp for AppExpr {
         let fun = &self.body;
         let arg = &self.param;
         let mut arg_type = arg.expr.get_type(ctx)?;
-        if arg_type.is_defeq(domain, ctx)? {
+        if arg_type.is_defeq(domain, ctx)?.is_some() {
             Ok(())
         } else {
             let fun_str = fun.print(ctx);
@@ -1310,4 +1369,151 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
             target_subctx,
         )
     }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct CastExpr {
+    pub expr: Expr,
+    pub target_type: Expr,
+    pub type_defeq: DefinitionalEquality,
+}
+
+impl Debug for CastExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.expr.fmt(f)?;
+        f.write_str("↑")?;
+        Ok(())
+    }
+}
+
+impl ContextObject for CastExpr {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+        self.expr.shift_impl(start, end, shift);
+        self.target_type.shift_impl(start, end, shift);
+    }
+
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+        CastExpr {
+            expr: self.expr.shifted_impl(start, end, shift),
+            target_type: self.target_type.shifted_impl(start, end, shift),
+            type_defeq: self.type_defeq.clone(),
+        }
+    }
+
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+        self.expr.count_refs_impl(start, ref_counts);
+        self.target_type.count_refs_impl(start, ref_counts);
+    }
+
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+        self.expr.has_refs_impl(start, end) || self.target_type.has_refs_impl(start, end)
+    }
+}
+
+impl ContextObjectWithSubst<Expr> for CastExpr {
+    fn substitute_impl(
+        &mut self,
+        shift_start: VarIndex,
+        args_start: VarIndex,
+        args: &mut [Expr],
+        ref_counts: &mut [usize],
+    ) {
+        self.expr
+            .substitute_impl(shift_start, args_start, args, ref_counts);
+        self.target_type
+            .substitute_impl(shift_start, args_start, args, ref_counts);
+    }
+}
+
+impl<Ctx: ComparisonContext> ContextObjectWithCmp<Ctx> for CastExpr {
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        if !self.target_type.shift_and_compare_impl(
+            ctx,
+            orig_ctx,
+            &target.target_type,
+            target_subctx,
+        )? {
+            return Ok(false);
+        }
+
+        self.expr
+            .shift_and_compare_impl(ctx, orig_ctx, &target.expr, target_subctx)
+    }
+}
+
+impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for CastExpr {
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [Expr],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        if !self.target_type.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            subst_ctx,
+            &target.target_type,
+            target_subctx,
+        )? {
+            return Ok(false);
+        }
+
+        self.expr.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            subst_ctx,
+            &target.expr,
+            target_subctx,
+        )
+    }
+}
+
+impl HasType for CastExpr {
+    fn get_type(&self, _: &MetaLogicContext) -> Result<Expr> {
+        Ok(self.target_type.clone())
+    }
+}
+
+// Definitional equality is given by reduction of both sides to the same value.
+// Note that this relationship is not transitive unless reduction traces are unique (so they can be
+// canceled) or at least confluent (so they can be extended to a common target).
+#[derive(Clone, PartialEq, Default)]
+pub struct DefinitionalEquality {
+    pub left: ReductionTrace,
+    pub right: ReductionTrace,
+}
+
+impl DefinitionalEquality {
+    pub fn trivial() -> Self {
+        DefinitionalEquality {
+            left: ReductionTrace::new(),
+            right: ReductionTrace::new(),
+        }
+    }
+
+    pub fn is_trivial(&self) -> bool {
+        self.left.is_empty() && self.right.is_empty()
+    }
+}
+
+pub type ReductionTrace = Vec<ReductionStep>;
+
+#[derive(Clone, PartialEq)]
+pub enum ReductionStep {
+    AppFunReduction(ReductionTrace),
+    AppArgReduction(ReductionTrace),
+    BetaReduction,
+    LambdaParamTypeReduction(ReductionTrace),
+    LambdaBodyReduction(ReductionTrace),
+    EtaReduction,
+    CastExprReduction(ReductionTrace),
+    ReductionRuleApplication, // TODO
 }
