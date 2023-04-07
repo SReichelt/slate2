@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 use symbol_table::{Symbol, SymbolTable};
 
-use slate_kernel_generic::{context::*, expr_parts::*};
+use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
 use slate_kernel_util::{anyhow::*, parser::*};
 
 use crate::{
@@ -317,24 +317,37 @@ impl MetaLogic {
         self.constants.push(Constant {
             param: Param {
                 name: Some(self.symbol_table.intern(name)),
-                type_expr: value_type,
+                type_expr: value_type.clone(),
                 implicit: false,
             },
             reduction_rules: vec![ReductionRule {
                 params: SmallVec::new(),
                 body: ReductionBody {
                     source: Expr::var(idx as VarIndex),
-                    target: value,
+                    target: value.clone(),
                     source_app_len: 0,
+                    eq: Expr::var(idx as VarIndex + 1),
                 },
             }],
+        });
+        self.constants.push(Constant {
+            param: Param {
+                name: Some(self.symbol_table.intern(&format!("{name}_def"))),
+                type_expr: self.config.get_indep_eq_type(
+                    value_type,
+                    Expr::var(idx as VarIndex),
+                    value,
+                )?,
+                implicit: false,
+            },
+            reduction_rules: Vec::new(),
         });
 
         let reduction_rule_checker = ReductionRuleChecker;
         if let Err(err) =
             reduction_rule_checker.constant(&self.constants[idx], &self.get_root_context())
         {
-            self.constants.pop();
+            self.constants.truncate(idx);
             return Err(err);
         }
 
@@ -428,38 +441,45 @@ pub struct ReductionBody {
     pub source: Expr,
     pub target: Expr,
     pub source_app_len: usize,
+    pub eq: Expr,
 }
 
 pub struct MetaLogicConfig {
     pub universe_type: Expr,
 
-    pub fun_ctor: Option<Expr>,
-    pub pi_ctor: Option<Expr>,
+    pub fun_ctor: Expr,
+    pub pi_ctor: Expr,
 
-    pub id_cmb: Option<Expr>,
-    pub const_cmb: Option<Expr>,
-    pub subst_cmb: Option<Expr>,
-    pub substd_cmb: Option<Expr>,
+    pub id_cmb: Expr,
+    pub const_cmb: Expr,
+    pub subst_cmb: Expr,
+    pub substd_cmb: Expr,
 
-    pub pair_ctor: Option<Expr>,
-    pub sigma_ctor: Option<Expr>,
+    pub pair_ctor: Expr,
+    pub sigma_ctor: Expr,
 
-    pub eq_ctor: Option<Expr>,
-    pub eqd_ctor: Option<Expr>,
+    pub eq_ctor: Expr,
+    pub eqd_ctor: Expr,
+
+    pub refl_eq: Expr,
+    pub symm_eq: Expr,
+    pub symmd_eq: Expr,
+    pub trans_eq: Expr,
+    pub transd_eq: Expr,
 
     pub implicit_arg_max_depth: u32,
     pub placeholder_max_reduction_depth: u32,
 }
 
 impl MetaLogicConfig {
-    pub fn get_indep_ctor(&self, kind: StandardTypeCtorKind) -> &Option<Expr> {
+    pub fn get_indep_ctor(&self, kind: StandardTypeCtorKind) -> &Expr {
         match kind {
             StandardTypeCtorKind::Pi => &self.fun_ctor,
             StandardTypeCtorKind::Sigma => &self.pair_ctor,
         }
     }
 
-    pub fn get_dep_ctor(&self, kind: StandardTypeCtorKind) -> &Option<Expr> {
+    pub fn get_dep_ctor(&self, kind: StandardTypeCtorKind) -> &Expr {
         match kind {
             StandardTypeCtorKind::Pi => &self.pi_ctor,
             StandardTypeCtorKind::Sigma => &self.sigma_ctor,
@@ -472,14 +492,14 @@ impl MetaLogicConfig {
         codomain: Expr,
         kind: StandardTypeCtorKind,
     ) -> Result<Expr> {
-        if let Some(ctor) = self.get_indep_ctor(kind) {
-            Ok(Expr::multi_app(
-                ctor.clone(),
-                [Arg::explicit(domain), Arg::explicit(codomain)],
-            ))
-        } else {
-            Err(anyhow!("specified type not defined"))
+        let ctor = self.get_indep_ctor(kind);
+        if ctor.is_empty() {
+            return Err(anyhow!("specified type not defined"));
         }
+        Ok(Expr::multi_app(
+            ctor.clone(),
+            [Arg::explicit(domain), Arg::explicit(codomain)],
+        ))
     }
 
     pub fn get_prop_type(&self, domain: Expr) -> Result<Expr> {
@@ -492,29 +512,28 @@ impl MetaLogicConfig {
         prop: Expr,
         kind: StandardTypeCtorKind,
     ) -> Result<Expr> {
-        if let Some(ctor) = self.get_dep_ctor(kind) {
-            Ok(Expr::multi_app(
-                ctor.clone(),
-                [Arg::implicit(domain), Arg::explicit(prop)],
-            ))
-        } else {
-            Err(anyhow!("specified dependent type not defined"))
+        let ctor = self.get_dep_ctor(kind);
+        if ctor.is_empty() {
+            return Err(anyhow!("specified dependent type not defined"));
         }
+        Ok(Expr::multi_app(
+            ctor.clone(),
+            [Arg::implicit(domain), Arg::explicit(prop)],
+        ))
     }
 
     pub fn get_indep_eq_type(&self, domain: Expr, left: Expr, right: Expr) -> Result<Expr> {
-        if let Some(ctor) = &self.eq_ctor {
-            Ok(Expr::multi_app(
-                ctor.clone(),
-                [
-                    Arg::implicit(domain),
-                    Arg::explicit(left),
-                    Arg::explicit(right),
-                ],
-            ))
-        } else {
-            Err(anyhow!("equality type not defined"))
+        if self.eq_ctor.is_empty() {
+            return Err(anyhow!("equality type not defined"));
         }
+        Ok(Expr::multi_app(
+            self.eq_ctor.clone(),
+            [
+                Arg::implicit(domain),
+                Arg::explicit(left),
+                Arg::explicit(right),
+            ],
+        ))
     }
 
     pub fn get_dep_eq_type(
@@ -525,20 +544,19 @@ impl MetaLogicConfig {
         left: Expr,
         right: Expr,
     ) -> Result<Expr> {
-        if let Some(ctor) = &self.eqd_ctor {
-            Ok(Expr::multi_app(
-                ctor.clone(),
-                [
-                    Arg::implicit(left_domain),
-                    Arg::implicit(right_domain),
-                    Arg::explicit(domain_eq),
-                    Arg::explicit(left),
-                    Arg::explicit(right),
-                ],
-            ))
-        } else {
-            Err(anyhow!("dependent equality type not defined"))
+        if self.eqd_ctor.is_empty() {
+            return Err(anyhow!("dependent equality type not defined"));
         }
+        Ok(Expr::multi_app(
+            self.eqd_ctor.clone(),
+            [
+                Arg::implicit(left_domain),
+                Arg::implicit(right_domain),
+                Arg::explicit(domain_eq),
+                Arg::explicit(left),
+                Arg::explicit(right),
+            ],
+        ))
     }
 }
 

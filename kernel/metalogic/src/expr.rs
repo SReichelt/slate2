@@ -456,10 +456,9 @@ impl Expr {
         ctx: &MetaLogicContext,
     ) -> Option<(&Expr, &Expr)> {
         if *self != Expr::Placeholder {
-            if let Some(ctor) = ctx.config().get_indep_ctor(kind) {
-                if let Some([domain, codomain]) = self.match_app(ctor) {
-                    return Some((domain, codomain));
-                }
+            let ctor = ctx.config().get_indep_ctor(kind);
+            if let Some([domain, codomain]) = self.match_app(ctor) {
+                return Some((domain, codomain));
             }
         }
         None
@@ -471,10 +470,9 @@ impl Expr {
         ctx: &MetaLogicContext,
     ) -> Option<(&Expr, &Expr)> {
         if *self != Expr::Placeholder {
-            if let Some(ctor) = ctx.config().get_dep_ctor(kind) {
-                if let Some([domain, prop]) = self.match_app(ctor) {
-                    return Some((domain, prop));
-                }
+            let ctor = ctx.config().get_dep_ctor(kind);
+            if let Some([domain, prop]) = self.match_app(ctor) {
+                return Some((domain, prop));
             }
         }
         None
@@ -534,10 +532,9 @@ impl Expr {
 
     pub fn match_indep_eq_type(&self, ctx: &MetaLogicContext) -> Option<(&Expr, &Expr, &Expr)> {
         if *self != Expr::Placeholder {
-            if let Some(ctor) = &ctx.config().eq_ctor {
-                if let Some([domain, left, right]) = self.match_app(ctor) {
-                    return Some((domain, left, right));
-                }
+            let ctor = &ctx.config().eq_ctor;
+            if let Some([domain, left, right]) = self.match_app(ctor) {
+                return Some((domain, left, right));
             }
         }
         None
@@ -548,12 +545,10 @@ impl Expr {
         ctx: &MetaLogicContext,
     ) -> Option<(&Expr, &Expr, &Expr, &Expr, &Expr)> {
         if *self != Expr::Placeholder {
-            if let Some(ctor) = &ctx.config().eqd_ctor {
-                if let Some([left_domain, right_domain, domain_eq, left, right]) =
-                    self.match_app(ctor)
-                {
-                    return Some((left_domain, right_domain, domain_eq, left, right));
-                }
+            let ctor = &ctx.config().eqd_ctor;
+            if let Some([left_domain, right_domain, domain_eq, left, right]) = self.match_app(ctor)
+            {
+                return Some((left_domain, right_domain, domain_eq, left, right));
             }
         }
         None
@@ -1033,31 +1028,21 @@ fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> 
 
         if let Some(shifted_body) = body.shifted_to_supercontext(body_ctx, ctx) {
             let body_type = shifted_body.get_type(ctx)?;
-            if let Some(cmb) = &ctx.config().const_cmb {
-                return Ok(Expr::multi_app(
-                    cmb.clone(),
-                    [
-                        Arg::explicit(param.type_expr.clone()),
-                        Arg::implicit(body_type),
-                        Arg::explicit(shifted_body),
-                    ],
-                ));
-            } else {
-                return Err(anyhow!("const combinator not provided"));
-            }
+            return Ok(Expr::multi_app(
+                ctx.config().const_cmb.clone(),
+                [
+                    Arg::explicit(param.type_expr.clone()),
+                    Arg::implicit(body_type),
+                    Arg::explicit(shifted_body),
+                ],
+            ));
         }
 
         match body {
-            Expr::Var(Var(-1)) => {
-                if let Some(id_cmb) = &ctx.config().id_cmb {
-                    Ok(Expr::app(
-                        id_cmb.clone(),
-                        Arg::explicit(param.type_expr.clone()),
-                    ))
-                } else {
-                    Err(anyhow!("id combinator not provided"))
-                }
-            }
+            Expr::Var(Var(-1)) => Ok(Expr::app(
+                ctx.config().id_cmb.clone(),
+                Arg::explicit(param.type_expr.clone()),
+            )),
             Expr::App(app) => {
                 let fun = &app.body;
                 let arg = &app.param.expr;
@@ -1077,48 +1062,24 @@ fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> 
                         {
                             domain.shift_to_supercontext(body_ctx, ctx);
                             codomain.shift_to_supercontext(body_ctx, ctx);
-                            if let Some(subst_cmb) = &ctx.config().subst_cmb {
-                                Ok(Expr::multi_app(
-                                    subst_cmb.clone(),
-                                    [
-                                        Arg::implicit(param.type_expr.clone()),
-                                        Arg::implicit(domain),
-                                        Arg::implicit(codomain),
-                                        Arg::explicit(fun_lambda),
-                                        Arg::explicit(arg_lambda),
-                                    ],
-                                ))
-                            } else {
-                                Err(anyhow!("subst combinator not provided"))
-                            }
-                        } else {
-                            if let Some(substd_cmb) = &ctx.config().substd_cmb {
-                                let prop1 = Expr::lambda(param.clone(), domain.clone());
-                                let rel2 = Expr::lambda(
-                                    param.clone(),
-                                    Expr::const_lambda(domain, codomain, body_ctx),
-                                );
-                                Ok(Expr::multi_app(
-                                    substd_cmb.clone(),
-                                    [
-                                        Arg::implicit(param.type_expr.clone()),
-                                        Arg::implicit(prop1),
-                                        Arg::implicit(rel2),
-                                        Arg::explicit(fun_lambda),
-                                        Arg::explicit(arg_lambda),
-                                    ],
-                                ))
-                            } else {
-                                Err(anyhow!("substd combinator not provided"))
-                            }
-                        }
-                    }
-                    TypeArgs::Dep(domain, prop) => {
-                        if let Some(substd_cmb) = &ctx.config().substd_cmb {
-                            let prop1 = Expr::lambda(param.clone(), domain);
-                            let rel2 = Expr::lambda(param.clone(), prop);
                             Ok(Expr::multi_app(
-                                substd_cmb.clone(),
+                                ctx.config().subst_cmb.clone(),
+                                [
+                                    Arg::implicit(param.type_expr.clone()),
+                                    Arg::implicit(domain),
+                                    Arg::implicit(codomain),
+                                    Arg::explicit(fun_lambda),
+                                    Arg::explicit(arg_lambda),
+                                ],
+                            ))
+                        } else {
+                            let prop1 = Expr::lambda(param.clone(), domain.clone());
+                            let rel2 = Expr::lambda(
+                                param.clone(),
+                                Expr::const_lambda(domain, codomain, body_ctx),
+                            );
+                            Ok(Expr::multi_app(
+                                ctx.config().substd_cmb.clone(),
                                 [
                                     Arg::implicit(param.type_expr.clone()),
                                     Arg::implicit(prop1),
@@ -1127,9 +1088,21 @@ fn create_combinator_app(param: &Param, body: &Expr, ctx: &MetaLogicContext) -> 
                                     Arg::explicit(arg_lambda),
                                 ],
                             ))
-                        } else {
-                            Err(anyhow!("substd combinator not provided"))
                         }
+                    }
+                    TypeArgs::Dep(domain, prop) => {
+                        let prop1 = Expr::lambda(param.clone(), domain);
+                        let rel2 = Expr::lambda(param.clone(), prop);
+                        Ok(Expr::multi_app(
+                            ctx.config().substd_cmb.clone(),
+                            [
+                                Arg::implicit(param.type_expr.clone()),
+                                Arg::implicit(prop1),
+                                Arg::implicit(rel2),
+                                Arg::explicit(fun_lambda),
+                                Arg::explicit(arg_lambda),
+                            ],
+                        ))
                     }
                 }
             }

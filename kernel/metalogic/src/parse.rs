@@ -382,6 +382,7 @@ impl ParsingContext<'_, '_, '_> {
                     source,
                     target,
                     source_app_len,
+                    eq: Expr::Placeholder,
                 });
             }
         }
