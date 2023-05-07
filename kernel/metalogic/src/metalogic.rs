@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -18,10 +17,81 @@ use crate::{
     metalogic_manipulators::*, metalogic_visitors::*, parse::*, print::*,
 };
 
-#[derive(Clone)]
-pub struct DefInit<'a> {
+pub struct ConstInit<'a> {
     pub sym: &'a str,
     pub red: &'a [&'a str],
+}
+
+impl ConstInit<'_> {
+    fn for_each_name(&self, mut f: impl FnMut(&str)) -> Result<()> {
+        f(Self::extract_name(self.sym)?);
+        for rule_init in self.red {
+            f(Self::extract_name(rule_init)?);
+        }
+        Ok(())
+    }
+
+    fn extract_name(sym: &str) -> Result<&str> {
+        let mut parser_input = ParserInput(sym);
+        if let Some(name) = parser_input.try_read_name() {
+            Ok(name)
+        } else {
+            parser_input.expected("identifier")
+        }
+    }
+
+    fn parse_params(&self, metalogic: &mut MetaLogic) -> Result<()> {
+        let const_idx = Self::parse_constant(self.sym, metalogic)?;
+        for rule_init in self.red {
+            let (rule_name, rule) = ParsingContext::parse(
+                rule_init,
+                &metalogic.get_root_context(),
+                |parsing_context| parsing_context.parse_named_reduction_rule(const_idx),
+            )?;
+            Self::apply_reduction_rule(&rule_name, rule, metalogic, const_idx)?;
+        }
+        Ok(())
+    }
+
+    fn parse_constant(sym: &str, metalogic: &mut MetaLogic) -> Result<VarIndex> {
+        let param = ParsingContext::parse(sym, &metalogic.get_root_context(), |parsing_context| {
+            parsing_context.parse_param()
+        })?;
+        let idx = metalogic.get_var_index(param.name, 0).unwrap();
+        metalogic.constants[idx as usize].param.type_expr = param.type_expr;
+        Ok(idx)
+    }
+
+    fn apply_reduction_rule(
+        rule_name: &str,
+        mut rule: ReductionRule,
+        metalogic: &mut MetaLogic,
+        const_idx: VarIndex,
+    ) -> Result<()> {
+        let idx = metalogic.get_constant_index(rule_name).unwrap();
+        metalogic.constants[idx as usize].param.type_expr =
+            rule.get_eq_type(&metalogic.get_root_context())?;
+        Self::set_reduction_rule_eq(&mut rule, idx);
+        metalogic.constants[const_idx as usize]
+            .reduction_rules
+            .push(rule);
+        Ok(())
+    }
+
+    fn set_reduction_rule_eq(rule: &mut ReductionRule, idx: VarIndex) {
+        let mut param_args: SmallVec<[Arg; INLINE_PARAMS]> =
+            SmallVec::with_capacity(rule.params.len());
+        let mut param_idx = -(rule.params.len() as VarIndex);
+        for param in &rule.params {
+            param_args.push(Arg {
+                expr: Expr::var(param_idx),
+                implicit: param.implicit,
+                match_all: false,
+            });
+            param_idx += 1;
+        }
+        rule.body.eq = Expr::dyn_multi_app(Expr::var(idx), param_args);
+    }
 }
 
 pub struct MetaLogic {
@@ -32,28 +102,25 @@ pub struct MetaLogic {
 }
 
 impl MetaLogic {
-    pub fn construct<F>(constants_init: &[Cow<DefInit>], get_config: F) -> Result<Self>
+    pub fn construct<F>(constants_init: &[&ConstInit], get_config: F) -> Result<Self>
     where
-        F: FnOnce(&HashMap<&str, VarIndex>) -> MetaLogicConfig,
+        F: FnOnce(&HashMap<String, VarIndex>) -> MetaLogicConfig,
     {
         let symbol_table = SymbolTable::new();
 
-        let mut constants = Vec::with_capacity(constants_init.len());
-        let mut constants_map = HashMap::with_capacity(constants_init.len());
+        let mut constants = Vec::new();
+        let mut constants_map = HashMap::new();
         let mut idx = 0;
         for constant_init in constants_init {
-            let mut parser_input = ParserInput(constant_init.sym);
-            if let Some(name) = parser_input.try_read_name() {
+            constant_init.for_each_name(|name| {
                 constants.push(Param {
                     name: Some(symbol_table.intern(name)),
                     type_expr: Expr::default(),
                     implicit: false,
                 });
-                constants_map.insert(name, idx);
+                constants_map.insert(name.to_owned(), idx);
                 idx += 1;
-            } else {
-                return parser_input.expected("identifier");
-            }
+            })?;
         }
 
         let config = get_config(&constants_map);
@@ -75,32 +142,8 @@ impl MetaLogic {
             },
         };
 
-        let mut idx = 0;
         for constant_init in constants_init {
-            let param = ParsingContext::parse(
-                constant_init.sym,
-                &metalogic.get_root_context(),
-                |parsing_context| parsing_context.parse_param(),
-            )?;
-            metalogic.constants[idx].param.type_expr = param.type_expr;
-            idx += 1;
-        }
-
-        idx = 0;
-        for constant_init in constants_init {
-            for rule_init in constant_init.red {
-                let rule = ParsingContext::parse(
-                    rule_init,
-                    &metalogic.get_root_context(),
-                    |parsing_context| parsing_context.parse_reduction_rule(idx as VarIndex),
-                )
-                .with_prefix(|| {
-                    let name = metalogic.get_display_name(&metalogic.constants[idx]);
-                    format!("failed to parse reduction rule for «{name}»")
-                })?;
-                metalogic.constants[idx].reduction_rules.push(rule);
-            }
-            idx += 1;
+            constant_init.parse_params(&mut metalogic)?;
         }
 
         metalogic.insert_implicit_args()?;
@@ -133,9 +176,13 @@ impl MetaLogic {
         &self.constants
     }
 
-    pub fn get_constant(&self, name: &str) -> Option<&Constant> {
+    pub fn get_constant_index(&self, name: &str) -> Option<VarIndex> {
         let symbol = self.symbol_table.intern(name);
-        let var_idx = self.constants.get_var_index(Some(symbol), 0)?;
+        self.constants.get_var_index(Some(symbol), 0)
+    }
+
+    pub fn get_constant(&self, name: &str) -> Option<&Constant> {
+        let var_idx = self.get_constant_index(name)?;
         Some(self.constants.get_var(var_idx))
     }
 
@@ -323,6 +370,7 @@ impl MetaLogic {
             reduction_rules: vec![ReductionRule {
                 params: SmallVec::new(),
                 body: ReductionBody {
+                    domain: value_type.clone(),
                     source: Expr::var(idx as VarIndex),
                     target: value.clone(),
                     source_app_len: 0,
@@ -425,6 +473,84 @@ impl NamedObject<Option<Symbol>> for Constant {
 
 pub type ReductionRule = MultiLambda<Param, ReductionBody>;
 
+pub trait IsReductionRule {
+    fn get_eq_type(&self, ctx: &MetaLogicContext) -> Result<Expr>;
+}
+
+impl IsReductionRule for ReductionRule {
+    /*fn from_eq(var_idx: VarIndex, mut eq: Expr, ctx: &MetaLogicContext) -> Result<Self> {
+        let mut type_expr = eq.get_type(ctx)?;
+        let mut params = SmallVec::new();
+        loop {
+            if let Some(lambda) = ctx.with_locals(&params, |params_ctx| {
+                let lambda = type_expr.match_dep_type_as_lambda(
+                    StandardTypeCtorKind::Pi,
+                    true,
+                    params_ctx,
+                )?;
+                params_ctx.with_local(&lambda.param, |lambda_param_ctx| {
+                    eq.shift_to_subcontext(params_ctx, lambda_param_ctx);
+                    eq = take(&mut eq).apply(
+                        Arg {
+                            expr: Expr::var(-1),
+                            implicit: lambda.param.implicit,
+                            match_all: false,
+                        },
+                        lambda_param_ctx,
+                    );
+                });
+                Some(lambda)
+            }) {
+                params.push(lambda.param.clone());
+                type_expr = lambda.body;
+            } else {
+                break;
+            }
+        }
+
+        if let Some((domain, source, target)) = ctx.with_locals(&params, |params_ctx| {
+            type_expr.match_indep_eq_type(params_ctx)
+        }) {
+            if let Some((source_var_idx, source_app_len)) = source.get_const_app_info() {
+                if source_var_idx == var_idx {
+                    Ok(ReductionRule {
+                        params,
+                        body: ReductionBody {
+                            domain: domain.clone(),
+                            source: source.clone(),
+                            target: target.clone(),
+                            source_app_len,
+                            eq,
+                        },
+                    })
+                } else {
+                    Err(anyhow!(
+                        "source of reduction rule must refer to corresponding constant"
+                    ))
+                }
+            } else {
+                Err(anyhow!(
+                    "source of reduction rule must be a constant application"
+                ))
+            }
+        } else {
+            Err(anyhow!("reduction rule must refer to an equality"))
+        }
+    }*/
+
+    fn get_eq_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+        let mut eq_type = self.body.get_eq_type(ctx)?;
+        for param in self.params.iter().rev() {
+            eq_type = ctx.config().get_dep_type(
+                param.type_expr.clone(),
+                Expr::lambda(param.clone(), eq_type),
+                StandardTypeCtorKind::Pi,
+            )?;
+        }
+        Ok(eq_type)
+    }
+}
+
 impl CanPrint for ReductionRule {
     fn print(&self, ctx: &MetaLogicContext) -> String {
         let mut result = String::new();
@@ -438,10 +564,21 @@ impl CanPrint for ReductionRule {
 
 #[derive(Clone)]
 pub struct ReductionBody {
+    pub domain: Expr,
     pub source: Expr,
     pub target: Expr,
     pub source_app_len: usize,
     pub eq: Expr,
+}
+
+impl ReductionBody {
+    fn get_eq_type(&self, ctx: &MetaLogicContext) -> Result<Expr> {
+        ctx.config().get_indep_eq_type(
+            self.domain.clone(),
+            self.source.clone(),
+            self.target.clone(),
+        )
+    }
 }
 
 pub struct MetaLogicConfig {

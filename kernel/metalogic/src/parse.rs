@@ -10,8 +10,8 @@ use slate_kernel_util::parser::*;
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
 pub struct ParsingContext<'a, 'b, 'c> {
-    input: &'a mut ParserInput<'b>,
-    context: &'a MetaLogicContext<'c>,
+    pub input: &'a mut ParserInput<'b>,
+    pub context: &'a MetaLogicContext<'c>,
 }
 
 impl ParsingContext<'_, '_, '_> {
@@ -348,6 +348,19 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
+    pub fn parse_named_reduction_rule(
+        &mut self,
+        const_idx: VarIndex,
+    ) -> Result<(String, ReductionRule)> {
+        if let Some(name) = self.input.try_read_name() {
+            self.input.read_char(':')?;
+            let rule = self.parse_reduction_rule(const_idx)?;
+            Ok((name.to_owned(), rule))
+        } else {
+            self.input.expected("identifier")
+        }
+    }
+
     pub fn parse_reduction_rule(&mut self, const_idx: VarIndex) -> Result<ReductionRule> {
         let mut params = SmallVec::new();
         self.input.skip_whitespace();
@@ -379,6 +392,7 @@ impl ParsingContext<'_, '_, '_> {
         if let Some((source_const_idx, source_app_len)) = source.get_const_app_info() {
             if source_const_idx == const_idx {
                 return Ok(ReductionBody {
+                    domain: Expr::Placeholder,
                     source,
                     target,
                     source_app_len,

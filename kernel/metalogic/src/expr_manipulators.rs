@@ -114,7 +114,11 @@ impl PlaceholderFiller {
             has_unfilled_placeholders: AtomicBool::new(false),
             ..*self
         };
-        sub_filler.fill_placeholders(expr, Expr::Placeholder, ctx)
+        let mut result_type = sub_filler.fill_placeholders(expr, Expr::Placeholder, ctx)?;
+        if sub_filler.has_unfilled_placeholders.load(Ordering::Relaxed) {
+            result_type = Expr::Placeholder;
+        }
+        Ok(result_type)
     }
 
     pub fn fill_placeholders(
@@ -378,7 +382,7 @@ impl PlaceholderFiller {
     ) -> Result<Expr> {
         if let Expr::App(app) = expr {
             let fun = &mut app.body;
-            let arg = &mut app.param;
+            let arg = &app.param;
             if arg.expr.is_empty() {
                 *has_unfilled_args = true;
             }
