@@ -1,0 +1,8 @@
+[package]
+name = "slate-kernel-notation-slate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slate-kernel-notation-generic = { path = "../generic" }
+anyhow = "1.0.69"

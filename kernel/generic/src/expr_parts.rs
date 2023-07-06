@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::Result;
-use smallvec::SmallVec;
 
 use crate::{context::*, context_object::*};
 
@@ -422,13 +421,11 @@ impl<Fun: Debug, Arg: Debug> Debug for App<Fun, Arg> {
     }
 }
 
-pub const INLINE_PARAMS: usize = 8;
-
 /// A generic abstraction over `MultiLambda` and `MultiApp`. If `PARAM_LEN` is nonzero, each
 /// parameter depends on the previous, and the body depends on all parameters.
 #[derive(Clone, PartialEq, Default)]
 pub struct MultiParameterizedObject<Param, Body, const PARAM_LEN: VarIndex> {
-    pub params: SmallVec<[Param; INLINE_PARAMS]>,
+    pub params: InlineVec<Param>,
     pub body: Body,
 }
 
@@ -447,7 +444,7 @@ impl<Param: ContextObject, Body: ContextObject, const PARAM_LEN: VarIndex> Conte
     }
 
     fn shifted_impl(&self, mut start: VarIndex, mut end: VarIndex, mut shift: VarIndex) -> Self {
-        let mut params = SmallVec::with_capacity(self.params.len());
+        let mut params = InlineVec::with_capacity(self.params.len());
         for param in self.params.iter() {
             params.push(param.shifted_impl(start, end, shift));
             enter_binder_for_shift::<PARAM_LEN>(&mut start, &mut end, &mut shift);
@@ -633,13 +630,11 @@ impl<Ctx: Context, Fun: ContextObjectWithCmp<Ctx>, Arg: ContextObjectWithCmp<Ctx
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
-        if self.params.len() != target.params.len() {
+        if !self
+            .params
+            .shift_and_compare_impl(ctx, orig_ctx, &target.params, target_subctx)?
+        {
             return Ok(false);
-        }
-        for (param, target_param) in self.params.iter().zip(target.params.iter()) {
-            if !param.shift_and_compare_impl(ctx, orig_ctx, target_param, target_subctx)? {
-                return Ok(false);
-            }
         }
         self.body
             .shift_and_compare_impl(ctx, orig_ctx, &target.body, target_subctx)
@@ -661,19 +656,14 @@ impl<
         target: &Self,
         target_subctx: &Ctx,
     ) -> Result<bool> {
-        if self.params.len() != target.params.len() {
+        if !self.params.substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            subst_ctx,
+            &target.params,
+            target_subctx,
+        )? {
             return Ok(false);
-        }
-        for (param, target_param) in self.params.iter().zip(target.params.iter()) {
-            if !param.substitute_and_shift_and_compare_impl(
-                ctx,
-                args,
-                subst_ctx,
-                target_param,
-                target_subctx,
-            )? {
-                return Ok(false);
-            }
         }
         self.body.substitute_and_shift_and_compare_impl(
             ctx,

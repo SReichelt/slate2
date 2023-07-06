@@ -1,10 +1,15 @@
 [package]
-name = "slate-kernel-generic-examples"
+name = "slate-kernel-generic-derive"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+proc-macro = true
+
 [dependencies]
 slate-kernel-generic = { path = ".." }
-slate-kernel-generic-derive = { path = "../derive" }
 anyhow = "1.0.69"
 smallvec = { version = "1.10", features = ["union", "const_generics"] }
+syn = "2.0.15"
+quote = "1.0.27"
+proc-macro2 = "1.0.56"

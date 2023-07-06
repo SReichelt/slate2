@@ -6,5 +6,6 @@
     "rust-analyzer.imports.granularity.enforce": true,
     "editor.unicodeHighlight.allowedCharacters": {
         "×": true
-    }
+    },
+    "rust-analyzer.showUnlinkedFileNotification": false
 }

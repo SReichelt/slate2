@@ -6,7 +6,6 @@ use std::{
 use anyhow::{anyhow, Error, Result};
 use log::{trace, warn};
 use rayon::prelude::*;
-use smallvec::SmallVec;
 use symbol_table::{Symbol, SymbolTable};
 
 use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
@@ -32,11 +31,11 @@ impl ConstInit<'_> {
     }
 
     fn extract_name(sym: &str) -> Result<&str> {
-        let mut parser_input = ParserInput(sym);
-        if let Some(name) = parser_input.try_read_name() {
+        let mut input = StringInput(sym);
+        if let Some(name) = input.try_read_ascii_identifier() {
             Ok(name)
         } else {
-            parser_input.expected("identifier")
+            input.expected("identifier")
         }
     }
 
@@ -79,8 +78,7 @@ impl ConstInit<'_> {
     }
 
     fn set_reduction_rule_eq(rule: &mut ReductionRule, idx: VarIndex) {
-        let mut param_args: SmallVec<[Arg; INLINE_PARAMS]> =
-            SmallVec::with_capacity(rule.params.len());
+        let mut param_args: InlineVec<Arg> = InlineVec::with_capacity(rule.params.len());
         let mut param_idx = -(rule.params.len() as VarIndex);
         for param in &rule.params {
             param_args.push(Arg {
@@ -368,7 +366,7 @@ impl MetaLogic {
                 implicit: false,
             },
             reduction_rules: vec![ReductionRule {
-                params: SmallVec::new(),
+                params: InlineVec::new(),
                 body: ReductionBody {
                     domain: value_type.clone(),
                     source: Expr::var(idx as VarIndex),
@@ -480,7 +478,7 @@ pub trait IsReductionRule {
 impl IsReductionRule for ReductionRule {
     /*fn from_eq(var_idx: VarIndex, mut eq: Expr, ctx: &MetaLogicContext) -> Result<Self> {
         let mut type_expr = eq.get_type(ctx)?;
-        let mut params = SmallVec::new();
+        let mut params = InlineVec::new();
         loop {
             if let Some(lambda) = ctx.with_locals(&params, |params_ctx| {
                 let lambda = type_expr.match_dep_type_as_lambda(

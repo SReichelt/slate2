@@ -1,0 +1,7 @@
+[package]
+name = "slate-kernel-notation-generic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nonminmax = "0.1.1"

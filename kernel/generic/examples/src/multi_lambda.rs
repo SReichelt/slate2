@@ -28,23 +28,16 @@ use std::{
     mem::take,
 };
 
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec;
 
 use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_generic_derive::*;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, ContextObject)]
 pub enum InnerExpr {
     Lambda(Box<MultiLambda<(), InnerExpr>>),
     VarApp(VarApp),
 }
-
-#[derive(Clone, PartialEq)]
-pub enum VarApp {
-    Var(Var),
-    App(Box<MultiApp<VarApp, InnerExpr>>),
-}
-
-pub type OuterExpr = MultiLambda<InnerExpr, InnerExpr>;
 
 impl InnerExpr {
     pub fn lambda(params: usize, body: InnerExpr) -> Self {
@@ -58,7 +51,7 @@ impl InnerExpr {
         InnerExpr::VarApp(VarApp::var(idx))
     }
 
-    pub fn var_app(idx: VarIndex, args: Vec<SmallVec<[InnerExpr; INLINE_PARAMS]>>) -> Self {
+    pub fn var_app(idx: VarIndex, args: Vec<InlineVec<InnerExpr>>) -> Self {
         InnerExpr::VarApp(VarApp::var_app(idx, args))
     }
 }
@@ -74,40 +67,6 @@ impl Debug for InnerExpr {
         match self {
             Self::Lambda(lambda) => lambda.fmt(f),
             Self::VarApp(var_app) => var_app.fmt(f),
-        }
-    }
-}
-
-impl ContextObject for InnerExpr {
-    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        match self {
-            InnerExpr::Lambda(lambda) => lambda.shift_impl(start, end, shift),
-            InnerExpr::VarApp(var_app) => var_app.shift_impl(start, end, shift),
-        }
-    }
-
-    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
-        match self {
-            InnerExpr::Lambda(lambda) => {
-                InnerExpr::Lambda(Box::new(lambda.shifted_impl(start, end, shift)))
-            }
-            InnerExpr::VarApp(var_app) => {
-                InnerExpr::VarApp(var_app.shifted_impl(start, end, shift))
-            }
-        }
-    }
-
-    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        match self {
-            InnerExpr::Lambda(lambda) => lambda.count_refs_impl(start, ref_counts),
-            InnerExpr::VarApp(var_app) => var_app.count_refs_impl(start, ref_counts),
-        }
-    }
-
-    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
-        match self {
-            InnerExpr::Lambda(lambda) => lambda.has_refs_impl(start, end),
-            InnerExpr::VarApp(var_app) => var_app.has_refs_impl(start, end),
         }
     }
 }
@@ -137,12 +96,18 @@ impl ContextObjectWithSubst<InnerExpr> for InnerExpr {
     }
 }
 
+#[derive(Clone, PartialEq, ContextObject)]
+pub enum VarApp {
+    Var(Var),
+    App(Box<MultiApp<VarApp, InnerExpr>>),
+}
+
 impl VarApp {
     pub fn var(idx: VarIndex) -> Self {
         VarApp::Var(Var(idx))
     }
 
-    pub fn var_app(idx: VarIndex, args: Vec<SmallVec<[InnerExpr; INLINE_PARAMS]>>) -> Self {
+    pub fn var_app(idx: VarIndex, args: Vec<InlineVec<InnerExpr>>) -> Self {
         let mut result = VarApp::var(idx);
         for arg in args {
             result = VarApp::App(Box::new(MultiApp {
@@ -165,36 +130,6 @@ impl Debug for VarApp {
         match self {
             Self::Var(var) => var.fmt(f),
             Self::App(app) => app.fmt(f),
-        }
-    }
-}
-
-impl ContextObject for VarApp {
-    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        match self {
-            VarApp::Var(var) => var.shift_impl(start, end, shift),
-            VarApp::App(app) => app.shift_impl(start, end, shift),
-        }
-    }
-
-    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
-        match self {
-            VarApp::Var(var) => VarApp::Var(var.shifted_impl(start, end, shift)),
-            VarApp::App(app) => VarApp::App(Box::new(app.shifted_impl(start, end, shift))),
-        }
-    }
-
-    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        match self {
-            VarApp::Var(var) => var.count_refs_impl(start, ref_counts),
-            VarApp::App(app) => app.count_refs_impl(start, ref_counts),
-        }
-    }
-
-    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
-        match self {
-            VarApp::Var(var) => var.has_refs_impl(start, end),
-            VarApp::App(app) => app.has_refs_impl(start, end),
         }
     }
 }
@@ -260,6 +195,8 @@ impl SubstInto<InnerExpr, InnerExpr> for VarApp {
         }
     }
 }
+
+pub type OuterExpr = MultiLambda<InnerExpr, InnerExpr>;
 
 impl From<OuterExpr> for InnerExpr {
     fn from(mut expr: OuterExpr) -> Self {

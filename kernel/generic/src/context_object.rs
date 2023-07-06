@@ -1,6 +1,11 @@
 use anyhow::Result;
+use smallvec::SmallVec;
 
 use crate::context::*;
+
+pub const INLINE_PARAMS: usize = 8;
+
+pub type InlineVec<T> = SmallVec<[T; INLINE_PARAMS]>;
 
 pub const REF_CHUNK_LEN: usize = 16;
 
@@ -89,13 +94,51 @@ pub trait ContextObject: Clone {
     }
 }
 
-impl ContextObject for () {
-    fn shift_impl(&mut self, _: VarIndex, _: VarIndex, _: VarIndex) {}
+impl<T: ContextObject> ContextObject for Box<T> {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+        self.as_mut().shift_impl(start, end, shift)
+    }
 
-    fn count_refs_impl(&self, _: VarIndex, _: &mut [usize]) {}
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+        Box::new(self.as_ref().shifted_impl(start, end, shift))
+    }
 
-    fn has_refs_impl(&self, _: VarIndex, _: VarIndex) -> bool {
-        false
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+        self.as_ref().count_refs_impl(start, ref_counts)
+    }
+
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+        self.as_ref().has_refs_impl(start, end)
+    }
+}
+
+impl<T: ContextObject> ContextObject for Option<T> {
+    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+        if let Some(s) = self {
+            s.shift_impl(start, end, shift);
+        }
+    }
+
+    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+        if let Some(s) = self {
+            Some(s.shifted_impl(start, end, shift))
+        } else {
+            None
+        }
+    }
+
+    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+        if let Some(s) = self {
+            s.count_refs_impl(start, ref_counts);
+        }
+    }
+
+    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+        if let Some(s) = self {
+            s.has_refs_impl(start, end)
+        } else {
+            false
+        }
     }
 }
 
@@ -187,8 +230,31 @@ pub trait ContextObjectWithSubst<SubstArg>: ContextObject {
     }
 }
 
-impl<SubstArg> ContextObjectWithSubst<SubstArg> for () {
-    fn substitute_impl(&mut self, _: VarIndex, _: VarIndex, _: &mut [SubstArg], _: &mut [usize]) {}
+impl<SubstArg, T: ContextObjectWithSubst<SubstArg>> ContextObjectWithSubst<SubstArg> for Box<T> {
+    fn substitute_impl(
+        &mut self,
+        shift_start: VarIndex,
+        args_start: VarIndex,
+        args: &mut [SubstArg],
+        ref_counts: &mut [usize],
+    ) {
+        self.as_mut()
+            .substitute_impl(shift_start, args_start, args, ref_counts)
+    }
+}
+
+impl<SubstArg, T: ContextObjectWithSubst<SubstArg>> ContextObjectWithSubst<SubstArg> for Option<T> {
+    fn substitute_impl(
+        &mut self,
+        shift_start: VarIndex,
+        args_start: VarIndex,
+        args: &mut [SubstArg],
+        ref_counts: &mut [usize],
+    ) {
+        if let Some(s) = self {
+            s.substitute_impl(shift_start, args_start, args, ref_counts);
+        }
+    }
 }
 
 pub trait ContextObjectWithCmp<Ctx: Context>: ContextObject {
@@ -213,9 +279,32 @@ pub trait ContextObjectWithCmp<Ctx: Context>: ContextObject {
     }
 }
 
-impl<Ctx: Context> ContextObjectWithCmp<Ctx> for () {
-    fn shift_and_compare_impl(&self, _: &Ctx, _: &Ctx, _: &Self, _: &Ctx) -> Result<bool> {
-        Ok(true)
+impl<Ctx: Context, T: ContextObjectWithCmp<Ctx>> ContextObjectWithCmp<Ctx> for Box<T> {
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        self.as_ref()
+            .shift_and_compare_impl(ctx, orig_ctx, target, target_subctx)
+    }
+}
+
+impl<Ctx: Context, T: ContextObjectWithCmp<Ctx>> ContextObjectWithCmp<Ctx> for Option<T> {
+    fn shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        orig_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        match (self, target) {
+            (Some(s), Some(t)) => s.shift_and_compare_impl(ctx, orig_ctx, t, target_subctx),
+            (None, None) => Ok(true),
+            (_, _) => Ok(false),
+        }
     }
 }
 
@@ -262,18 +351,197 @@ pub trait ContextObjectWithSubstCmp<SubstArg: CanBeEmpty, Ctx: Context>:
     }
 }
 
-impl<SubstArg: CanBeEmpty, Ctx: Context> ContextObjectWithSubstCmp<SubstArg, Ctx> for () {
+impl<SubstArg: CanBeEmpty, Ctx: Context, T: ContextObjectWithSubstCmp<SubstArg, Ctx>>
+    ContextObjectWithSubstCmp<SubstArg, Ctx> for Box<T>
+{
     fn substitute_and_shift_and_compare_impl(
         &self,
-        _: &Ctx,
-        _: &mut [SubstArg],
-        _: &Ctx,
-        _: &Self,
-        _: &Ctx,
+        ctx: &Ctx,
+        args: &mut [SubstArg],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
     ) -> Result<bool> {
-        Ok(true)
+        self.as_ref().substitute_and_shift_and_compare_impl(
+            ctx,
+            args,
+            subst_ctx,
+            target,
+            target_subctx,
+        )
     }
 }
+
+impl<SubstArg: CanBeEmpty, Ctx: Context, T: ContextObjectWithSubstCmp<SubstArg, Ctx>>
+    ContextObjectWithSubstCmp<SubstArg, Ctx> for Option<T>
+{
+    fn substitute_and_shift_and_compare_impl(
+        &self,
+        ctx: &Ctx,
+        args: &mut [SubstArg],
+        subst_ctx: &Ctx,
+        target: &Self,
+        target_subctx: &Ctx,
+    ) -> Result<bool> {
+        match (self, target) {
+            (Some(s), Some(t)) => {
+                s.substitute_and_shift_and_compare_impl(ctx, args, subst_ctx, t, target_subctx)
+            }
+            (None, None) => Ok(true),
+            (_, _) => Ok(false),
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! primitive_context_object {
+    ($Ty:ty) => {
+        impl ContextObject for $Ty {
+            fn shift_impl(&mut self, _: VarIndex, _: VarIndex, _: VarIndex) {}
+
+            fn count_refs_impl(&self, _: VarIndex, _: &mut [usize]) {}
+
+            fn has_refs_impl(&self, _: VarIndex, _: VarIndex) -> bool {
+                false
+            }
+        }
+
+        impl<SubstArg> ContextObjectWithSubst<SubstArg> for $Ty {
+            fn substitute_impl(
+                &mut self,
+                _: VarIndex,
+                _: VarIndex,
+                _: &mut [SubstArg],
+                _: &mut [usize],
+            ) {
+            }
+        }
+
+        impl<Ctx: Context> ContextObjectWithCmp<Ctx> for $Ty {
+            fn shift_and_compare_impl(
+                &self,
+                _: &Ctx,
+                _: &Ctx,
+                _: &Self,
+                _: &Ctx,
+            ) -> anyhow::Result<bool> {
+                Ok(true)
+            }
+        }
+
+        impl<SubstArg: CanBeEmpty, Ctx: Context> ContextObjectWithSubstCmp<SubstArg, Ctx> for $Ty {
+            fn substitute_and_shift_and_compare_impl(
+                &self,
+                _: &Ctx,
+                _: &mut [SubstArg],
+                _: &Ctx,
+                _: &Self,
+                _: &Ctx,
+            ) -> anyhow::Result<bool> {
+                Ok(true)
+            }
+        }
+    };
+}
+
+primitive_context_object!(());
+primitive_context_object!(bool);
+primitive_context_object!(usize);
+
+#[macro_export]
+macro_rules! iterable_context_object {
+    ($Ty:ident) => {
+        impl<T: ContextObject> ContextObject for $Ty<T> {
+            fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
+                self.iter_mut()
+                    .for_each(|item| item.shift_impl(start, end, shift))
+            }
+
+            fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
+                self.iter()
+                    .map(|item| item.shifted_impl(start, end, shift))
+                    .collect()
+            }
+
+            fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
+                self.iter()
+                    .for_each(|item| item.count_refs_impl(start, ref_counts))
+            }
+
+            fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
+                self.iter().any(|item| item.has_refs_impl(start, end))
+            }
+        }
+
+        impl<SubstArg, T: ContextObjectWithSubst<SubstArg>> ContextObjectWithSubst<SubstArg>
+            for $Ty<T>
+        {
+            fn substitute_impl(
+                &mut self,
+                shift_start: VarIndex,
+                args_start: VarIndex,
+                args: &mut [SubstArg],
+                ref_counts: &mut [usize],
+            ) {
+                self.iter_mut().for_each(|item| {
+                    item.substitute_impl(shift_start, args_start, args, ref_counts)
+                })
+            }
+        }
+
+        impl<Ctx: Context, T: ContextObjectWithCmp<Ctx>> ContextObjectWithCmp<Ctx> for $Ty<T> {
+            fn shift_and_compare_impl(
+                &self,
+                ctx: &Ctx,
+                orig_ctx: &Ctx,
+                target: &Self,
+                target_subctx: &Ctx,
+            ) -> Result<bool> {
+                if self.len() != target.len() {
+                    return Ok(false);
+                }
+                for (item, target_item) in self.iter().zip(target.iter()) {
+                    if !item.shift_and_compare_impl(ctx, orig_ctx, target_item, target_subctx)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+
+        impl<SubstArg: CanBeEmpty, Ctx: Context, T: ContextObjectWithSubstCmp<SubstArg, Ctx>>
+            ContextObjectWithSubstCmp<SubstArg, Ctx> for $Ty<T>
+        {
+            fn substitute_and_shift_and_compare_impl(
+                &self,
+                ctx: &Ctx,
+                args: &mut [SubstArg],
+                subst_ctx: &Ctx,
+                target: &Self,
+                target_subctx: &Ctx,
+            ) -> Result<bool> {
+                if self.len() != target.len() {
+                    return Ok(false);
+                }
+                for (item, target_item) in self.iter().zip(target.iter()) {
+                    if !item.substitute_and_shift_and_compare_impl(
+                        ctx,
+                        args,
+                        subst_ctx,
+                        target_item,
+                        target_subctx,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    };
+}
+
+iterable_context_object!(Vec);
+iterable_context_object!(InlineVec);
 
 pub trait SubstInto<SubstArg, SubstResult> {
     fn get_subst_arg_impl(

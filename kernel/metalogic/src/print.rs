@@ -1,7 +1,6 @@
 use std::{borrow::Cow, fmt};
 
-use slate_kernel_generic::{context::*, expr_parts::*};
-use smallvec::SmallVec;
+use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
 
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
@@ -21,6 +20,30 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             context: ctx,
         };
         f(&mut printing_context)
+    }
+
+    fn with_local<R>(&mut self, param: &Param, f: impl FnOnce(&mut PrintingContext<W>) -> R) -> R {
+        self.context.with_local(param, |context| {
+            let mut printing_context = PrintingContext {
+                output: self.output,
+                context,
+            };
+            f(&mut printing_context)
+        })
+    }
+
+    fn with_locals<R>(
+        &mut self,
+        params: &[Param],
+        f: impl FnOnce(&mut PrintingContext<W>) -> R,
+    ) -> R {
+        self.context.with_locals(params, |context| {
+            let mut printing_context = PrintingContext {
+                output: self.output,
+                context,
+            };
+            f(&mut printing_context)
+        })
     }
 
     pub fn print_expr(&mut self, expr: &Expr) -> fmt::Result {
@@ -87,7 +110,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                     }
                 }
 
-                if self.try_print_let_binding(fun, arg, SmallVec::new(), parens_for_lambda)? {
+                if self.try_print_let_binding(fun, arg, InlineVec::new(), parens_for_lambda)? {
                     return Ok(());
                 }
 
@@ -164,13 +187,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         let param = self.disambiguate_param(&lambda.param);
         self.print_param(&param)?;
         self.output.write_str(". ")?;
-        self.context.with_local(&param, |body_ctx| {
-            let mut body_printing_ctx = PrintingContext {
-                output: self.output,
-                context: body_ctx,
-            };
-            body_printing_ctx.print_expr(&lambda.body)
-        })
+        self.with_local(&param, |body_ctx| body_ctx.print_expr(&lambda.body))
     }
 
     /// If the expression is a multi-lambda abstraction applied to the corresponding number of
@@ -179,7 +196,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         &mut self,
         fun: &'a Expr,
         arg: &'a Arg,
-        mut outer_args: SmallVec<[&'a Arg; INLINE_PARAMS]>,
+        mut outer_args: InlineVec<&'a Arg>,
         parens_for_lambda: bool,
     ) -> Result<bool, fmt::Error> {
         outer_args.push(arg);
@@ -190,15 +207,15 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         } else {
             // Not nested further. Now check if we have the appropriate number of lambda
             // abstractions inside, collecting their parameters, and print it if we do.
-            self.try_print_let_binding_inner(fun, SmallVec::new(), &outer_args, parens_for_lambda)
+            self.try_print_let_binding_inner(fun, InlineVec::new(), &outer_args, parens_for_lambda)
         }
     }
 
     fn try_print_let_binding_inner<'a>(
         &mut self,
         body: &'a Expr,
-        mut params: SmallVec<[&'a Param; INLINE_PARAMS]>,
-        args: &SmallVec<[&Arg; INLINE_PARAMS]>,
+        mut params: InlineVec<&'a Param>,
+        args: &InlineVec<&Arg>,
         parens_for_lambda: bool,
     ) -> Result<bool, fmt::Error> {
         if params.len() == args.len() {
@@ -206,7 +223,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
                 self.output.write_char('(')?;
             }
             self.output.write_char('[')?;
-            self.print_let_binding_inner(body, SmallVec::new(), &params, args)?;
+            self.print_let_binding_inner(body, InlineVec::new(), &params, args)?;
             if parens_for_lambda {
                 self.output.write_char(')')?;
             }
@@ -222,19 +239,13 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
     fn print_let_binding_inner(
         &mut self,
         body: &Expr,
-        mut outer_params: SmallVec<[Param; INLINE_PARAMS]>,
+        mut outer_params: InlineVec<Param>,
         params: &[&Param],
         args: &[&Arg],
     ) -> fmt::Result {
         let (orig_param, params_rest) = params.split_first().unwrap();
         let param = self.disambiguate_param(orig_param);
-        self.context.with_locals(&outer_params, |param_ctx| {
-            let mut param_printing_ctx = PrintingContext {
-                output: self.output,
-                context: param_ctx,
-            };
-            param_printing_ctx.print_param(&param)
-        })?;
+        self.with_locals(&outer_params, |param_ctx| param_ctx.print_param(&param))?;
         self.output.write_str(" ⫽ ")?;
         let (arg, args_rest) = args.split_last().unwrap();
         self.print_arg(arg, false)?;
@@ -242,13 +253,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
         if params_rest.is_empty() {
             self.output.write_char(']')?;
             self.output.write_char(' ')?;
-            self.context.with_locals(&outer_params, |body_ctx| {
-                let mut body_printing_ctx = PrintingContext {
-                    output: self.output,
-                    context: body_ctx,
-                };
-                body_printing_ctx.print_expr(body)
-            })
+            self.with_locals(&outer_params, |body_ctx| body_ctx.print_expr(body))
         } else {
             self.output.write_str("; ")?;
             self.print_let_binding_inner(body, outer_params, params_rest, args_rest)
@@ -275,13 +280,7 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
             self.output.write_char(' ')?;
             self.print_param(param)?;
             self.output.write_str(". ")?;
-            self.context.with_local(param, |rest_ctx| {
-                let mut rest_printing_ctx = PrintingContext {
-                    output: self.output,
-                    context: rest_ctx,
-                };
-                rest_printing_ctx.print_params(rest, prefix)
-            })?;
+            self.with_local(param, |rest_ctx| rest_ctx.print_params(rest, prefix))?;
         }
         Ok(())
     }
@@ -391,12 +390,8 @@ impl<W: fmt::Write> PrintingContext<'_, '_, W> {
 
     pub fn print_reduction_rule(&mut self, rule: &ReductionRule) -> fmt::Result {
         self.print_params(&rule.params, '∀')?;
-        self.context.with_locals(&rule.params, |body_ctx| {
-            let mut body_printing_ctx = PrintingContext {
-                output: self.output,
-                context: body_ctx,
-            };
-            body_printing_ctx.print_reduction_body(&rule.body)
+        self.with_locals(&rule.params, |body_ctx| {
+            body_ctx.print_reduction_body(&rule.body)
         })
     }
 

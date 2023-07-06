@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 slate-kernel-util = { path = "../util" }
 slate-kernel-generic = { path = "../generic" }
+slate-kernel-generic-derive = { path = "../generic/derive" }
 anyhow = "1.0.69"
 log = "0.4.17"
 smallvec = { version = "1.10", features = ["union", "const_generics"] }

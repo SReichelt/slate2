@@ -8,10 +8,11 @@ use smallvec::{smallvec, SmallVec};
 use symbol_table::Symbol;
 
 use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_generic_derive::*;
 
 use crate::{metalogic::*, metalogic_context::*, parse::*, print::*};
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, ContextObject)]
 pub enum Expr {
     Placeholder,
     Var(Var), // includes primitive constants
@@ -399,10 +400,9 @@ impl Expr {
         ctx: &Ctx,
         match_params: &[Param],
         match_expr: &Expr,
-    ) -> Result<Option<SmallVec<[Expr; INLINE_PARAMS]>>> {
+    ) -> Result<Option<InlineVec<Expr>>> {
         if *self != Expr::Placeholder {
-            let mut args: SmallVec<[Expr; INLINE_PARAMS]> =
-                smallvec![Expr::default(); match_params.len()];
+            let mut args: InlineVec<Expr> = smallvec![Expr::default(); match_params.len()];
             if ctx.with_locals(match_params, |ctx_with_params| {
                 match_expr.substitute_and_compare(ctx_with_params, &mut args, self, ctx)
             })? {
@@ -602,48 +602,6 @@ impl Debug for Expr {
             Self::App(app) => app.fmt(f),
             Self::Lambda(lambda) => lambda.fmt(f),
             Self::Cast(cast) => cast.fmt(f),
-        }
-    }
-}
-
-impl ContextObject for Expr {
-    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        match self {
-            Expr::Placeholder => {}
-            Expr::Var(var) => var.shift_impl(start, end, shift),
-            Expr::App(app) => app.shift_impl(start, end, shift),
-            Expr::Lambda(lambda) => lambda.shift_impl(start, end, shift),
-            Expr::Cast(cast) => cast.shift_impl(start, end, shift),
-        }
-    }
-
-    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
-        match self {
-            Expr::Placeholder => Expr::Placeholder,
-            Expr::Var(var) => Expr::Var(var.shifted_impl(start, end, shift)),
-            Expr::App(app) => Expr::App(Box::new(app.shifted_impl(start, end, shift))),
-            Expr::Lambda(lambda) => Expr::Lambda(Box::new(lambda.shifted_impl(start, end, shift))),
-            Expr::Cast(cast) => Expr::Cast(Box::new(cast.shifted_impl(start, end, shift))),
-        }
-    }
-
-    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        match self {
-            Expr::Placeholder => {}
-            Expr::Var(var) => var.count_refs_impl(start, ref_counts),
-            Expr::App(app) => app.count_refs_impl(start, ref_counts),
-            Expr::Lambda(lambda) => lambda.count_refs_impl(start, ref_counts),
-            Expr::Cast(cast) => cast.count_refs_impl(start, ref_counts),
-        }
-    }
-
-    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
-        match self {
-            Expr::Placeholder => false,
-            Expr::Var(var) => var.has_refs_impl(start, end),
-            Expr::App(app) => app.has_refs_impl(start, end),
-            Expr::Lambda(lambda) => lambda.has_refs_impl(start, end),
-            Expr::Cast(cast) => cast.has_refs_impl(start, end),
         }
     }
 }
@@ -1228,7 +1186,7 @@ impl CanPrint for Param {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, ContextObject)]
 pub struct Arg {
     pub expr: Expr,
     pub implicit: bool,
@@ -1269,27 +1227,6 @@ impl Debug for Arg {
             f.write_str("}")?;
         }
         Ok(())
-    }
-}
-
-impl ContextObject for Arg {
-    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        self.expr.shift_impl(start, end, shift);
-    }
-
-    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
-        Arg {
-            expr: self.expr.shifted_impl(start, end, shift),
-            ..*self
-        }
-    }
-
-    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        self.expr.count_refs_impl(start, ref_counts);
-    }
-
-    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
-        self.expr.has_refs_impl(start, end)
     }
 }
 
@@ -1344,7 +1281,7 @@ impl<Ctx: ComparisonContext> ContextObjectWithSubstCmp<Expr, Ctx> for Arg {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, ContextObject)]
 pub struct CastExpr {
     pub expr: Expr,
     pub target_type: Expr,
@@ -1356,30 +1293,6 @@ impl Debug for CastExpr {
         self.expr.fmt(f)?;
         f.write_str("↑")?;
         Ok(())
-    }
-}
-
-impl ContextObject for CastExpr {
-    fn shift_impl(&mut self, start: VarIndex, end: VarIndex, shift: VarIndex) {
-        self.expr.shift_impl(start, end, shift);
-        self.target_type.shift_impl(start, end, shift);
-    }
-
-    fn shifted_impl(&self, start: VarIndex, end: VarIndex, shift: VarIndex) -> Self {
-        CastExpr {
-            expr: self.expr.shifted_impl(start, end, shift),
-            target_type: self.target_type.shifted_impl(start, end, shift),
-            type_defeq: self.type_defeq.clone(),
-        }
-    }
-
-    fn count_refs_impl(&self, start: VarIndex, ref_counts: &mut [usize]) {
-        self.expr.count_refs_impl(start, ref_counts);
-        self.target_type.count_refs_impl(start, ref_counts);
-    }
-
-    fn has_refs_impl(&self, start: VarIndex, end: VarIndex) -> bool {
-        self.expr.has_refs_impl(start, end) || self.target_type.has_refs_impl(start, end)
     }
 }
 
@@ -1458,7 +1371,7 @@ impl HasType for CastExpr {
 // Definitional equality is given by reduction of both sides to the same value.
 // Note that this relationship is not transitive unless reduction traces are unique (so they can be
 // canceled) or at least confluent (so they can be extended to a common target).
-#[derive(Clone, PartialEq, Default)]
+#[derive(Clone, PartialEq, Default, ContextObject)]
 pub struct DefinitionalEquality {
     pub left: ReductionTrace,
     pub right: ReductionTrace,
@@ -1479,7 +1392,7 @@ impl DefinitionalEquality {
 
 pub type ReductionTrace = Vec<ReductionStep>;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, ContextObject)]
 pub enum ReductionStep {
     AppFunReduction(ReductionTrace),
     AppArgReduction(ReductionTrace),

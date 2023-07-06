@@ -5,7 +5,6 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use log::info;
-use smallvec::SmallVec;
 
 use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
 
@@ -264,8 +263,8 @@ impl PlaceholderFiller {
             return Ok(true);
         }
 
-        let mut params = SmallVec::new();
-        let mut args = SmallVec::new();
+        let mut params = InlineVec::new();
+        let mut args = InlineVec::new();
         let mut has_unfilled_args = false;
         let result_type =
             self.analyze_app(expr, ctx, &mut params, &mut args, &mut has_unfilled_args)?;
@@ -376,8 +375,8 @@ impl PlaceholderFiller {
         &self,
         expr: &mut Expr,
         ctx: &MetaLogicContext,
-        result_params: &mut SmallVec<[Param; INLINE_PARAMS]>,
-        result_args: &mut SmallVec<[Expr; INLINE_PARAMS]>,
+        result_params: &mut InlineVec<Param>,
+        result_args: &mut InlineVec<Expr>,
         has_unfilled_args: &mut bool,
     ) -> Result<Expr> {
         if let Expr::App(app) = expr {
@@ -406,8 +405,8 @@ impl PlaceholderFiller {
         expected_type: &mut Expr,
         result_type: &Expr,
         ctx: &MetaLogicContext,
-        params: &SmallVec<[Param; INLINE_PARAMS]>,
-        args: &mut SmallVec<[Expr; INLINE_PARAMS]>,
+        params: &InlineVec<Param>,
+        args: &mut InlineVec<Expr>,
     ) -> Result<bool> {
         ctx.with_locals(params, |ctx_with_params| {
             //dbg!(
@@ -443,12 +442,7 @@ impl PlaceholderFiller {
         })
     }
 
-    fn apply_args(
-        &self,
-        mut expr: &mut Expr,
-        mut args: SmallVec<[Expr; INLINE_PARAMS]>,
-        ctx: &MetaLogicContext,
-    ) {
+    fn apply_args(&self, mut expr: &mut Expr, mut args: InlineVec<Expr>, ctx: &MetaLogicContext) {
         while let Expr::App(app) = expr {
             if let Some(mut value) = args.pop() {
                 if app.param.expr != value {

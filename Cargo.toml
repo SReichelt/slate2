@@ -2,7 +2,10 @@
 members = [
     "kernel/util",
     "kernel/generic",
+    "kernel/generic/derive",
     "kernel/generic/examples",
+    "kernel/notation/generic",
+    "kernel/notation/slate",
     "kernel/metalogic",
-    "kernel/metalogic/mltt"
+    "kernel/metalogic/mltt",
 ]

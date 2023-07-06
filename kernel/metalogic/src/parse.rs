@@ -1,16 +1,16 @@
 use std::mem::take;
 
 use anyhow::{anyhow, Result};
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec;
 use symbol_table::Symbol;
 
-use slate_kernel_generic::{context::*, context_object::*, expr_parts::*};
+use slate_kernel_generic::{context::*, context_object::*};
 use slate_kernel_util::parser::*;
 
 use crate::{expr::*, metalogic::*, metalogic_context::*};
 
 pub struct ParsingContext<'a, 'b, 'c> {
-    pub input: &'a mut ParserInput<'b>,
+    pub input: &'a mut StringInput<'b>,
     pub context: &'a MetaLogicContext<'c>,
 }
 
@@ -20,7 +20,7 @@ impl ParsingContext<'_, '_, '_> {
         ctx: &MetaLogicContext,
         f: impl FnOnce(&mut ParsingContext) -> Result<R>,
     ) -> Result<R> {
-        let mut parser_input = ParserInput(s);
+        let mut parser_input = StringInput(s);
         let mut parsing_context = ParsingContext {
             input: &mut parser_input,
             context: ctx,
@@ -28,6 +28,16 @@ impl ParsingContext<'_, '_, '_> {
         let result = f(&mut parsing_context)?;
         parser_input.expect_end()?;
         Ok(result)
+    }
+
+    fn with_locals<R>(&mut self, params: &[Param], f: impl FnOnce(&mut ParsingContext) -> R) -> R {
+        self.context.with_locals(params, |context| {
+            let mut printing_context = ParsingContext {
+                input: self.input,
+                context,
+            };
+            f(&mut printing_context)
+        })
     }
 
     pub fn parse_expr(&mut self) -> Result<Expr> {
@@ -110,13 +120,7 @@ impl ParsingContext<'_, '_, '_> {
         } else if self.input.try_read_char('[') {
             let (params, args) = self.parse_let_binding()?;
             self.input.read_char(']')?;
-            let body = self.context.with_locals(&params, |body_ctx| {
-                let mut body_parsing_ctx = ParsingContext {
-                    input: self.input,
-                    context: body_ctx,
-                };
-                body_parsing_ctx.parse_expr()
-            })?;
+            let body = self.with_locals(&params, |body_ctx| body_ctx.parse_expr())?;
             Ok(Some(Expr::dyn_let_binding(params, args, body)))
         } else if self.input.try_read_char('λ') {
             let (params, body) = self.parse_lambda()?;
@@ -127,7 +131,7 @@ impl ParsingContext<'_, '_, '_> {
         } else if self.input.try_read_char('Σ') {
             let expr = self.parse_dep_type(StandardTypeCtorKind::Sigma)?;
             Ok(Some(expr))
-        } else if let Some(name) = self.input.try_read_name() {
+        } else if let Some(name) = self.input.try_read_ascii_identifier() {
             if name == "_" {
                 Ok(Some(Expr::Placeholder))
             } else {
@@ -224,7 +228,7 @@ impl ParsingContext<'_, '_, '_> {
         if self.input.try_read_char('{') {
             implicit = true;
         }
-        if let Some(param_name_str) = self.input.try_read_name() {
+        if let Some(param_name_str) = self.input.try_read_ascii_identifier() {
             let param_name = self.get_param_name(param_name_str);
             self.input.skip_whitespace();
             let param_type = if self.input.try_read_char(':') {
@@ -245,29 +249,23 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    fn parse_lambda(&mut self) -> Result<(SmallVec<[Param; INLINE_PARAMS]>, Expr)> {
+    fn parse_lambda(&mut self) -> Result<(InlineVec<Param>, Expr)> {
         let params = self.parse_lambda_params()?;
-        let body = self.context.with_locals(&params, |body_ctx| {
-            let mut body_parsing_ctx = ParsingContext {
-                input: self.input,
-                context: body_ctx,
-            };
-            body_parsing_ctx.parse_expr()
-        })?;
+        let body = self.with_locals(&params, |body_ctx| body_ctx.parse_expr())?;
         Ok((params, body))
     }
 
-    fn parse_lambda_params(&mut self) -> Result<SmallVec<[Param; INLINE_PARAMS]>> {
+    fn parse_lambda_params(&mut self) -> Result<InlineVec<Param>> {
         self.input.skip_whitespace();
         let mut implicit = false;
         if self.input.try_read_char('{') {
             implicit = true;
         }
-        if let Some(param_name_str) = self.input.try_read_name() {
-            let mut param_names: SmallVec<[Option<Symbol>; INLINE_PARAMS]> =
+        if let Some(param_name_str) = self.input.try_read_ascii_identifier() {
+            let mut param_names: InlineVec<Option<Symbol>> =
                 smallvec![self.get_param_name(param_name_str)];
             self.input.skip_whitespace();
-            while let Some(param_name_str) = self.input.try_read_name() {
+            while let Some(param_name_str) = self.input.try_read_ascii_identifier() {
                 param_names.push(self.get_param_name(param_name_str));
                 self.input.skip_whitespace();
             }
@@ -280,8 +278,7 @@ impl ParsingContext<'_, '_, '_> {
                 self.input.read_char('}')?;
             }
             self.input.read_char('.')?;
-            let mut params: SmallVec<[Param; INLINE_PARAMS]> =
-                SmallVec::with_capacity(param_names.len());
+            let mut params: InlineVec<Param> = InlineVec::with_capacity(param_names.len());
             let locals_start = self.context.locals_start();
             let mut shift: VarIndex = 0;
             for param_name in param_names {
@@ -322,22 +319,12 @@ impl ParsingContext<'_, '_, '_> {
         }
     }
 
-    pub fn parse_let_binding(
-        &mut self,
-    ) -> Result<(
-        SmallVec<[Param; INLINE_PARAMS]>,
-        SmallVec<[Arg; INLINE_PARAMS]>,
-    )> {
-        let mut params = SmallVec::new();
-        let mut args = SmallVec::new();
+    pub fn parse_let_binding(&mut self) -> Result<(InlineVec<Param>, InlineVec<Arg>)> {
+        let mut params = InlineVec::new();
+        let mut args = InlineVec::new();
         loop {
-            let new_param = self.context.with_locals(&params, |new_param_ctx| {
-                let mut new_params_parsing_ctx = ParsingContext {
-                    input: self.input,
-                    context: new_param_ctx,
-                };
-                new_params_parsing_ctx.parse_param()
-            })?;
+            let new_param =
+                self.with_locals(&params, |new_param_ctx| new_param_ctx.parse_param())?;
             params.push(new_param);
             self.input.read_char('⫽')?;
             args.push(self.parse_delimited_arg()?);
@@ -352,7 +339,7 @@ impl ParsingContext<'_, '_, '_> {
         &mut self,
         const_idx: VarIndex,
     ) -> Result<(String, ReductionRule)> {
-        if let Some(name) = self.input.try_read_name() {
+        if let Some(name) = self.input.try_read_ascii_identifier() {
             self.input.read_char(':')?;
             let rule = self.parse_reduction_rule(const_idx)?;
             Ok((name.to_owned(), rule))
@@ -362,26 +349,17 @@ impl ParsingContext<'_, '_, '_> {
     }
 
     pub fn parse_reduction_rule(&mut self, const_idx: VarIndex) -> Result<ReductionRule> {
-        let mut params = SmallVec::new();
+        let mut params = InlineVec::new();
         self.input.skip_whitespace();
         while self.input.try_read_char('∀') {
-            let mut new_params = self.context.with_locals(&params, |new_params_ctx| {
-                let mut new_params_parsing_ctx = ParsingContext {
-                    input: self.input,
-                    context: new_params_ctx,
-                };
-                new_params_parsing_ctx.parse_lambda_params()
+            let mut new_params = self.with_locals(&params, |new_params_ctx| {
+                new_params_ctx.parse_lambda_params()
             })?;
             params.append(&mut new_params);
             self.input.skip_whitespace();
         }
-        let body = self.context.with_locals(&params, |body_ctx| {
-            let mut body_parsing_ctx = ParsingContext {
-                input: self.input,
-                context: body_ctx,
-            };
-            body_parsing_ctx.parse_reduction_body(const_idx)
-        })?;
+        let body =
+            self.with_locals(&params, |body_ctx| body_ctx.parse_reduction_body(const_idx))?;
         Ok(ReductionRule { params, body })
     }
 
