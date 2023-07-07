@@ -32,8 +32,7 @@ pub trait EventTranslator<'a> {
     // events to be repeated a certain number of times.
     fn start<Src: EventSource + 'a>(
         &self,
-        source: Src,
-        special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::In, Src>,
     ) -> Self::Pass<Src>;
 }
 
@@ -62,19 +61,20 @@ impl<'a, T: EventTranslator<'a>, Sink: EventSink<'a, Ev = T::Out>> EventSink<'a>
 
     fn start<Src: EventSource + 'a>(
         self,
-        source: Src,
-        special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::Ev, Src>,
     ) -> Self::Pass<Src> {
         let translator_source = EventTranslatorSource {
-            diag_source: Some(source.clone()),
+            diag_source: Some(source.0.clone()),
         };
         let translator_pass = self
             .translator
-            .start(translator_source, special_ops.clone());
-        let sink_pass = self.sink.start(source, translator_pass.special_ops());
+            .start(EventSourceWithOps(translator_source, source.1.clone()));
+        let sink_pass = self
+            .sink
+            .start(EventSourceWithOps(source.0, translator_pass.special_ops()));
         TranslatorPassInst {
             translator: self.translator,
-            special_ops,
+            special_ops: source.1,
             translator_pass,
             sink_pass,
         }
@@ -243,9 +243,10 @@ impl<
         } else {
             self.sink_pass = self.sink_pass.next_pass(state.sink_state, end_marker)?;
             let translator_source = EventTranslatorSource { diag_source: None };
-            self.translator_pass = self
-                .translator
-                .start(translator_source, self.special_ops.clone());
+            self.translator_pass = self.translator.start(EventSourceWithOps(
+                translator_source,
+                self.special_ops.clone(),
+            ));
         }
         Some(self)
     }

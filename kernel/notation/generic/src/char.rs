@@ -10,6 +10,12 @@ pub trait CharEventOps<'a, Marker> {
     fn slice(&self, range: Range<&Marker>) -> Cow<'a, str>;
 }
 
+impl<'a, Src: EventSource> CharEventOps<'a, Src::Marker> for EventSourceWithOps<'a, char, Src> {
+    fn slice(&self, range: Range<&Src::Marker>) -> Cow<'a, str> {
+        self.1.slice(range)
+    }
+}
+
 pub mod test_helpers {
     use std::ops::Range;
 
@@ -55,12 +61,11 @@ pub mod test_helpers {
 
         fn start<Src: EventSource + 'a>(
             self,
-            _source: Src,
-            special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
+            source: EventSourceWithOps<'a, Self::Ev, Src>,
         ) -> Self::Pass<Src> {
             SlicingSinkPass {
                 sink: self,
-                special_ops,
+                special_ops: source.1,
             }
         }
     }

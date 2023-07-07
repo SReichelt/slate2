@@ -1,6 +1,6 @@
 use std::{borrow::Cow, mem::take, ops::Range};
 
-use slate_kernel_notation_generic::{event::*, event_translator::*};
+use slate_kernel_notation_generic::{char::*, event::*, event_translator::*};
 
 use crate::chars::*;
 
@@ -26,19 +26,14 @@ impl<'a> EventTranslator<'a> for Tokenizer {
 
     fn start<Src: EventSource + 'a>(
         &self,
-        source: Src,
-        special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::In, Src>,
     ) -> Self::Pass<Src> {
-        TokenizerPass {
-            source,
-            special_ops,
-        }
+        TokenizerPass { source }
     }
 }
 
 pub struct TokenizerPass<'a, Src: EventSource + 'a> {
-    source: Src,
-    special_ops: <char as Event>::SpecialOps<'a, Src::Marker>,
+    source: EventSourceWithOps<'a, char, Src>,
 }
 
 impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
@@ -198,7 +193,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
 
             StartedToken::DefinitionSymbol => {
                 if !is_symbol_char(c) || (is_delimiter_char(c) && c != ':') {
-                    let symbol = self.special_ops.slice(&*token_start..range.start);
+                    let symbol = self.source.slice(&*token_start..range.start);
                     out(Token::DefinitionSymbol(symbol), &*token_start..range.start);
                     *state = None;
                     return false;
@@ -214,7 +209,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                             format!("'%' must be followed by a keyword"),
                         );
                     } else {
-                        let keyword = self.special_ops.slice(&*keyword_start..range.start);
+                        let keyword = self.source.slice(&*keyword_start..range.start);
                         out(Token::Keyword(keyword), &*token_start..range.start);
                     }
                     *state = None;
@@ -246,7 +241,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     NumberState::InExponent => false,
                 };
                 if !(is_alnum || is_special) {
-                    let number = self.special_ops.slice(&*token_start..range.start);
+                    let number = self.source.slice(&*token_start..range.start);
                     out(Token::Number(number), &*token_start..range.start);
                     *state = None;
                     return false;
@@ -265,7 +260,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         let final_value = if let Some(value) = value {
                             Cow::Owned(take(value))
                         } else {
-                            self.special_ops.slice(&*content_start..range.start)
+                            self.source.slice(&*content_start..range.start)
                         };
                         if *is_quoted_identifier {
                             Token::Identifier(final_value)
@@ -289,8 +284,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     }
 
                     if let Some(some_escape_start) = escape_start {
-                        let escape_prefix =
-                            self.special_ops.slice(&*some_escape_start..range.start);
+                        let escape_prefix = self.source.slice(&*some_escape_start..range.start);
                         if escape_prefix == "\\" {
                             if let Some(c) = match c {
                                 'x' | 'u' => None,
@@ -383,11 +377,8 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     } else if c == '\\' {
                         *escape_start = Some(range.start.clone());
                         if value.is_none() {
-                            *value = Some(
-                                self.special_ops
-                                    .slice(&*content_start..range.start)
-                                    .into_owned(),
-                            );
+                            *value =
+                                Some(self.source.slice(&*content_start..range.start).into_owned());
                         }
                     } else {
                         if let Some(value) = value {
@@ -439,7 +430,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     }
                 }
                 if end {
-                    let identifier = self.special_ops.slice(&*token_start..range.start);
+                    let identifier = self.source.slice(&*token_start..range.start);
                     out(Token::Identifier(identifier), &*token_start..range.start);
                     *state = None;
                     return false;

@@ -39,8 +39,7 @@ pub trait EventSink<'a> {
 
     fn start<Src: EventSource + 'a>(
         self,
-        source: Src,
-        special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::Ev, Src>,
     ) -> Self::Pass<Src>;
 }
 
@@ -144,8 +143,7 @@ impl<'a, Sink: SimpleEventSink> EventSink<'a> for Sink {
 
     fn start<Src: EventSource + 'a>(
         self,
-        _source: Src,
-        _special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
+        _source: EventSourceWithOps<'a, Self::Ev, Src>,
     ) -> Self::Pass<Src> {
         SimpleEventSinkPass {
             sink: self,
@@ -187,10 +185,40 @@ impl<Sink: SimpleEventSink, Marker: Clone + PartialEq> EventSinkPass
 // We might change this at some point to better support localization.
 pub type Message = String;
 
+// Note: EventSource should be thought of as a _reference_ to the source of events. In particular,
+// cloning an EventSource creates a new reference to the same actual source, and it does not matter
+// which copy diagnostics are reported to.
 pub trait EventSource: Clone {
     type Marker: Clone + PartialEq;
 
     fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message);
+}
+
+pub struct EventSourceWithOps<'a, Ev: Event, Src: EventSource>(
+    pub Src,
+    pub Ev::SpecialOps<'a, Src::Marker>,
+)
+where
+    Src::Marker: 'a;
+
+impl<'a, Ev: Event, Src: EventSource> Clone for EventSourceWithOps<'a, Ev, Src>
+where
+    Src::Marker: 'a,
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), self.1.clone())
+    }
+}
+
+impl<'a, Ev: Event, Src: EventSource> EventSource for EventSourceWithOps<'a, Ev, Src>
+where
+    Src::Marker: 'a,
+{
+    type Marker = Src::Marker;
+
+    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
+        self.0.diagnostic(range, severity, msg)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

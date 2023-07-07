@@ -1,4 +1,4 @@
-use std::{borrow::Cow, marker::PhantomData, ops::Range, rc::Rc};
+use std::{borrow::Cow, ops::Range, rc::Rc};
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
@@ -38,21 +38,18 @@ impl<'a> EventTranslator<'a> for ParameterIdentifier {
 
     fn start<Src: EventSource + 'a>(
         &self,
-        source: Src,
-        _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::In, Src>,
     ) -> Self::Pass<Src> {
         ParameterIdentifierPass {
             metamodel_getter: self.metamodel_getter.clone(),
             source,
-            _phantom_a: PhantomData,
         }
     }
 }
 
 pub struct ParameterIdentifierPass<'a, Src: EventSource + 'a> {
     metamodel_getter: Rc<dyn MetaModelGetter>,
-    source: Src,
-    _phantom_a: PhantomData<&'a ()>,
+    source: EventSourceWithOps<'a, TokenEvent<'a>, Src>,
 }
 
 impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<'a, Src> {

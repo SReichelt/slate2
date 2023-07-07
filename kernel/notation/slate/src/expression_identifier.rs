@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
 use crate::parameter_identifier::*;
@@ -23,19 +21,14 @@ impl<'a> EventTranslator<'a> for ExpressionIdentifier {
 
     fn start<Src: EventSource + 'a>(
         &self,
-        source: Src,
-        _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::In, Src>,
     ) -> Self::Pass<Src> {
-        EventTranslatorPassCombinator::First(GlobalParamRecordingPass {
-            source,
-            _phantom_a: PhantomData,
-        })
+        EventTranslatorPassCombinator::First(GlobalParamRecordingPass { source })
     }
 }
 
 pub struct GlobalParamRecordingPass<'a, Src: EventSource + 'a> {
-    source: Src,
-    _phantom_a: PhantomData<&'a ()>,
+    source: EventSourceWithOps<'a, ParameterEvent<'a>, Src>,
 }
 
 impl<'a, Src: EventSource + 'a> EventTranslatorPass for GlobalParamRecordingPass<'a, Src> {
@@ -67,7 +60,6 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for GlobalParamRecordingPass
         Some(ExpressionOutputPass {
             source: self.source,
             global_param_state: state,
-            _phantom_a: PhantomData,
         })
     }
 }
@@ -86,9 +78,8 @@ struct RecordedParam {
 enum NotationToken {}
 
 pub struct ExpressionOutputPass<'a, Src: EventSource + 'a> {
-    source: Src,
+    source: EventSourceWithOps<'a, ParameterEvent<'a>, Src>,
     global_param_state: GlobalParamRecordingState,
-    _phantom_a: PhantomData<&'a ()>,
 }
 
 impl<'a, Src: EventSource + 'a> EventTranslatorPass for ExpressionOutputPass<'a, Src> {

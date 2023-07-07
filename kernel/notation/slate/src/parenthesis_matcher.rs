@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, ops::Range};
+use std::ops::Range;
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
@@ -23,19 +23,14 @@ impl<'a> EventTranslator<'a> for ParenthesisMatcher {
 
     fn start<Src: EventSource + 'a>(
         &self,
-        source: Src,
-        _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
+        source: EventSourceWithOps<'a, Self::In, Src>,
     ) -> Self::Pass<Src> {
-        ParenthesisMatcherPass {
-            source,
-            _phantom_a: PhantomData,
-        }
+        ParenthesisMatcherPass { source }
     }
 }
 
 pub struct ParenthesisMatcherPass<'a, Src: EventSource + 'a> {
-    source: Src,
-    _phantom_a: PhantomData<&'a ()>,
+    source: EventSourceWithOps<'a, Token<'a>, Src>,
 }
 
 impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'a, Src> {
