@@ -37,21 +37,15 @@ impl<'a> EventTranslator<'a> for ParameterIdentifier {
     type Pass<Src: EventSource + 'a> = ParameterIdentifierPass<'a, Src>;
 
     fn start<Src: EventSource + 'a>(
-        &mut self,
+        &self,
         source: Src,
         _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
-    ) -> (
-        Self::Pass<Src>,
-        <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
-    ) {
-        (
-            ParameterIdentifierPass {
-                metamodel_getter: self.metamodel_getter.clone(),
-                source,
-                _phantom_a: PhantomData,
-            },
-            (),
-        )
+    ) -> Self::Pass<Src> {
+        ParameterIdentifierPass {
+            metamodel_getter: self.metamodel_getter.clone(),
+            source,
+            _phantom_a: PhantomData,
+        }
     }
 }
 

@@ -25,20 +25,14 @@ impl<'a> EventTranslator<'a> for Tokenizer {
     type Pass<Src: EventSource + 'a> = TokenizerPass<'a, Src>;
 
     fn start<Src: EventSource + 'a>(
-        &mut self,
+        &self,
         source: Src,
         special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
-    ) -> (
-        Self::Pass<Src>,
-        <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
-    ) {
-        (
-            TokenizerPass {
-                source,
-                special_ops,
-            },
-            (),
-        )
+    ) -> Self::Pass<Src> {
+        TokenizerPass {
+            source,
+            special_ops,
+        }
     }
 }
 

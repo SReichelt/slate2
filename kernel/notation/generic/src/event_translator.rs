@@ -25,18 +25,16 @@ pub trait EventTranslator<'a> {
             Out = Self::Out,
             Marker = Src::Marker,
             NextPass = Self::Pass<Src>,
-        > + 'a;
+        > + SpecialOpsGetter<<Self::Out as Event>::SpecialOps<'a, Src::Marker>>
+        + 'a;
 
     // The number of outer passes is determined by the sink of the outgoing events, which requires
     // events to be repeated a certain number of times.
     fn start<Src: EventSource + 'a>(
-        &mut self,
+        &self,
         source: Src,
         special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
-    ) -> (
-        Self::Pass<Src>,
-        <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
-    );
+    ) -> Self::Pass<Src>;
 }
 
 pub struct TranslatorInst<'a, T: EventTranslator<'a>, Sink: EventSink<'a, Ev = T::Out>> {
@@ -63,14 +61,17 @@ impl<'a, T: EventTranslator<'a>, Sink: EventSink<'a, Ev = T::Out>> EventSink<'a>
     type Pass<Src: EventSource + 'a> = TranslatorPassInst<'a, T, Src, Sink::Pass<Src>>;
 
     fn start<Src: EventSource + 'a>(
-        mut self,
+        self,
         source: Src,
         special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
     ) -> Self::Pass<Src> {
-        let (translator_pass, out_special_ops) = self
+        let translator_source = EventTranslatorSource {
+            diag_source: Some(source.clone()),
+        };
+        let translator_pass = self
             .translator
-            .start(Some(source.clone()), special_ops.clone());
-        let sink_pass = self.sink.start(source, out_special_ops);
+            .start(translator_source, special_ops.clone());
+        let sink_pass = self.sink.start(source, translator_pass.special_ops());
         TranslatorPassInst {
             translator: self.translator,
             special_ops,
@@ -193,7 +194,7 @@ pub struct TranslatorPassInst<
 > {
     pub translator: T,
     pub special_ops: <T::In as Event>::SpecialOps<'a, Src::Marker>,
-    pub translator_pass: T::Pass<Option<Src>>,
+    pub translator_pass: T::Pass<EventTranslatorSource<Src>>,
     pub sink_pass: SP,
 }
 
@@ -206,7 +207,7 @@ impl<
 {
     type Ev = T::In;
     type Marker = Src::Marker;
-    type State = TranslatorStateInst<T::Pass<Option<Src>>, SP>;
+    type State = TranslatorStateInst<T::Pass<EventTranslatorSource<Src>>, SP>;
     type NextPass = Self;
 
     fn new_state(&self) -> Self::State {
@@ -241,8 +242,10 @@ impl<
             self.translator_pass = next_translator_pass;
         } else {
             self.sink_pass = self.sink_pass.next_pass(state.sink_state, end_marker)?;
-            let (translator_pass, _) = self.translator.start(None, self.special_ops.clone());
-            self.translator_pass = translator_pass;
+            let translator_source = EventTranslatorSource { diag_source: None };
+            self.translator_pass = self
+                .translator
+                .start(translator_source, self.special_ops.clone());
         }
         Some(self)
     }
@@ -273,5 +276,30 @@ impl<TP: EventTranslatorPass, SP: EventSinkPass<Ev = TP::Out, Marker = TP::Marke
 {
     fn eq(&self, other: &Self) -> bool {
         self.translator_state == other.translator_state && self.sink_state == other.sink_state
+    }
+}
+
+pub trait SpecialOpsGetter<SpecialOps> {
+    fn special_ops(&self) -> SpecialOps;
+}
+
+impl<T> SpecialOpsGetter<()> for T {
+    fn special_ops(&self) -> () {
+        ()
+    }
+}
+
+#[derive(Clone)]
+pub struct EventTranslatorSource<Src: EventSource> {
+    diag_source: Option<Src>,
+}
+
+impl<Src: EventSource> EventSource for EventTranslatorSource<Src> {
+    type Marker = Src::Marker;
+
+    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
+        if let Some(diag_source) = &self.diag_source {
+            diag_source.diagnostic(range, severity, msg);
+        }
     }
 }

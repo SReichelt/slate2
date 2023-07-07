@@ -22,20 +22,14 @@ impl<'a> EventTranslator<'a> for ParenthesisMatcher {
     type Pass<Src: EventSource + 'a> = ParenthesisMatcherPass<'a, Src>;
 
     fn start<Src: EventSource + 'a>(
-        &mut self,
+        &self,
         source: Src,
         _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
-    ) -> (
-        Self::Pass<Src>,
-        <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
-    ) {
-        (
-            ParenthesisMatcherPass {
-                source,
-                _phantom_a: PhantomData,
-            },
-            (),
-        )
+    ) -> Self::Pass<Src> {
+        ParenthesisMatcherPass {
+            source,
+            _phantom_a: PhantomData,
+        }
     }
 }
 

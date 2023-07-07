@@ -22,20 +22,14 @@ impl<'a> EventTranslator<'a> for ExpressionIdentifier {
     >;
 
     fn start<Src: EventSource + 'a>(
-        &mut self,
+        &self,
         source: Src,
         _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
-    ) -> (
-        Self::Pass<Src>,
-        <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
-    ) {
-        (
-            EventTranslatorPassCombinator::First(GlobalParamRecordingPass {
-                source,
-                _phantom_a: PhantomData,
-            }),
-            (),
-        )
+    ) -> Self::Pass<Src> {
+        EventTranslatorPassCombinator::First(GlobalParamRecordingPass {
+            source,
+            _phantom_a: PhantomData,
+        })
     }
 }
 

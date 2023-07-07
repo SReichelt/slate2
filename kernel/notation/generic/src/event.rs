@@ -193,16 +193,6 @@ pub trait EventSource: Clone {
     fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message);
 }
 
-impl<Src: EventSource> EventSource for Option<Src> {
-    type Marker = Src::Marker;
-
-    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
-        if let Some(src) = self {
-            src.diagnostic(range, severity, msg);
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Severity {
     Info,
