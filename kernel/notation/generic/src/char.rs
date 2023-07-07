@@ -55,7 +55,7 @@ pub mod test_helpers {
 
         fn start<Src: EventSource + 'a>(
             self,
-            _source: &'a Src,
+            _source: Src,
             special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
         ) -> Self::Pass<Src> {
             SlicingSinkPass {

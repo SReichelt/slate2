@@ -20,15 +20,21 @@ pub trait EventTranslator<'a> {
     type In: Event;
     type Out: Event;
 
-    type OuterPass<Src: EventSource + 'a>: EventTranslatorOuterPass<In = Self::In, Out = Self::Out, Marker = Src::Marker>
-        + 'a;
+    type Pass<Src: EventSource + 'a>: EventTranslatorPass<
+            In = Self::In,
+            Out = Self::Out,
+            Marker = Src::Marker,
+            NextPass = Self::Pass<Src>,
+        > + 'a;
 
+    // The number of outer passes is determined by the sink of the outgoing events, which requires
+    // events to be repeated a certain number of times.
     fn start<Src: EventSource + 'a>(
-        self,
-        source: &'a Src,
+        &mut self,
+        source: Src,
         special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
     ) -> (
-        Self::OuterPass<Src>,
+        Self::Pass<Src>,
         <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
     );
 }
@@ -54,63 +60,34 @@ impl<'a, T: EventTranslator<'a>, Sink: EventSink<'a, Ev = T::Out>> EventSink<'a>
 {
     type Ev = T::In;
 
-    type Pass<Src: EventSource + 'a> = TranslatorInnerPassInst<T::OuterPass<Src>, Sink::Pass<Src>>;
+    type Pass<Src: EventSource + 'a> = TranslatorPassInst<'a, T, Src, Sink::Pass<Src>>;
 
     fn start<Src: EventSource + 'a>(
-        self,
-        source: &'a Src,
+        mut self,
+        source: Src,
         special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
     ) -> Self::Pass<Src> {
-        let (translator_pass, out_special_ops) = self.translator.start(source, special_ops);
+        let (translator_pass, out_special_ops) = self
+            .translator
+            .start(Some(source.clone()), special_ops.clone());
         let sink_pass = self.sink.start(source, out_special_ops);
-        let mut outer_pass = TranslatorOuterPassInst {
+        TranslatorPassInst {
+            translator: self.translator,
+            special_ops,
             translator_pass,
             sink_pass,
-        };
-        let inner_pass = outer_pass.translator_pass.start_inner();
-        TranslatorInnerPassInst {
-            outer_pass,
-            inner_pass,
         }
     }
 }
 
-// The number of outer passes is determined by the sink of the outgoing events, which requires
-// events to be repeated a certain number of times.
-pub trait EventTranslatorOuterPass {
+pub trait EventTranslatorPass: Sized {
     type In: Event;
     type Out: Event;
     type Marker: Clone + PartialEq;
 
-    type InnerPass: EventTranslatorInnerPass<
-        In = Self::In,
-        Out = Self::Out,
-        Marker = Self::Marker,
-        NextInnerPass = Self::InnerPass,
-    >;
-
-    fn start_inner(&mut self) -> Self::InnerPass;
-}
-
-pub struct TranslatorOuterPassInst<
-    TOP: EventTranslatorOuterPass,
-    SP: EventSinkPass<Ev = TOP::Out, Marker = TOP::Marker>,
-> {
-    pub translator_pass: TOP,
-    pub sink_pass: SP,
-}
-
-// The translator can optionally specify multiple inner passes, optionally with different types.
-pub trait EventTranslatorInnerPass: Sized {
-    type In: Event;
-    type Out: Event;
-    type Marker: Clone + PartialEq;
-
-    type NextInnerPass: EventTranslatorInnerPass<
-        In = Self::In,
-        Out = Self::Out,
-        Marker = Self::Marker,
-    > = Self;
+    // The translator can optionally specify multiple inner passes, optionally with different types.
+    type NextPass: EventTranslatorPass<In = Self::In, Out = Self::Out, Marker = Self::Marker> =
+        Self;
 
     type State: Clone + PartialEq;
 
@@ -124,43 +101,33 @@ pub trait EventTranslatorInnerPass: Sized {
         out: impl FnMut(Self::Out, Range<&Self::Marker>),
     );
 
-    fn next_inner_pass(
+    fn next_pass(
         self,
         state: Self::State,
         end_marker: &Self::Marker,
         out: impl FnMut(Self::Out, Range<&Self::Marker>),
-    ) -> Option<Self::NextInnerPass>;
+    ) -> Option<Self::NextPass>;
 }
 
-// Helper to combine two types that implement `EventTranslatorInnerPass` into one. Can be used
+// Helper to combine two types that implement `EventTranslatorPass` into one. Can be used
 // recursively in `Snd`.
-pub enum EventTranslatorInnerPassCombinator<
-    Fst: EventTranslatorInnerPass<NextInnerPass = Snd>,
-    Snd: EventTranslatorInnerPass<
-        In = Fst::In,
-        Out = Fst::Out,
-        Marker = Fst::Marker,
-        NextInnerPass = Snd,
-    >,
+pub enum EventTranslatorPassCombinator<
+    Fst: EventTranslatorPass<NextPass = Snd>,
+    Snd: EventTranslatorPass<In = Fst::In, Out = Fst::Out, Marker = Fst::Marker, NextPass = Snd>,
 > {
     First(Fst),
     Next(Snd),
 }
 
 impl<
-        Fst: EventTranslatorInnerPass<NextInnerPass = Snd>,
-        Snd: EventTranslatorInnerPass<
-            In = Fst::In,
-            Out = Fst::Out,
-            Marker = Fst::Marker,
-            NextInnerPass = Snd,
-        >,
-    > EventTranslatorInnerPass for EventTranslatorInnerPassCombinator<Fst, Snd>
+        Fst: EventTranslatorPass<NextPass = Snd>,
+        Snd: EventTranslatorPass<In = Fst::In, Out = Fst::Out, Marker = Fst::Marker, NextPass = Snd>,
+    > EventTranslatorPass for EventTranslatorPassCombinator<Fst, Snd>
 {
     type In = Fst::In;
     type Out = Fst::Out;
     type Marker = Fst::Marker;
-    type NextInnerPass = Self;
+    type NextPass = Self;
     type State = CombinedState<Fst::State, Snd::State>;
 
     fn new_state(&self) -> Self::State {
@@ -193,68 +160,69 @@ impl<
         }
     }
 
-    fn next_inner_pass(
+    fn next_pass(
         self,
         state: Self::State,
         end_marker: &Self::Marker,
         out: impl FnMut(Self::Out, Range<&Self::Marker>),
-    ) -> Option<Self::NextInnerPass> {
+    ) -> Option<Self::NextPass> {
         match self {
             Self::First(pass) => {
                 let CombinedState::First(pass_state) = state else {
                     panic!("inconsistent pass combinator state");
                 };
-                let next_pass = pass.next_inner_pass(pass_state, end_marker, out)?;
+                let next_pass = pass.next_pass(pass_state, end_marker, out)?;
                 Some(Self::Next(next_pass))
             }
             Self::Next(pass) => {
                 let CombinedState::Next(pass_state) = state else {
                     panic!("inconsistent pass combinator state");
                 };
-                let next_pass = pass.next_inner_pass(pass_state, end_marker, out)?;
+                let next_pass = pass.next_pass(pass_state, end_marker, out)?;
                 Some(Self::Next(next_pass))
             }
         }
     }
 }
 
-pub struct TranslatorInnerPassInst<
-    TOP: EventTranslatorOuterPass,
-    SP: EventSinkPass<Ev = TOP::Out, Marker = TOP::Marker, NextPass = SP>,
+pub struct TranslatorPassInst<
+    'a,
+    T: EventTranslator<'a>,
+    Src: EventSource + 'a,
+    SP: EventSinkPass<Ev = T::Out, Marker = Src::Marker, NextPass = SP>,
 > {
-    pub outer_pass: TranslatorOuterPassInst<TOP, SP>,
-    pub inner_pass: TOP::InnerPass,
+    pub translator: T,
+    pub special_ops: <T::In as Event>::SpecialOps<'a, Src::Marker>,
+    pub translator_pass: T::Pass<Option<Src>>,
+    pub sink_pass: SP,
 }
 
 impl<
-        TOP: EventTranslatorOuterPass,
-        SP: EventSinkPass<Ev = TOP::Out, Marker = TOP::Marker, NextPass = SP>,
-    > EventSinkPass for TranslatorInnerPassInst<TOP, SP>
+        'a,
+        T: EventTranslator<'a>,
+        Src: EventSource + 'a,
+        SP: EventSinkPass<Ev = T::Out, Marker = Src::Marker, NextPass = SP>,
+    > EventSinkPass for TranslatorPassInst<'a, T, Src, SP>
 {
-    type Ev = TOP::In;
-    type Marker = TOP::Marker;
-    type State = TranslatorStateInst<TOP::InnerPass, SP>;
+    type Ev = T::In;
+    type Marker = Src::Marker;
+    type State = TranslatorStateInst<T::Pass<Option<Src>>, SP>;
     type NextPass = Self;
 
     fn new_state(&self) -> Self::State {
         TranslatorStateInst {
-            translator_state: self.inner_pass.new_state(),
-            sink_state: self.outer_pass.sink_pass.new_state(),
+            translator_state: self.translator_pass.new_state(),
+            sink_state: self.sink_pass.new_state(),
         }
     }
 
-    fn event(&self, state: &mut Self::State, event: TOP::In, range: Range<&TOP::Marker>) {
-        self.inner_pass.event(
+    fn event(&self, state: &mut Self::State, event: T::In, range: Range<&Src::Marker>) {
+        self.translator_pass.event(
             &mut state.translator_state,
             event,
             range,
             |out, out_range| {
-                EventSinkPass::event(
-                    &self.outer_pass.sink_pass,
-                    &mut state.sink_state,
-                    out,
-                    out_range,
-                )
+                EventSinkPass::event(&self.sink_pass, &mut state.sink_state, out, out_range)
             },
         )
     }
@@ -262,42 +230,35 @@ impl<
     fn next_pass(
         mut self,
         mut state: Self::State,
-        end_marker: &TOP::Marker,
+        end_marker: &Src::Marker,
     ) -> Option<Self::NextPass> {
-        if let Some(next_inner_pass) =
-            self.inner_pass
-                .next_inner_pass(state.translator_state, end_marker, |out, out_range| {
-                    EventSinkPass::event(
-                        &self.outer_pass.sink_pass,
-                        &mut state.sink_state,
-                        out,
-                        out_range,
-                    )
+        if let Some(next_translator_pass) =
+            self.translator_pass
+                .next_pass(state.translator_state, end_marker, |out, out_range| {
+                    EventSinkPass::event(&self.sink_pass, &mut state.sink_state, out, out_range)
                 })
         {
-            self.inner_pass = next_inner_pass;
+            self.translator_pass = next_translator_pass;
         } else {
-            self.outer_pass.sink_pass = self
-                .outer_pass
-                .sink_pass
-                .next_pass(state.sink_state, end_marker)?;
-            self.inner_pass = self.outer_pass.translator_pass.start_inner();
+            self.sink_pass = self.sink_pass.next_pass(state.sink_state, end_marker)?;
+            let (translator_pass, _) = self.translator.start(None, self.special_ops.clone());
+            self.translator_pass = translator_pass;
         }
         Some(self)
     }
 }
 
 pub struct TranslatorStateInst<
-    TIP: EventTranslatorInnerPass,
-    SP: EventSinkPass<Ev = TIP::Out, Marker = TIP::Marker>,
+    TP: EventTranslatorPass,
+    SP: EventSinkPass<Ev = TP::Out, Marker = TP::Marker>,
 > {
-    pub translator_state: TIP::State,
+    pub translator_state: TP::State,
     pub sink_state: SP::State,
 }
 
 // Unfortunately, #[derive] fails to work in these generic cases.
-impl<TIP: EventTranslatorInnerPass, SP: EventSinkPass<Ev = TIP::Out, Marker = TIP::Marker>> Clone
-    for TranslatorStateInst<TIP, SP>
+impl<TP: EventTranslatorPass, SP: EventSinkPass<Ev = TP::Out, Marker = TP::Marker>> Clone
+    for TranslatorStateInst<TP, SP>
 {
     fn clone(&self) -> Self {
         Self {
@@ -307,8 +268,8 @@ impl<TIP: EventTranslatorInnerPass, SP: EventSinkPass<Ev = TIP::Out, Marker = TI
     }
 }
 
-impl<TIP: EventTranslatorInnerPass, SP: EventSinkPass<Ev = TIP::Out, Marker = TIP::Marker>>
-    PartialEq for TranslatorStateInst<TIP, SP>
+impl<TP: EventTranslatorPass, SP: EventSinkPass<Ev = TP::Out, Marker = TP::Marker>> PartialEq
+    for TranslatorStateInst<TP, SP>
 {
     fn eq(&self, other: &Self) -> bool {
         self.translator_state == other.translator_state && self.sink_state == other.sink_state

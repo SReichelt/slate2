@@ -22,14 +22,14 @@ pub struct Tokenizer;
 impl<'a> EventTranslator<'a> for Tokenizer {
     type In = char;
     type Out = Token<'a>;
-    type OuterPass<Src: EventSource + 'a> = TokenizerPass<'a, Src>;
+    type Pass<Src: EventSource + 'a> = TokenizerPass<'a, Src>;
 
     fn start<Src: EventSource + 'a>(
-        self,
-        source: &'a Src,
+        &mut self,
+        source: Src,
         special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
     ) -> (
-        Self::OuterPass<Src>,
+        Self::Pass<Src>,
         <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
     ) {
         (
@@ -43,25 +43,11 @@ impl<'a> EventTranslator<'a> for Tokenizer {
 }
 
 pub struct TokenizerPass<'a, Src: EventSource + 'a> {
-    source: &'a Src,
+    source: Src,
     special_ops: <char as Event>::SpecialOps<'a, Src::Marker>,
 }
 
-impl<'a, Src: EventSource + 'a> EventTranslatorOuterPass for TokenizerPass<'a, Src> {
-    type In = char;
-    type Out = Token<'a>;
-    type Marker = Src::Marker;
-    type InnerPass = Self;
-
-    fn start_inner(&mut self) -> Self::InnerPass {
-        TokenizerPass {
-            source: self.source,
-            special_ops: self.special_ops,
-        }
-    }
-}
-
-impl<'a, Src: EventSource + 'a> EventTranslatorInnerPass for TokenizerPass<'a, Src> {
+impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
     type In = char;
     type Out = Token<'a>;
     type Marker = Src::Marker;
@@ -141,12 +127,12 @@ impl<'a, Src: EventSource + 'a> EventTranslatorInnerPass for TokenizerPass<'a, S
         }
     }
 
-    fn next_inner_pass(
+    fn next_pass(
         self,
         mut state: Self::State,
         end_marker: &Self::Marker,
         mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
-    ) -> Option<Self::NextInnerPass> {
+    ) -> Option<Self::NextPass> {
         self.handle_char_in_current_state(&mut state, '\0', &(end_marker..end_marker), &mut out);
 
         if let Some(StartedTokenState { token_start, token }) = state {
@@ -492,7 +478,7 @@ pub struct StartedTokenState<Marker: Clone + PartialEq> {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum StartedToken<Marker: Clone + PartialEq> {
+enum StartedToken<Marker: Clone + PartialEq> {
     LineComment,
     BlockComment {
         nesting_level: u32,
@@ -520,7 +506,7 @@ pub enum StartedToken<Marker: Clone + PartialEq> {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum NumberState {
+enum NumberState {
     BeforeDot,
     AfterDot,
     BehindE,

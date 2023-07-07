@@ -22,7 +22,7 @@
 use std::{marker::PhantomData, ops::Range};
 
 pub trait Event {
-    type SpecialOps<'a, Marker: 'a> = ();
+    type SpecialOps<'a, Marker: 'a>: Clone = ();
 }
 
 pub trait EventSink<'a> {
@@ -37,9 +37,9 @@ pub trait EventSink<'a> {
         NextPass = Self::Pass<Src>,
     >;
 
-    fn start<Src: EventSource>(
+    fn start<Src: EventSource + 'a>(
         self,
-        source: &'a Src,
+        source: Src,
         special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
     ) -> Self::Pass<Src>;
 }
@@ -142,9 +142,9 @@ impl<'a, Sink: SimpleEventSink> EventSink<'a> for Sink {
     type Ev = Sink::Ev;
     type Pass<Src: EventSource + 'a> = SimpleEventSinkPass<Sink, Src::Marker>;
 
-    fn start<Src: EventSource>(
+    fn start<Src: EventSource + 'a>(
         self,
-        _source: &'a Src,
+        _source: Src,
         _special_ops: <Self::Ev as Event>::SpecialOps<'a, Src::Marker>,
     ) -> Self::Pass<Src> {
         SimpleEventSinkPass {
@@ -187,10 +187,20 @@ impl<Sink: SimpleEventSink, Marker: Clone + PartialEq> EventSinkPass
 // We might change this at some point to better support localization.
 pub type Message = String;
 
-pub trait EventSource {
+pub trait EventSource: Clone {
     type Marker: Clone + PartialEq;
 
     fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message);
+}
+
+impl<Src: EventSource> EventSource for Option<Src> {
+    type Marker = Src::Marker;
+
+    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
+        if let Some(src) = self {
+            src.diagnostic(range, severity, msg);
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

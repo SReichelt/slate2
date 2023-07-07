@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ops::Range, rc::Rc};
+use std::{borrow::Cow, marker::PhantomData, ops::Range, rc::Rc};
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
@@ -34,20 +34,21 @@ impl ParameterIdentifier {
 impl<'a> EventTranslator<'a> for ParameterIdentifier {
     type In = TokenEvent<'a>;
     type Out = ParameterEvent<'a>;
-    type OuterPass<Src: EventSource + 'a> = ParameterIdentifierPass<'a, Src>;
+    type Pass<Src: EventSource + 'a> = ParameterIdentifierPass<'a, Src>;
 
     fn start<Src: EventSource + 'a>(
-        self,
-        source: &'a Src,
+        &mut self,
+        source: Src,
         _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
     ) -> (
-        Self::OuterPass<Src>,
+        Self::Pass<Src>,
         <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
     ) {
         (
             ParameterIdentifierPass {
-                metamodel_getter: self.metamodel_getter,
+                metamodel_getter: self.metamodel_getter.clone(),
                 source,
+                _phantom_a: PhantomData,
             },
             (),
         )
@@ -56,24 +57,11 @@ impl<'a> EventTranslator<'a> for ParameterIdentifier {
 
 pub struct ParameterIdentifierPass<'a, Src: EventSource + 'a> {
     metamodel_getter: Rc<dyn MetaModelGetter>,
-    source: &'a Src,
+    source: Src,
+    _phantom_a: PhantomData<&'a ()>,
 }
 
-impl<'a, Src: EventSource + 'a> EventTranslatorOuterPass for ParameterIdentifierPass<'a, Src> {
-    type In = TokenEvent<'a>;
-    type Out = ParameterEvent<'a>;
-    type Marker = Src::Marker;
-    type InnerPass = Self;
-
-    fn start_inner(&mut self) -> Self::InnerPass {
-        ParameterIdentifierPass {
-            metamodel_getter: self.metamodel_getter.clone(),
-            source: self.source,
-        }
-    }
-}
-
-impl<'a, Src: EventSource + 'a> EventTranslatorInnerPass for ParameterIdentifierPass<'a, Src> {
+impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<'a, Src> {
     type In = TokenEvent<'a>;
     type Out = ParameterEvent<'a>;
     type Marker = Src::Marker;
@@ -172,12 +160,12 @@ impl<'a, Src: EventSource + 'a> EventTranslatorInnerPass for ParameterIdentifier
         }
     }
 
-    fn next_inner_pass(
+    fn next_pass(
         self,
         mut state: Self::State,
         end_marker: &Self::Marker,
         mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
-    ) -> Option<Self::NextInnerPass> {
+    ) -> Option<Self::NextPass> {
         match &state.metamodel_state {
             MetaModelState::Start
             | MetaModelState::AfterKeyword
@@ -541,7 +529,7 @@ pub struct ParameterIdentifierState<'a, Marker: Clone + PartialEq> {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum MetaModelState<'a, Marker: Clone + PartialEq> {
+enum MetaModelState<'a, Marker: Clone + PartialEq> {
     Start,
     AfterKeyword,
     AfterName {
@@ -553,7 +541,7 @@ pub enum MetaModelState<'a, Marker: Clone + PartialEq> {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum ExpressionState<Marker: Clone + PartialEq> {
+enum ExpressionState<Marker: Clone + PartialEq> {
     Start,
     Parameterization(Box<ParameterListState<Marker>>),
     TopLevel { after_dot: bool },
@@ -562,7 +550,7 @@ pub enum ExpressionState<Marker: Clone + PartialEq> {
 }
 
 #[derive(Clone, PartialEq)]
-pub struct ParameterListState<Marker: Clone + PartialEq> {
+struct ParameterListState<Marker: Clone + PartialEq> {
     special_delimiter: Option<char>,
     current_group: Option<ParameterGroupState<Marker>>,
     after_special_delimiter: Option<ExpressionState<Marker>>,
@@ -579,14 +567,14 @@ impl<Marker: Clone + PartialEq> ParameterListState<Marker> {
 }
 
 #[derive(Clone, PartialEq)]
-pub struct ParameterGroupState<Marker: Clone + PartialEq> {
+struct ParameterGroupState<Marker: Clone + PartialEq> {
     special_delimiter: Option<char>,
     current_end: Marker,
     content_state: ParameterGroupContentState<Marker>,
 }
 
 #[derive(Clone, PartialEq)]
-pub enum ParameterGroupContentState<Marker: Clone + PartialEq> {
+enum ParameterGroupContentState<Marker: Clone + PartialEq> {
     Start,
     Parameterization(Box<ParameterListState<Marker>>),
     Notation(ExpressionState<Marker>),
@@ -595,13 +583,14 @@ pub enum ParameterGroupContentState<Marker: Clone + PartialEq> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::{anyhow, Result};
+    use anyhow::Result;
+
     use slate_kernel_notation_generic::{
         char_slice::{test_helpers::*, *},
         event::test_helpers::*,
     };
 
-    use crate::tokenizer::*;
+    use crate::{metamodel::test_helpers::*, tokenizer::*};
 
     use super::*;
 
@@ -1486,62 +1475,5 @@ mod tests {
         assert_eq!(param_events, expected_document.into_events());
         assert_eq!(diag_sink.diagnostics(), expected_diagnostics);
         Ok(())
-    }
-
-    struct TestMetaModelGetter;
-
-    impl MetaModelGetter for TestMetaModelGetter {
-        fn metamodel(&self, name: &str) -> Result<MetaModelRef> {
-            match name {
-                "test" => Ok(TestMetaModel::new_ref()),
-                name => Err(anyhow!("unknown metamodel '{name}'")),
-            }
-        }
-    }
-
-    struct TestMetaModel {
-        test_parameterization: TestParameterization,
-        test_object: TestObject,
-    }
-
-    impl TestMetaModel {
-        fn new_ref() -> MetaModelRef {
-            MetaModelRef::new(TestMetaModel {
-                test_parameterization: TestParameterization,
-                test_object: TestObject,
-            })
-        }
-    }
-
-    impl MetaModel for TestMetaModel {
-        fn name(&self) -> &str {
-            "test"
-        }
-
-        fn parameterization(&self, start_paren: char) -> Option<&dyn Parameterization> {
-            match start_paren {
-                '[' | '⟦' => Some(&self.test_parameterization),
-                _ => None,
-            }
-        }
-
-        fn object(&self, start_paren: char) -> Option<&dyn Object> {
-            match start_paren {
-                '{' => Some(&self.test_object),
-                _ => None,
-            }
-        }
-    }
-
-    struct TestParameterization;
-
-    impl Parameterization for TestParameterization {}
-
-    struct TestObject;
-
-    impl Object for TestObject {
-        fn param_delimiter(&self) -> Option<char> {
-            Some('|')
-        }
     }
 }

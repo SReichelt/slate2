@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{marker::PhantomData, ops::Range};
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
@@ -19,38 +19,32 @@ pub struct ParenthesisMatcher;
 impl<'a> EventTranslator<'a> for ParenthesisMatcher {
     type In = Token<'a>;
     type Out = TokenEvent<'a>;
-    type OuterPass<Src: EventSource + 'a> = ParenthesisMatcherPass<'a, Src>;
+    type Pass<Src: EventSource + 'a> = ParenthesisMatcherPass<'a, Src>;
 
     fn start<Src: EventSource + 'a>(
-        self,
-        source: &'a Src,
+        &mut self,
+        source: Src,
         _special_ops: <Self::In as Event>::SpecialOps<'a, Src::Marker>,
     ) -> (
-        Self::OuterPass<Src>,
+        Self::Pass<Src>,
         <Self::Out as Event>::SpecialOps<'a, Src::Marker>,
     ) {
-        (ParenthesisMatcherPass { source }, ())
+        (
+            ParenthesisMatcherPass {
+                source,
+                _phantom_a: PhantomData,
+            },
+            (),
+        )
     }
 }
 
 pub struct ParenthesisMatcherPass<'a, Src: EventSource + 'a> {
-    source: &'a Src,
+    source: Src,
+    _phantom_a: PhantomData<&'a ()>,
 }
 
-impl<'a, Src: EventSource + 'a> EventTranslatorOuterPass for ParenthesisMatcherPass<'a, Src> {
-    type In = Token<'a>;
-    type Out = TokenEvent<'a>;
-    type Marker = Src::Marker;
-    type InnerPass = Self;
-
-    fn start_inner(&mut self) -> Self::InnerPass {
-        ParenthesisMatcherPass {
-            source: self.source,
-        }
-    }
-}
-
-impl<'a, Src: EventSource + 'a> EventTranslatorInnerPass for ParenthesisMatcherPass<'a, Src> {
+impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'a, Src> {
     type In = Token<'a>;
     type Out = TokenEvent<'a>;
     type Marker = Src::Marker;
@@ -91,12 +85,12 @@ impl<'a, Src: EventSource + 'a> EventTranslatorInnerPass for ParenthesisMatcherP
         out(TokenEvent::Token(event), range);
     }
 
-    fn next_inner_pass(
+    fn next_pass(
         self,
         mut state: Self::State,
         end_marker: &Self::Marker,
         mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
-    ) -> Option<Self::NextInnerPass> {
+    ) -> Option<Self::NextPass> {
         self.close_unmatched_groups(&mut state, end_marker, &mut out, 0);
         None
     }

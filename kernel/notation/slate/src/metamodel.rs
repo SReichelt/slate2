@@ -43,7 +43,20 @@ pub trait Object {
 
 #[cfg(test)]
 pub mod test_helpers {
+    use anyhow::anyhow;
+
     use super::*;
+
+    pub struct TestMetaModelGetter;
+
+    impl MetaModelGetter for TestMetaModelGetter {
+        fn metamodel(&self, name: &str) -> Result<MetaModelRef> {
+            match name {
+                "test" => Ok(TestMetaModel::new_ref()),
+                name => Err(anyhow!("unknown metamodel '{name}'")),
+            }
+        }
+    }
 
     pub struct TestMetaModel {
         bracket_parameterization: TestParameterization,
@@ -51,11 +64,11 @@ pub mod test_helpers {
     }
 
     impl TestMetaModel {
-        pub fn new() -> Self {
-            TestMetaModel {
+        pub fn new_ref() -> MetaModelRef {
+            MetaModelRef::new(TestMetaModel {
                 bracket_parameterization: TestParameterization,
                 brace_object: TestObject,
-            }
+            })
         }
     }
 
@@ -66,7 +79,7 @@ pub mod test_helpers {
 
         fn parameterization(&self, start_paren: char) -> Option<&dyn Parameterization> {
             match start_paren {
-                '[' => Some(&self.bracket_parameterization),
+                '[' | '⟦' => Some(&self.bracket_parameterization),
                 _ => None,
             }
         }

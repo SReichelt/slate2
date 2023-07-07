@@ -42,7 +42,7 @@ impl<'a, DiagSink: CharSliceDiagnosticSink> CharSliceEventSource<'a, DiagSink> {
     }
 
     pub fn run<Sink: EventSink<'a, Ev = char>>(&'a self, sink: Sink) {
-        let pass = sink.start(self, &self.input);
+        let pass = sink.start(self.clone(), &self.input);
         self.run_pass(pass)
     }
 
