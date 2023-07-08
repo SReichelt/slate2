@@ -228,6 +228,21 @@ pub enum Severity {
     Error,
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum GroupEvent<Data = ()> {
+    Start(Data),
+    End,
+}
+
+impl<Data> GroupEvent<Data> {
+    pub fn apply_to(&self, depth: &mut u32) {
+        match self {
+            GroupEvent::Start(_) => *depth += 1,
+            GroupEvent::End => *depth -= 1,
+        }
+    }
+}
+
 pub mod test_helpers {
     use super::*;
 
@@ -256,6 +271,17 @@ pub mod test_helpers {
             let mut result = Vec::new();
             self.fill_events(&mut result);
             result
+        }
+
+        fn group<Data>(
+            data: Data,
+            result: &mut Vec<T>,
+            mut map: impl FnMut(GroupEvent<Data>) -> T,
+            f: impl FnOnce(&mut Vec<T>),
+        ) {
+            result.push(map(GroupEvent::Start(data)));
+            f(result);
+            result.push(map(GroupEvent::End));
         }
     }
 

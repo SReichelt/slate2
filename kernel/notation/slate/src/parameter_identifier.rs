@@ -8,12 +8,9 @@ use crate::{metamodel::*, parenthesis_matcher::*, tokenizer::*};
 #[derive(Clone, PartialEq, Debug)]
 pub enum ParameterEvent<'a> {
     MetaModel(MetaModelRef),
-    ParamGroupStart,
-    ParamGroupEnd,
-    ParamNotationStart,
-    ParamNotationEnd,
-    ObjectStart,
-    ObjectEnd,
+    ParamGroup(GroupEvent),
+    ParamNotation(GroupEvent),
+    Object(GroupEvent),
     Token(TokenEvent<'a>),
 }
 
@@ -75,13 +72,13 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
         match &state.metamodel_state {
             MetaModelState::Start => {
                 if let TokenEvent::Token(Token::Keyword(keyword)) = event {
-                    if keyword == "slate" {
+                    if keyword == "%slate" {
                         state.metamodel_state = MetaModelState::AfterKeyword;
                     } else {
                         self.source.diagnostic(
                             range,
                             Severity::Error,
-                            format!("keyword 'slate' expected"),
+                            format!("keyword '%slate' expected"),
                         );
                         state.metamodel_state = MetaModelState::Failed;
                     }
@@ -180,13 +177,13 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
                     );
                     if !self.parameter_group_event(
                         group_state,
-                        TokenEvent::GroupEnd,
+                        TokenEvent::Paren(GroupEvent::End),
                         end_marker..end_marker,
                         &mut out,
                         metamodel.0.as_ref(),
                     ) {
                         out(
-                            ParameterEvent::ParamGroupEnd,
+                            ParameterEvent::ParamGroup(GroupEvent::End),
                             &group_state.current_end..&group_state.current_end,
                         );
                     }
@@ -217,7 +214,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         match state {
             ExpressionState::Start => {
                 if allow_parameterization {
-                    if let TokenEvent::GroupStart(paren) = event {
+                    if let TokenEvent::Paren(GroupEvent::Start(paren)) = event {
                         if let Some(_) = metamodel.parameterization(paren) {
                             *state = ExpressionState::Parameterization(Box::new(
                                 ParameterListState::new(None),
@@ -246,10 +243,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             }
 
             ExpressionState::TopLevel { after_dot } => {
-                if let TokenEvent::GroupStart(paren) = event {
+                if let TokenEvent::Paren(GroupEvent::Start(paren)) = event {
                     if allow_objects && !*after_dot {
                         if let Some(object) = metamodel.object(paren) {
-                            out(ParameterEvent::ObjectStart, range);
+                            out(ParameterEvent::Object(GroupEvent::Start(())), range);
                             *state = ExpressionState::Object(Box::new(ParameterListState::new(
                                 object.param_delimiter(),
                             )));
@@ -276,7 +273,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 if let Some((event, range)) =
                     self.expression_event(group, event, range, out, metamodel, true, allow_objects)
                 {
-                    if let TokenEvent::GroupEnd = event {
+                    if let TokenEvent::Paren(GroupEvent::End) = event {
                         *state = ExpressionState::TopLevel { after_dot: false };
                     }
                     out(ParameterEvent::Token(event), range);
@@ -293,7 +290,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     metamodel,
                 ) {
                     *state = ExpressionState::TopLevel { after_dot: false };
-                    out(ParameterEvent::ObjectEnd, range);
+                    out(ParameterEvent::Object(GroupEvent::End), range);
                 }
                 None
             }
@@ -308,7 +305,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         metamodel: &dyn MetaModel,
     ) -> bool {
-        let is_group_end = event == TokenEvent::GroupEnd;
+        let is_group_end = event == TokenEvent::Paren(GroupEvent::End);
 
         if let Some(expr_state) = &mut state.after_special_delimiter {
             if let Some((event, range)) = self.expression_event(
@@ -331,7 +328,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             if let Some(group_state) = &mut state.current_group {
                 if !self.parameter_group_event(group_state, event, range, out, metamodel) {
                     out(
-                        ParameterEvent::ParamGroupEnd,
+                        ParameterEvent::ParamGroup(GroupEvent::End),
                         &group_state.current_end..&group_state.current_end,
                     );
                     state.current_group = None;
@@ -354,7 +351,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         current_end: range.start.clone(),
                         content_state: ParameterGroupContentState::Start,
                     });
-                    out(ParameterEvent::ParamGroupStart, range.start..range.start);
+                    out(
+                        ParameterEvent::ParamGroup(GroupEvent::Start(())),
+                        range.start..range.start,
+                    );
                     return self.parameter_list_event(state, event, range, out, metamodel);
                 }
             }
@@ -378,7 +378,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         return false;
                     }
                 }
-                if let TokenEvent::GroupStart(paren) = event {
+                if let TokenEvent::Paren(GroupEvent::Start(paren)) = event {
                     if let Some(_) = metamodel.parameterization(paren) {
                         state.content_state = ParameterGroupContentState::Parameterization(
                             Box::new(ParameterListState::new(None)),
@@ -418,14 +418,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             notation_end();
                             return true;
                         }
-                        TokenEvent::Token(Token::DefinitionSymbol(_))
-                        | TokenEvent::Token(Token::Keyword(_)) => {
+                        TokenEvent::Token(Token::Keyword(_)) => {
                             notation_end();
                             state.content_state =
                                 ParameterGroupContentState::Data(ExpressionState::Start);
                             return self.parameter_group_event(state, event, range, out, metamodel);
                         }
-                        TokenEvent::GroupEnd => {
+                        TokenEvent::Paren(GroupEvent::End) => {
                             notation_end();
                             return false;
                         }
@@ -436,7 +435,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             return false;
                         }
                         _ => {
-                            out(ParameterEvent::ParamNotationStart, range.start..range.start);
+                            out(
+                                ParameterEvent::ParamNotation(GroupEvent::Start(())),
+                                range.start..range.start,
+                            );
                             state.current_end = range.start.clone();
                         }
                     }
@@ -453,7 +455,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 ) {
                     let mut notation_end = || {
                         out(
-                            ParameterEvent::ParamNotationEnd,
+                            ParameterEvent::ParamNotation(GroupEvent::End),
                             &state.current_end..&state.current_end,
                         );
                         *expr_state = ExpressionState::Start;
@@ -461,14 +463,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
                     match event {
                         TokenEvent::Token(Token::ReservedChar(',')) => notation_end(),
-                        TokenEvent::Token(Token::DefinitionSymbol(_))
-                        | TokenEvent::Token(Token::Keyword(_)) => {
+                        TokenEvent::Token(Token::Keyword(_)) => {
                             notation_end();
                             state.content_state =
                                 ParameterGroupContentState::Data(ExpressionState::Start);
                             return self.parameter_group_event(state, event, range, out, metamodel);
                         }
-                        TokenEvent::GroupEnd => {
+                        TokenEvent::Paren(GroupEvent::End) => {
                             notation_end();
                             return false;
                         }
@@ -494,7 +495,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     true,
                 ) {
                     match event {
-                        TokenEvent::GroupEnd => {
+                        TokenEvent::Paren(GroupEvent::End) => {
                             return false;
                         }
                         TokenEvent::Token(Token::ReservedChar(c))
@@ -652,7 +653,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("x".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("T".into())),
                     ],
                 }],
@@ -669,9 +670,9 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("x".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("T".into())),
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Token(Token::Identifier("y".into())),
                     ],
                 }],
@@ -689,7 +690,7 @@ mod tests {
                             notation: vec![ParamToken::Token(Token::Identifier("x".into()))],
                         }],
                         data: vec![
-                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                            ParamToken::Token(Token::Keyword(":".into())),
                             ParamToken::Token(Token::Identifier("T".into())),
                         ],
                     },
@@ -699,7 +700,7 @@ mod tests {
                             notation: vec![ParamToken::Token(Token::Identifier("y".into()))],
                         }],
                         data: vec![
-                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                            ParamToken::Token(Token::Keyword(":".into())),
                             ParamToken::Token(Token::Identifier("U".into())),
                         ],
                     },
@@ -737,8 +738,8 @@ mod tests {
                         ],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword("z".into())),
-                        ParamToken::Group(
+                        ParamToken::Token(Token::Keyword("%z".into())),
+                        ParamToken::Paren(
                             '(',
                             vec![
                                 ParamToken::Token(Token::Identifier("a".into())),
@@ -760,7 +761,7 @@ mod tests {
                     params: vec![Parameter {
                         notation: vec![
                             ParamToken::Token(Token::Identifier("x".into())),
-                            ParamToken::Group(
+                            ParamToken::Paren(
                                 '(',
                                 vec![
                                     ParamToken::Token(Token::Identifier("y".into())),
@@ -809,7 +810,7 @@ mod tests {
                         },
                     ],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("T".into())),
                     ],
                 }],
@@ -832,7 +833,7 @@ mod tests {
                             notation: vec![ParamToken::Token(Token::Identifier("b".into()))],
                         }],
                         data: vec![
-                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                            ParamToken::Token(Token::Keyword(":".into())),
                             ParamToken::Token(Token::Identifier("B".into())),
                         ],
                     }],
@@ -840,7 +841,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("a".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("A".into())),
                     ],
                 }],
@@ -859,7 +860,7 @@ mod tests {
                                 notation: vec![ParamToken::Token(Token::Identifier("d".into()))],
                             }],
                             data: vec![
-                                ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                ParamToken::Token(Token::Keyword(":".into())),
                                 ParamToken::Token(Token::Identifier("D".into())),
                             ],
                         }],
@@ -872,7 +873,7 @@ mod tests {
                             },
                         ],
                         data: vec![
-                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                            ParamToken::Token(Token::Keyword(":".into())),
                             ParamToken::Token(Token::Identifier("B".into())),
                         ],
                     }],
@@ -880,7 +881,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("a".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("A".into())),
                     ],
                 }],
@@ -897,9 +898,9 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("a".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Token(Token::Identifier("f".into())),
-                        ParamToken::Group(
+                        ParamToken::Paren(
                             '(',
                             vec![
                                 ParamToken::ParamGroup(ParameterGroup {
@@ -910,7 +911,7 @@ mod tests {
                                         ))],
                                     }],
                                     data: vec![
-                                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                        ParamToken::Token(Token::Keyword(":".into())),
                                         ParamToken::Token(Token::Identifier("B".into())),
                                     ],
                                 }),
@@ -932,9 +933,9 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("a".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Token(Token::Identifier("f".into())),
-                        ParamToken::Group(
+                        ParamToken::Paren(
                             '[',
                             vec![
                                 ParamToken::ParamGroup(ParameterGroup {
@@ -945,7 +946,7 @@ mod tests {
                                         ))],
                                     }],
                                     data: vec![
-                                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                        ParamToken::Token(Token::Keyword(":".into())),
                                         ParamToken::Token(Token::Identifier("B".into())),
                                     ],
                                 }),
@@ -961,9 +962,7 @@ mod tests {
                                                 )],
                                             }],
                                             data: vec![
-                                                ParamToken::Token(Token::DefinitionSymbol(
-                                                    ":".into(),
-                                                )),
+                                                ParamToken::Token(Token::Keyword(":".into())),
                                                 ParamToken::Token(Token::Identifier("D".into())),
                                             ],
                                         },
@@ -975,9 +974,7 @@ mod tests {
                                                 )],
                                             }],
                                             data: vec![
-                                                ParamToken::Token(Token::DefinitionSymbol(
-                                                    ":".into(),
-                                                )),
+                                                ParamToken::Token(Token::Keyword(":".into())),
                                                 ParamToken::Token(Token::Identifier("E".into())),
                                             ],
                                         },
@@ -985,7 +982,7 @@ mod tests {
                                     params: vec![Parameter {
                                         notation: vec![
                                             ParamToken::Token(Token::Identifier("c".into())),
-                                            ParamToken::Group(
+                                            ParamToken::Paren(
                                                 '[',
                                                 vec![
                                                     ParamToken::Token(Token::Identifier(
@@ -1000,12 +997,12 @@ mod tests {
                                         ],
                                     }],
                                     data: vec![
-                                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                        ParamToken::Token(Token::Keyword(":".into())),
                                         ParamToken::Token(Token::Identifier("C".into())),
                                     ],
                                 }),
                                 ParamToken::Token(Token::Identifier("c".into())),
-                                ParamToken::Group(
+                                ParamToken::Paren(
                                     '[',
                                     vec![
                                         ParamToken::Token(Token::Number("0".into())),
@@ -1035,7 +1032,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("T".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Object(Vec::new(), Vec::new()),
                     ],
                 }],
@@ -1052,7 +1049,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("T".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Object(
                             vec![ParameterGroup {
                                 parameterizations: Vec::new(),
@@ -1080,7 +1077,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("T".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Object(
                             Vec::new(),
                             vec![ParamToken::Token(Token::Identifier("x".into()))],
@@ -1100,7 +1097,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("T".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Object(
                             vec![
                                 ParameterGroup {
@@ -1112,7 +1109,7 @@ mod tests {
                                             ))],
                                         }],
                                         data: vec![
-                                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                            ParamToken::Token(Token::Keyword(":".into())),
                                             ParamToken::Token(Token::Identifier("I".into())),
                                         ],
                                     }],
@@ -1129,7 +1126,7 @@ mod tests {
                                         },
                                     ],
                                     data: vec![
-                                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                        ParamToken::Token(Token::Keyword(":".into())),
                                         ParamToken::Token(Token::Identifier("X".into())),
                                     ],
                                 },
@@ -1142,7 +1139,7 @@ mod tests {
                                             ))],
                                         }],
                                         data: vec![
-                                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                            ParamToken::Token(Token::Keyword(":".into())),
                                             ParamToken::Token(Token::Identifier("J".into())),
                                         ],
                                     }],
@@ -1159,7 +1156,7 @@ mod tests {
                                         },
                                     ],
                                     data: vec![
-                                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                        ParamToken::Token(Token::Keyword(":".into())),
                                         ParamToken::Token(Token::Identifier("Y".into())),
                                     ],
                                 },
@@ -1189,7 +1186,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; ℕ := {0; [n : ℕ] S(n)};",
+            "%slate \"test\"; ℕ := {@\"0\"; [n : ℕ] S(n)};",
             Document {
                 metamodel: Some(TestMetaModel::new_ref()),
                 definitions: vec![ParameterGroup {
@@ -1198,13 +1195,13 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("ℕ".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Object(
                             vec![
                                 ParameterGroup {
                                     parameterizations: Vec::new(),
                                     params: vec![Parameter {
-                                        notation: vec![ParamToken::Token(Token::Number(
+                                        notation: vec![ParamToken::Token(Token::Identifier(
                                             "0".into(),
                                         ))],
                                     }],
@@ -1219,14 +1216,14 @@ mod tests {
                                             ))],
                                         }],
                                         data: vec![
-                                            ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                                            ParamToken::Token(Token::Keyword(":".into())),
                                             ParamToken::Token(Token::Identifier("ℕ".into())),
                                         ],
                                     }],
                                     params: vec![Parameter {
                                         notation: vec![
                                             ParamToken::Token(Token::Identifier("S".into())),
-                                            ParamToken::Group(
+                                            ParamToken::Paren(
                                                 '(',
                                                 vec![ParamToken::Token(Token::Identifier(
                                                     "n".into(),
@@ -1254,10 +1251,10 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("x".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":=".into())),
+                        ParamToken::Token(Token::Keyword(":=".into())),
                         ParamToken::Token(Token::Identifier("T".into())),
                         ParamToken::Token(Token::ReservedChar('.')),
-                        ParamToken::Group(
+                        ParamToken::Paren(
                             '{',
                             vec![ParamToken::Token(Token::Identifier("t".into()))],
                         ),
@@ -1335,7 +1332,7 @@ mod tests {
                         notation: vec![ParamToken::Token(Token::Identifier("x".into()))],
                     }],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("T".into())),
                     ],
                 }],
@@ -1361,7 +1358,7 @@ mod tests {
                         },
                     ],
                     data: vec![
-                        ParamToken::Token(Token::DefinitionSymbol(":".into())),
+                        ParamToken::Token(Token::Keyword(":".into())),
                         ParamToken::Token(Token::Identifier("T".into())),
                     ],
                 }],
@@ -1397,11 +1394,16 @@ mod tests {
 
     impl<'a> IntoEvents<ParameterEvent<'a>> for ParameterGroup<'a> {
         fn fill_events(self, result: &mut Vec<ParameterEvent<'a>>) {
-            result.push(ParameterEvent::ParamGroupStart);
-            self.parameterizations.fill_events(result);
-            self.params.fill_events(result);
-            self.data.fill_events(result);
-            result.push(ParameterEvent::ParamGroupEnd);
+            Self::group(
+                (),
+                result,
+                |event| ParameterEvent::ParamGroup(event),
+                |result| {
+                    self.parameterizations.fill_events(result);
+                    self.params.fill_events(result);
+                    self.data.fill_events(result);
+                },
+            );
         }
     }
 
@@ -1411,15 +1413,18 @@ mod tests {
 
     impl<'a> IntoEvents<ParameterEvent<'a>> for Parameter<'a> {
         fn fill_events(self, result: &mut Vec<ParameterEvent<'a>>) {
-            result.push(ParameterEvent::ParamNotationStart);
-            self.notation.fill_events(result);
-            result.push(ParameterEvent::ParamNotationEnd);
+            Self::group(
+                (),
+                result,
+                |event| ParameterEvent::ParamNotation(event),
+                |result| self.notation.fill_events(result),
+            );
         }
     }
 
     enum ParamToken<'a> {
         Token(Token<'a>),
-        Group(char, Vec<ParamToken<'a>>),
+        Paren(char, Vec<ParamToken<'a>>),
         ParamGroup(ParameterGroup<'a>),
         Object(Vec<ParameterGroup<'a>>, Vec<ParamToken<'a>>),
     }
@@ -1430,19 +1435,27 @@ mod tests {
                 ParamToken::Token(token) => {
                     result.push(ParameterEvent::Token(TokenEvent::Token(token)))
                 }
-                ParamToken::Group(paren, contents) => {
-                    result.push(ParameterEvent::Token(TokenEvent::GroupStart(paren)));
-                    contents.fill_events(result);
-                    result.push(ParameterEvent::Token(TokenEvent::GroupEnd));
+                ParamToken::Paren(paren, contents) => {
+                    Self::group(
+                        paren,
+                        result,
+                        |event| ParameterEvent::Token(TokenEvent::Paren(event)),
+                        |result| contents.fill_events(result),
+                    );
                 }
                 ParamToken::ParamGroup(param_group) => {
                     param_group.fill_events(result);
                 }
                 ParamToken::Object(params, data) => {
-                    result.push(ParameterEvent::ObjectStart);
-                    params.fill_events(result);
-                    data.fill_events(result);
-                    result.push(ParameterEvent::ObjectEnd);
+                    Self::group(
+                        (),
+                        result,
+                        |event| ParameterEvent::Object(event),
+                        |result| {
+                            params.fill_events(result);
+                            data.fill_events(result);
+                        },
+                    );
                 }
             }
         }

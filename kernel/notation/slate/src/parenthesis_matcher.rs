@@ -8,8 +8,7 @@ use crate::{chars::matching_closing_parenthesis, tokenizer::*};
 #[derive(Clone, PartialEq, Debug)]
 pub enum TokenEvent<'a> {
     Token(Token<'a>),
-    GroupStart(char),
-    GroupEnd,
+    Paren(GroupEvent<char>),
 }
 
 impl Event for TokenEvent<'_> {}
@@ -56,7 +55,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
                     group_start: range.start.clone(),
                     expected_closing_parenthesis,
                 });
-                out(TokenEvent::GroupStart(c), range);
+                out(TokenEvent::Paren(GroupEvent::Start(c)), range);
                 return;
             }
 
@@ -66,7 +65,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
             {
                 self.close_unmatched_groups(state, range.start, &mut out, closed_group_index + 1);
                 state.pop();
-                out(TokenEvent::GroupEnd, range);
+                out(TokenEvent::Paren(GroupEvent::End), range);
                 return;
             }
         }
@@ -101,7 +100,7 @@ impl<'a, Src: EventSource + 'a> ParenthesisMatcherPass<'a, Src> {
                 Severity::Error,
                 format!("unmatched parenthesis: '{expected}' expected"),
             );
-            out(TokenEvent::GroupEnd, end_marker..end_marker);
+            out(TokenEvent::Paren(GroupEvent::End), end_marker..end_marker);
         }
     }
 }
@@ -133,10 +132,10 @@ mod tests {
             vec![ParenToken::Token(Token::Identifier("abc".into()))],
             &[],
         )?;
-        test_parenthesis_matching("()", vec![ParenToken::Group('(', Vec::new())], &[])?;
+        test_parenthesis_matching("()", vec![ParenToken::Paren('(', Vec::new())], &[])?;
         test_parenthesis_matching(
             "(abc)",
-            vec![ParenToken::Group(
+            vec![ParenToken::Paren(
                 '(',
                 vec![ParenToken::Token(Token::Identifier("abc".into()))],
             )],
@@ -146,12 +145,12 @@ mod tests {
             "a (b c [d|e]) f ⟦g⟧ h",
             vec![
                 ParenToken::Token(Token::Identifier("a".into())),
-                ParenToken::Group(
+                ParenToken::Paren(
                     '(',
                     vec![
                         ParenToken::Token(Token::Identifier("b".into())),
                         ParenToken::Token(Token::Identifier("c".into())),
-                        ParenToken::Group(
+                        ParenToken::Paren(
                             '[',
                             vec![
                                 ParenToken::Token(Token::Identifier("d".into())),
@@ -162,7 +161,7 @@ mod tests {
                     ],
                 ),
                 ParenToken::Token(Token::Identifier("f".into())),
-                ParenToken::Group('⟦', vec![ParenToken::Token(Token::Identifier("g".into()))]),
+                ParenToken::Paren('⟦', vec![ParenToken::Token(Token::Identifier("g".into()))]),
                 ParenToken::Token(Token::Identifier("h".into())),
             ],
             &[],
@@ -174,7 +173,7 @@ mod tests {
     fn unmatched_parentheses() -> Result<(), Message> {
         test_parenthesis_matching(
             "(",
-            vec![ParenToken::Group('(', Vec::new())],
+            vec![ParenToken::Paren('(', Vec::new())],
             &[TestDiagnosticMessage {
                 range_text: "(".into(),
                 severity: Severity::Error,
@@ -185,7 +184,7 @@ mod tests {
             "a (b c",
             vec![
                 ParenToken::Token(Token::Identifier("a".into())),
-                ParenToken::Group(
+                ParenToken::Paren(
                     '(',
                     vec![
                         ParenToken::Token(Token::Identifier("b".into())),
@@ -203,11 +202,11 @@ mod tests {
             "a (b [c) d",
             vec![
                 ParenToken::Token(Token::Identifier("a".into())),
-                ParenToken::Group(
+                ParenToken::Paren(
                     '(',
                     vec![
                         ParenToken::Token(Token::Identifier("b".into())),
-                        ParenToken::Group(
+                        ParenToken::Paren(
                             '[',
                             vec![ParenToken::Token(Token::Identifier("c".into()))],
                         ),
@@ -225,19 +224,19 @@ mod tests {
             "a (b (c [d [e] f) g) h",
             vec![
                 ParenToken::Token(Token::Identifier("a".into())),
-                ParenToken::Group(
+                ParenToken::Paren(
                     '(',
                     vec![
                         ParenToken::Token(Token::Identifier("b".into())),
-                        ParenToken::Group(
+                        ParenToken::Paren(
                             '(',
                             vec![
                                 ParenToken::Token(Token::Identifier("c".into())),
-                                ParenToken::Group(
+                                ParenToken::Paren(
                                     '[',
                                     vec![
                                         ParenToken::Token(Token::Identifier("d".into())),
-                                        ParenToken::Group(
+                                        ParenToken::Paren(
                                             '[',
                                             vec![ParenToken::Token(Token::Identifier("e".into()))],
                                         ),
@@ -262,17 +261,20 @@ mod tests {
 
     enum ParenToken<'a> {
         Token(Token<'a>),
-        Group(char, Vec<ParenToken<'a>>),
+        Paren(char, Vec<ParenToken<'a>>),
     }
 
     impl<'a> IntoEvents<TokenEvent<'a>> for ParenToken<'a> {
         fn fill_events(self, result: &mut Vec<TokenEvent<'a>>) {
             match self {
                 ParenToken::Token(token) => result.push(TokenEvent::Token(token)),
-                ParenToken::Group(paren, contents) => {
-                    result.push(TokenEvent::GroupStart(paren));
-                    contents.fill_events(result);
-                    result.push(TokenEvent::GroupEnd);
+                ParenToken::Paren(paren, contents) => {
+                    Self::group(
+                        paren,
+                        result,
+                        |event| TokenEvent::Paren(event),
+                        |result| contents.fill_events(result),
+                    );
                 }
             }
         }

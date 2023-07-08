@@ -1,7 +1,3 @@
-pub fn is_keyword_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
-}
-
 pub fn is_delimiter_char(c: char) -> bool {
     c.is_whitespace()
         || c.is_ascii_control()
@@ -11,7 +7,7 @@ pub fn is_delimiter_char(c: char) -> bool {
 }
 
 fn is_basic_punctuation_char(c: char) -> bool {
-    matches!(c, '.' | ':' | ',' | ';')
+    matches!(c, '.' | ',' | ';')
 }
 
 pub fn is_group_connecting_char(c: char) -> bool {
@@ -24,7 +20,7 @@ pub fn is_symbol_char(c: char) -> bool {
                        | '‐'..='₟' | '←'..='⏿' | '─'..='⯿' | '、'..='〿' | '⸀'..='⹿' | '🌀'..='🯿')
 }
 
-fn is_parenthesis_char(c: char) -> bool {
+pub fn is_parenthesis_char(c: char) -> bool {
     matches!(c, '(' | ')' | '[' | ']' | '{'..='}' | '¦' | '«' | '»' | '⁅' | '⁆' | '‖'
                 | '⌈'..='⌏' | '⌜'..='⌟' | '⎾'..='⏌' | '〈' | '〉' | '⟦'..='⟯' | '⦃'..='⦚' | '⧘'..='⧛' | '⧼' | '⧽'
                 | '⸂'..='⸅' | '⸉' | '⸊' | '⸌' | '⸍' | '⸜' | '⸝' | '⸠'..='⸩' | '〈'..='】' | '〔'..='〛')

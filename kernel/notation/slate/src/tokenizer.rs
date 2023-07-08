@@ -7,7 +7,6 @@ use crate::chars::*;
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token<'a> {
     ReservedChar(char),
-    DefinitionSymbol(Cow<'a, str>),
     Keyword(Cow<'a, str>),
     Number(Cow<'a, str>),
     SingleQuotedString(Cow<'a, str>),
@@ -43,7 +42,11 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
     type State = TokenizerState<Src::Marker>;
 
     fn new_state(&self) -> Self::State {
-        None
+        TokenizerState {
+            after_dot: false,
+            dot_number_allowed: true,
+            started_token: None,
+        }
     }
 
     fn event(
@@ -57,62 +60,50 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
             return;
         }
 
-        assert!(state.is_none());
+        assert!(state.started_token.is_none());
 
         let mut start_token = |token| {
-            *state = Some(StartedTokenState {
+            state.started_token = Some(StartedTokenState {
                 token_start: range.start.clone(),
                 token,
             });
         };
 
         match event {
-            ':' => {
-                start_token(StartedToken::DefinitionSymbol);
-            }
-            '%' => {
-                start_token(StartedToken::Keyword {
-                    keyword_start: range.end.clone(),
-                });
-            }
-            '@' => {
-                start_token(StartedToken::String {
-                    is_quoted_identifier: true,
-                    is_double_quoted: false,
-                    content_start: None,
-                    escape_start: None,
-                    value: None,
-                });
-            }
-            '\'' | '"' => {
-                start_token(StartedToken::String {
-                    is_quoted_identifier: false,
-                    is_double_quoted: event == '"',
-                    content_start: Some(range.end.clone()),
-                    escape_start: None,
-                    value: None,
-                });
-            }
-            c => {
-                if is_delimiter_char(c) {
-                    if !c.is_whitespace() {
-                        out(Token::ReservedChar(c), range);
-                    }
-                } else if c.is_ascii_digit() {
-                    start_token(StartedToken::Number {
-                        number_state: NumberState::BeforeDot,
-                    });
-                } else {
-                    start_token(StartedToken::UnquotedIdentifier {
-                        is_symbol: if c == '_' {
-                            None
-                        } else {
-                            Some(is_symbol_char(c))
-                        },
-                        is_slash: c == '/',
-                    });
+            '@' => start_token(StartedToken::String {
+                is_quoted_identifier: true,
+                is_double_quoted: false,
+                content_start: None,
+                escape_start: None,
+                value: None,
+            }),
+            '\'' | '"' => start_token(StartedToken::String {
+                is_quoted_identifier: false,
+                is_double_quoted: event == '"',
+                content_start: Some(range.end.clone()),
+                escape_start: None,
+                value: None,
+            }),
+            '.' => start_token(StartedToken::Dots { multiple: false }),
+            c if is_delimiter_char(c) => {
+                if !c.is_whitespace() {
+                    out(Token::ReservedChar(c), range);
+                    state.after_dot = false;
+                    state.dot_number_allowed =
+                        c == ',' || c == ';' || matching_closing_parenthesis(c).is_some();
                 }
             }
+            c if c.is_ascii_digit() && !state.after_dot => start_token(StartedToken::Number {
+                number_state: NumberState::BeforeDot,
+            }),
+            c => start_token(StartedToken::UnquotedIdentifier {
+                is_symbol: if c == '_' || c == '%' {
+                    None
+                } else {
+                    Some(is_symbol_char(c))
+                },
+                is_slash: c == '/',
+            }),
         }
     }
 
@@ -124,7 +115,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
     ) -> Option<Self::NextPass> {
         self.handle_char_in_current_state(&mut state, '\0', &(end_marker..end_marker), &mut out);
 
-        if let Some(StartedTokenState { token_start, token }) = state {
+        if let Some(StartedTokenState { token_start, token }) = state.started_token {
             self.source.diagnostic(
                 &token_start..end_marker,
                 Severity::Error,
@@ -150,14 +141,14 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
         range: &Range<&Src::Marker>,
         out: &mut impl FnMut(Token<'a>, Range<&Src::Marker>),
     ) -> bool {
-        let Some(StartedTokenState { token_start, token }) = state else {
+        let Some(StartedTokenState { token_start, token }) = &mut state.started_token else {
             return false;
         };
 
         match token {
             StartedToken::LineComment => {
                 if c == '\r' || c == '\n' || c == '\0' {
-                    *state = None;
+                    state.started_token = None;
                     return false;
                 }
             }
@@ -179,7 +170,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         if *nesting_level > 0 {
                             *nesting_level -= 1;
                         } else {
-                            *state = None;
+                            state.started_token = None;
                         }
                         return true;
                     }
@@ -191,29 +182,29 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 }
             }
 
-            StartedToken::DefinitionSymbol => {
-                if !is_symbol_char(c) || (is_delimiter_char(c) && c != ':') {
-                    let symbol = self.source.slice(&*token_start..range.start);
-                    out(Token::DefinitionSymbol(symbol), &*token_start..range.start);
-                    *state = None;
-                    return false;
-                }
-            }
-
-            StartedToken::Keyword { keyword_start } => {
-                if !is_keyword_char(c) {
-                    if *keyword_start == *range.start {
-                        self.source.diagnostic(
-                            &*token_start..range.start,
-                            Severity::Error,
-                            format!("'%' must be followed by a keyword"),
-                        );
+            StartedToken::Dots { multiple } => {
+                if c == '.' {
+                    *multiple = true;
+                } else {
+                    if !*multiple && state.dot_number_allowed && c.is_ascii_digit() {
+                        *token = StartedToken::Number {
+                            number_state: NumberState::AfterDot(Some(range.start.clone())),
+                        };
                     } else {
-                        let keyword = self.source.slice(&*keyword_start..range.start);
-                        out(Token::Keyword(keyword), &*token_start..range.start);
+                        let token = if *multiple {
+                            let dots = self.source.slice(&*token_start..range.start);
+                            Token::Keyword(dots)
+                        } else {
+                            Token::ReservedChar('.')
+                        };
+                        out(token, &*token_start..range.start);
+                        *state = TokenizerState {
+                            after_dot: !*multiple,
+                            dot_number_allowed: false,
+                            started_token: None,
+                        };
+                        return false;
                     }
-                    *state = None;
-                    return false;
                 }
             }
 
@@ -222,13 +213,25 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 let is_special = match number_state {
                     NumberState::BeforeDot => {
                         if c == '.' {
-                            *number_state = NumberState::AfterDot;
+                            *number_state = NumberState::AfterDot(Some(range.start.clone()));
                             true
                         } else {
                             false
                         }
                     }
-                    NumberState::AfterDot => {
+                    NumberState::AfterDot(marker) => {
+                        if c == '.' {
+                            if let Some(marker) = marker {
+                                let number = self.source.slice(&*token_start..&*marker);
+                                out(Token::Number(number), &*token_start..&*marker);
+                                state.started_token = Some(StartedTokenState {
+                                    token_start: marker.clone(),
+                                    token: StartedToken::Dots { multiple: true },
+                                });
+                                return true;
+                            }
+                        }
+                        *marker = None;
                         if c == 'E' || c == 'e' {
                             *number_state = NumberState::BehindE;
                         }
@@ -243,7 +246,11 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 if !(is_alnum || is_special) {
                     let number = self.source.slice(&*token_start..range.start);
                     out(Token::Number(number), &*token_start..range.start);
-                    *state = None;
+                    *state = TokenizerState {
+                        after_dot: false,
+                        dot_number_allowed: c != '.',
+                        started_token: None,
+                    };
                     return false;
                 }
             }
@@ -279,7 +286,11 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         );
                         let token = end_string();
                         out(token, &*token_start..range.start);
-                        *state = None;
+                        *state = TokenizerState {
+                            after_dot: false,
+                            dot_number_allowed: false,
+                            started_token: None,
+                        };
                         return false;
                     }
 
@@ -373,7 +384,11 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     if c == quote_char {
                         let token = end_string();
                         out(token, &*token_start..range.end);
-                        *state = None;
+                        *state = TokenizerState {
+                            after_dot: false,
+                            dot_number_allowed: false,
+                            started_token: None,
+                        };
                     } else if c == '\\' {
                         *escape_start = Some(range.start.clone());
                         if value.is_none() {
@@ -404,7 +419,11 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                             Severity::Error,
                             format!("'@' must be followed by a string"),
                         );
-                        *state = None;
+                        *state = TokenizerState {
+                            after_dot: false,
+                            dot_number_allowed: false,
+                            started_token: None,
+                        };
                         return false;
                     }
                 }
@@ -431,8 +450,21 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 }
                 if end {
                     let identifier = self.source.slice(&*token_start..range.start);
-                    out(Token::Identifier(identifier), &*token_start..range.start);
-                    *state = None;
+                    let token = if identifier == "_" {
+                        // Output a single underscore as a reserved character so that we can use it
+                        // as a placeholder symbol while @"_" is still a quoted identifier.
+                        Token::ReservedChar('_')
+                    } else if identifier.starts_with('%') || identifier.starts_with(':') {
+                        Token::Keyword(identifier)
+                    } else {
+                        Token::Identifier(identifier)
+                    };
+                    out(token, &*token_start..range.start);
+                    *state = TokenizerState {
+                        after_dot: false,
+                        dot_number_allowed: *is_symbol == Some(true),
+                        started_token: None,
+                    };
                     return false;
                 } else if *is_slash {
                     if c == '/' {
@@ -454,10 +486,15 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
     }
 }
 
-pub type TokenizerState<Marker> = Option<StartedTokenState<Marker>>;
+#[derive(Clone, PartialEq)]
+pub struct TokenizerState<Marker: Clone + PartialEq> {
+    after_dot: bool,
+    dot_number_allowed: bool,
+    started_token: Option<StartedTokenState<Marker>>,
+}
 
 #[derive(Clone, PartialEq)]
-pub struct StartedTokenState<Marker: Clone + PartialEq> {
+struct StartedTokenState<Marker: Clone + PartialEq> {
     token_start: Marker,
     token: StartedToken<Marker>,
 }
@@ -470,12 +507,11 @@ enum StartedToken<Marker: Clone + PartialEq> {
         slash_seen: bool,
         asterisk_seen: bool,
     },
-    DefinitionSymbol,
-    Keyword {
-        keyword_start: Marker,
+    Dots {
+        multiple: bool,
     },
     Number {
-        number_state: NumberState,
+        number_state: NumberState<Marker>,
     },
     String {
         is_quoted_identifier: bool,
@@ -491,9 +527,9 @@ enum StartedToken<Marker: Clone + PartialEq> {
 }
 
 #[derive(Clone, PartialEq)]
-enum NumberState {
+enum NumberState<Marker: Clone + PartialEq> {
     BeforeDot,
-    AfterDot,
+    AfterDot(Option<Marker>),
     BehindE,
     InExponent,
 }
@@ -574,7 +610,7 @@ mod tests {
         test_tokenization(".", &[Token::ReservedChar('.')], &[])?;
         test_tokenization(" . ", &[Token::ReservedChar('.')], &[])?;
         test_tokenization(
-            "..",
+            ". .",
             &[Token::ReservedChar('.'), Token::ReservedChar('.')],
             &[],
         )?;
@@ -583,6 +619,8 @@ mod tests {
             &[Token::ReservedChar('.'), Token::ReservedChar('.')],
             &[],
         )?;
+        test_tokenization("..", &[Token::Keyword("..".into())], &[])?;
+        test_tokenization("...", &[Token::Keyword("...".into())], &[])?;
         test_tokenization(
             ".,;()[]{}|〈〉",
             &[
@@ -601,30 +639,39 @@ mod tests {
             ],
             &[],
         )?;
+        test_tokenization("_", &[Token::ReservedChar('_')], &[])?;
+        test_tokenization(
+            "(+).0",
+            &[
+                Token::ReservedChar('('),
+                Token::Identifier("+".into()),
+                Token::ReservedChar(')'),
+                Token::ReservedChar('.'),
+                Token::Identifier("0".into()),
+            ],
+            &[],
+        )?;
         Ok(())
     }
 
     #[test]
     fn definition_symbols() -> Result<(), Message> {
-        test_tokenization(":", &[Token::DefinitionSymbol(":".into())], &[])?;
-        test_tokenization(" : ", &[Token::DefinitionSymbol(":".into())], &[])?;
-        test_tokenization(":=", &[Token::DefinitionSymbol(":=".into())], &[])?;
-        test_tokenization(":=:", &[Token::DefinitionSymbol(":=:".into())], &[])?;
+        test_tokenization(":", &[Token::Keyword(":".into())], &[])?;
+        test_tokenization(" : ", &[Token::Keyword(":".into())], &[])?;
+        test_tokenization(":=", &[Token::Keyword(":=".into())], &[])?;
+        test_tokenization(":=:", &[Token::Keyword(":=:".into())], &[])?;
         test_tokenization(
             "a:=b",
             &[
                 Token::Identifier("a".into()),
-                Token::DefinitionSymbol(":=".into()),
+                Token::Keyword(":=".into()),
                 Token::Identifier("b".into()),
             ],
             &[],
         )?;
         test_tokenization(
             " : : ",
-            &[
-                Token::DefinitionSymbol(":".into()),
-                Token::DefinitionSymbol(":".into()),
-            ],
+            &[Token::Keyword(":".into()), Token::Keyword(":".into())],
             &[],
         )?;
         Ok(())
@@ -632,74 +679,38 @@ mod tests {
 
     #[test]
     fn keywords() -> Result<(), Message> {
-        test_tokenization("%x", &[Token::Keyword("x".into())], &[])?;
-        test_tokenization("%for", &[Token::Keyword("for".into())], &[])?;
-        test_tokenization("%for_each", &[Token::Keyword("for_each".into())], &[])?;
-        test_tokenization(" %for ", &[Token::Keyword("for".into())], &[])?;
+        test_tokenization("%", &[Token::Keyword("%".into())], &[])?;
+        test_tokenization("%x", &[Token::Keyword("%x".into())], &[])?;
+        test_tokenization("%for", &[Token::Keyword("%for".into())], &[])?;
+        test_tokenization("%for_each", &[Token::Keyword("%for_each".into())], &[])?;
+        test_tokenization("%for'each", &[Token::Keyword("%for'each".into())], &[])?;
+        test_tokenization("%+", &[Token::Keyword("%+".into())], &[])?;
+        test_tokenization("%%", &[Token::Keyword("%%".into())], &[])?;
+        test_tokenization(" %for ", &[Token::Keyword("%for".into())], &[])?;
         test_tokenization(
             "%for %each",
-            &[Token::Keyword("for".into()), Token::Keyword("each".into())],
+            &[
+                Token::Keyword("%for".into()),
+                Token::Keyword("%each".into()),
+            ],
             &[],
         )?;
         test_tokenization(
-            "%for.each",
+            "%for each",
             &[
-                Token::Keyword("for".into()),
-                Token::ReservedChar('.'),
+                Token::Keyword("%for".into()),
                 Token::Identifier("each".into()),
             ],
             &[],
         )?;
         test_tokenization(
-            "%for'each'",
+            "%for.each",
             &[
-                Token::Keyword("for".into()),
-                Token::SingleQuotedString("each".into()),
+                Token::Keyword("%for".into()),
+                Token::ReservedChar('.'),
+                Token::Identifier("each".into()),
             ],
             &[],
-        )?;
-        test_tokenization(
-            "%",
-            &[],
-            &[TestDiagnosticMessage {
-                range_text: "%".into(),
-                severity: Severity::Error,
-                msg: "'%' must be followed by a keyword".into(),
-            }],
-        )?;
-        test_tokenization(
-            "% x",
-            &[Token::Identifier("x".into())],
-            &[TestDiagnosticMessage {
-                range_text: "%".into(),
-                severity: Severity::Error,
-                msg: "'%' must be followed by a keyword".into(),
-            }],
-        )?;
-        test_tokenization(
-            "%+",
-            &[Token::Identifier("+".into())],
-            &[TestDiagnosticMessage {
-                range_text: "%".into(),
-                severity: Severity::Error,
-                msg: "'%' must be followed by a keyword".into(),
-            }],
-        )?;
-        test_tokenization(
-            "%%",
-            &[],
-            &[
-                TestDiagnosticMessage {
-                    range_text: "%".into(),
-                    severity: Severity::Error,
-                    msg: "'%' must be followed by a keyword".into(),
-                },
-                TestDiagnosticMessage {
-                    range_text: "%".into(),
-                    severity: Severity::Error,
-                    msg: "'%' must be followed by a keyword".into(),
-                },
-            ],
         )?;
         Ok(())
     }
@@ -759,6 +770,15 @@ mod tests {
             &[],
         )?;
         test_tokenization(
+            "x_ +y",
+            &[
+                Token::Identifier("x_".into()),
+                Token::Identifier("+".into()),
+                Token::Identifier("y".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
             "xy+=z",
             &[
                 Token::Identifier("xy".into()),
@@ -795,11 +815,47 @@ mod tests {
             &[],
         )?;
         test_tokenization(
+            "x..y",
+            &[
+                Token::Identifier("x".into()),
+                Token::Keyword("..".into()),
+                Token::Identifier("y".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "x...y",
+            &[
+                Token::Identifier("x".into()),
+                Token::Keyword("...".into()),
+                Token::Identifier("y".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
             "-.-",
             &[
                 Token::Identifier("-".into()),
                 Token::ReservedChar('.'),
                 Token::Identifier("-".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "ℕ.0",
+            &[
+                Token::Identifier("ℕ".into()),
+                Token::ReservedChar('.'),
+                Token::Identifier("0".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "ℕ . 0",
+            &[
+                Token::Identifier("ℕ".into()),
+                Token::ReservedChar('.'),
+                Token::Identifier("0".into()),
             ],
             &[],
         )?;
@@ -898,19 +954,74 @@ mod tests {
         test_tokenization("0", &[Token::Number("0".into())], &[])?;
         test_tokenization("123", &[Token::Number("123".into())], &[])?;
         test_tokenization("12.345", &[Token::Number("12.345".into())], &[])?;
+        test_tokenization("12.", &[Token::Number("12.".into())], &[])?;
+        test_tokenization(".345", &[Token::Number(".345".into())], &[])?;
         test_tokenization("1_234_567.89", &[Token::Number("1_234_567.89".into())], &[])?;
         test_tokenization("12.34e5", &[Token::Number("12.34e5".into())], &[])?;
         test_tokenization("12.34e+56", &[Token::Number("12.34e+56".into())], &[])?;
         test_tokenization("12.3e-456", &[Token::Number("12.3e-456".into())], &[])?;
+        test_tokenization(".3e-456", &[Token::Number(".3e-456".into())], &[])?;
         test_tokenization("0xf00", &[Token::Number("0xf00".into())], &[])?;
+        test_tokenization("0xf00.ba1", &[Token::Number("0xf00.ba1".into())], &[])?;
+        test_tokenization("1_foo.bar", &[Token::Number("1_foo.bar".into())], &[])?;
+        test_tokenization("12.345", &[Token::Number("12.345".into())], &[])?;
         test_tokenization(
-            " 0 1 .2 3 ",
+            " 0 1 .2 3. 4 ",
+            &[
+                Token::Number("0".into()),
+                Token::Number("1".into()),
+                Token::Number(".2".into()),
+                Token::Number("3.".into()),
+                Token::Number("4".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            " 0 1 . 2 3.4 ",
             &[
                 Token::Number("0".into()),
                 Token::Number("1".into()),
                 Token::ReservedChar('.'),
-                Token::Number("2".into()),
-                Token::Number("3".into()),
+                Token::Identifier("2".into()),
+                Token::Number("3.4".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "0.1.2",
+            &[
+                Token::Number("0.1".into()),
+                Token::ReservedChar('.'),
+                Token::Identifier("2".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "0..1",
+            &[
+                Token::Number("0".into()),
+                Token::Keyword("..".into()),
+                Token::Number("1".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "0 .. 1",
+            &[
+                Token::Number("0".into()),
+                Token::Keyword("..".into()),
+                Token::Number("1".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "0...1....n",
+            &[
+                Token::Number("0".into()),
+                Token::Keyword("...".into()),
+                Token::Number("1".into()),
+                Token::Keyword("....".into()),
+                Token::Identifier("n".into()),
             ],
             &[],
         )?;
@@ -922,6 +1033,25 @@ mod tests {
                 Token::Number("2.3e4".into()),
                 Token::Identifier("-".into()),
                 Token::Number("5".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            ".1+.2",
+            &[
+                Token::Number(".1".into()),
+                Token::Identifier("+".into()),
+                Token::Number(".2".into()),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "(.1 .2)",
+            &[
+                Token::ReservedChar('('),
+                Token::Number(".1".into()),
+                Token::Number(".2".into()),
+                Token::ReservedChar(')'),
             ],
             &[],
         )?;

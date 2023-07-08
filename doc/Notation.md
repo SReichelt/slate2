@@ -30,14 +30,18 @@ tokens is as follows.
 
 * Parenthesis characters, including many non-ASCII parentheses, vertical lines, and special
   quotation symbols.
-* Punctuation, limited to `.,;`.
-* Definition symbols, which consist of the character `:` followed by any number of symbol characters
-  (according to a classification across the entire Unicode range, which we will not reproduce here).
-* Keywords, which consist of the character `%` followed by one or more ASCII alphanumeric
-  characters or underscores.
-* Numbers, starting with an ASCII numeral and containing ASCII alphanumeric characters or
-  underscores, followed by an optional dot which can be followed by more ASCII alphanumeric
-  characters as well as `+` or `-` if preceded by `e` or `E`.
+* Punctuation, limited to `.,;`. Note that a dot may be part of a number; see below. Moreover,
+  multiple dots directly following each other are treated equivalently to a keyword.
+* Keywords, which consist of the character `%` possibly followed by an unquoted identifier as
+  defined below.
+* Numbers, which can either start with an ASCII numeral or with a dot. A number starting with an
+  ASCII numeral can contain ASCII alphanumeric characters or underscores, followed by an optional
+  dot which can be followed by more ASCII alphanumeric characters as well as `+` or `-` if preceded
+  by `e` or `E`. A number starting with a dot must be followed by an ASCII numeral and can only
+  follow a non-dot punctuation character, an opening parenthesis, a number (but not immediately), or
+  an unquoted identifier ending with a symbol (see below), possibly separated by whitespace.
+  Afterwards, the same rules apply as for the part of a number following a dot.
+  A number cannot follow a dot which is a punctuation symbol, even when separated by whitespace.
 * String literals surrounded by single or double quotes. These literals may contain the same escape
   sequences as Rust, and any character except ASCII control characters (which includes line breaks).
   (The backtick character is reserved for future use.)
@@ -48,7 +52,11 @@ tokens is as follows.
   allowed everywhere in identifiers, except that an unquoted identifier cannot start with an
   apostrophe. These three characters can be used to connect groups of identifiers and symbols. An
   unquoted identifier cannot start with `%` or `@`, or contain any of the parenthesis or punctuation
-  characters mentioned above, nor whitespace, ASCII control characters, or backticks.
+  characters mentioned above, nor whitespace, ASCII control characters, or backticks. An identifier
+  cannot start with a numeral, except when the identifier follows a dot (possibly with whitespace
+  between).
+  An unquoted identifier starting with `:` is called a "definition symbol" and treated equivalently
+  to a keyword.
 
 Tokens may be separated by whitespace and comments. Line comments start with `//`; block comments
 start with `/*` and end with `*/`, and may be nested. Therefore, unquoted identifiers are not
