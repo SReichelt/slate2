@@ -4,6 +4,8 @@ use slate_kernel_notation_generic::{char::*, event::*, event_translator::*};
 
 use crate::chars::*;
 
+// TODO: Subscripts and superscripts as tokens.
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token<'a> {
     ReservedChar(char),

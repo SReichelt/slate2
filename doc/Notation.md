@@ -121,17 +121,20 @@ possible lists of parameters.
 * `[x : ...]` declares one parameter `x`.
 * `[x : ...; y : ...]` declares two parameters `x` and `y`.
 * `[x,y : ...]` declares two parameters `x` and `y` that have the same data.
-* `[[x : ...] f(x) : ...]` declares a parameter `f` that is additionally parameterized by `x`, in
-  function notation.
+* `[[x : ...] f(x) : ...]` declares a parameter `f` that is additionally parameterized by `x`, i.e.
+  a second-order parameter, in function notation.
+* `[[x : ...] f(x),g(x) : ...]` declares two parameters `f` and `g` that are additionally
+  parameterized by `x`.
 * `[[a,b : ...] a + b : ...]` declares a parameter `+` that is additionally parameterized by `a`
   and `b`, in infix notation.
 * In principle, this scheme may be continued recursively, but parameterizations must be included in
-  the notation. E.g. `[[[x : ...] f(x) : ...] g([x : ...] f(x)) : ...]` declares a parameter `g`.
+  the notation. E.g. `[[[x : ...] f(x) : ...] g([x] f(x)) : ...]` declares a third-order parameter
+  `g`; `[[[[x : ...] f(x) : ...] g([x] f(x)) : ...] h([[x] f(x)] g([x] f(x))) : ...]` declares a
+  fourth-order parameter `h`.
 
 The notation expression of a (potentially additionally parameterized) parameter is recursively any
 of the following.
-* An identifier that does not appear in any additional parameterization.
-* A number, if the notation belongs to an object parameter.
+* An identifier.
 * A sequence of notation expressions.
 * A comma-separated list of notation expressions surrounded by a chosen pair of parentheses or
   vertical lines, unless that pair of parentheses has been reserved by the metamodel.
@@ -141,8 +144,15 @@ of the following.
   * If a pair of parentheses is reserved for an object, then it cannot be used in a notation
     expression, except at the beginning of the notation of an object parameter.
   * The metamodel may reserve additional pairs of parentheses.
-* The exact, potentially parameterized, notation expression of one of the additional parameters,
-  unless the notation expression is the outermost one.
+  * The comma-separated list may be empty. A comma after the last list item is ignored in the sense
+    that the notation expressions with and without the trailing comma are considered equivalent.
+* A reference to one of the additional parameters, identified by a notation expression that is
+  equivalent to the notation expression of the parameter. If the parameter is additionally
+  parameterized, the reference must be parameterized equivalently, but concrete notations as well as
+  data may differ. (It is recommended to use the same notation but to omit data.)
+  This alternative takes precedence over all others. However, the entire notation expression is not
+  allowed to consist purely of a parameter. Moreover, a notation expression which is parameterized
+  or a sequence cannot appear within a sequence.
 
 The syntax for global parameters is identical except for the lack of parentheses and the requirement
 to end the last parameter with `;`. Their scope is the entire document.

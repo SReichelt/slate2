@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
 use crate::parameter_identifier::*;
@@ -35,51 +37,95 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for GlobalParamRecordingPass
     type In = ParameterEvent<'a>;
     type Out = ExpressionEvent<'a>;
     type Marker = Src::Marker;
-    type State = GlobalParamRecordingState;
+    type State = NotationsRecordingState<'a>;
     type NextPass = ExpressionOutputPass<'a, Src>;
 
     fn new_state(&self) -> Self::State {
-        GlobalParamRecordingState { params: Vec::new() }
+        NotationsRecordingState {
+            recorded_notations: Vec::new(),
+            current_group_state: None,
+        }
     }
 
     fn event(
         &self,
         state: &mut Self::State,
         event: Self::In,
-        range: std::ops::Range<&Self::Marker>,
-        out: impl FnMut(Self::Out, std::ops::Range<&Self::Marker>),
+        _range: Range<&Self::Marker>,
+        _out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) {
+        self.notations_event(state, event);
     }
 
     fn next_pass(
         self,
         state: Self::State,
-        end_marker: &Self::Marker,
-        out: impl FnMut(Self::Out, std::ops::Range<&Self::Marker>),
+        _end_marker: &Self::Marker,
+        _out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) -> Option<Self::NextPass> {
         Some(ExpressionOutputPass {
             source: self.source,
-            global_param_state: state,
+            global_notations: state.recorded_notations,
         })
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub struct GlobalParamRecordingState {
-    params: Vec<RecordedParam>,
+impl<'a, Src: EventSource + 'a> GlobalParamRecordingPass<'a, Src> {
+    fn notations_event(
+        &self,
+        state: &mut NotationsRecordingState<'a>,
+        event: ParameterEvent<'a>,
+    ) -> Option<ParameterEvent<'a>> {
+        if let Some(group_state) = &mut state.current_group_state {
+            if let Some(event) = self.group_event(group_state, &mut state.recorded_notations, event)
+            {
+                if let ParameterEvent::ParamGroup(GroupEvent::End) = event {
+                    state.current_group_state = None;
+                }
+            }
+            None
+        } else if let ParameterEvent::ParamGroup(GroupEvent::Start(_)) = event {
+            state.current_group_state = Some(Box::new(GroupNotationRecordingState {
+                parameterization_state: NotationsRecordingState {
+                    recorded_notations: Vec::new(),
+                    current_group_state: None,
+                },
+            }));
+            None
+        } else {
+            Some(event)
+        }
+    }
+
+    fn group_event(
+        &self,
+        state: &mut GroupNotationRecordingState<'a>,
+        recorded_notations: &mut Vec<NotationExpression<'a>>,
+        event: ParameterEvent<'a>,
+    ) -> Option<ParameterEvent<'a>> {
+        if let Some(event) = self.notations_event(&mut state.parameterization_state, event) {
+            Some(event)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
-struct RecordedParam {
-    notation: Vec<NotationToken>,
+pub struct NotationsRecordingState<'a> {
+    recorded_notations: Vec<NotationExpression<'a>>,
+    current_group_state: Option<Box<GroupNotationRecordingState<'a>>>,
 }
 
 #[derive(Clone, PartialEq)]
-enum NotationToken {}
+struct GroupNotationRecordingState<'a> {
+    parameterization_state: NotationsRecordingState<'a>,
+    // TODO
+}
 
 pub struct ExpressionOutputPass<'a, Src: EventSource + 'a> {
     source: EventSourceWithOps<'a, ParameterEvent<'a>, Src>,
-    global_param_state: GlobalParamRecordingState,
+    global_notations: Vec<NotationExpression<'a>>,
 }
 
 impl<'a, Src: EventSource + 'a> EventTranslatorPass for ExpressionOutputPass<'a, Src> {
@@ -96,8 +142,8 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ExpressionOutputPass<'a,
         &self,
         state: &mut Self::State,
         event: Self::In,
-        range: std::ops::Range<&Self::Marker>,
-        out: impl FnMut(Self::Out, std::ops::Range<&Self::Marker>),
+        range: Range<&Self::Marker>,
+        out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) {
     }
 
@@ -105,7 +151,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ExpressionOutputPass<'a,
         self,
         state: Self::State,
         end_marker: &Self::Marker,
-        out: impl FnMut(Self::Out, std::ops::Range<&Self::Marker>),
+        out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) -> Option<Self::NextPass> {
         None
     }
