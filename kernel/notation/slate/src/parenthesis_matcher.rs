@@ -49,24 +49,42 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
         range: Range<&Self::Marker>,
         mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) {
-        if let Token::ReservedChar(c) = event {
+        if let Token::ReservedChar(c, pre_isolation, post_isolation) = event {
+            let mut is_symmetric_paren = false;
+
             if let Some(expected_closing_parenthesis) = matching_closing_parenthesis(c) {
-                state.push(TokenGroupState {
-                    group_start: range.start.clone(),
-                    expected_closing_parenthesis,
-                });
-                out(TokenEvent::Paren(GroupEvent::Start(c)), range);
-                return;
+                is_symmetric_paren = expected_closing_parenthesis == c;
+                if !is_symmetric_paren
+                    || (pre_isolation != TokenIsolation::StronglyConnected
+                        && post_isolation == TokenIsolation::StronglyConnected)
+                {
+                    state.push(TokenGroupState {
+                        group_start: range.start.clone(),
+                        expected_closing_parenthesis,
+                    });
+                    out(TokenEvent::Paren(GroupEvent::Start(c)), range);
+                    return;
+                }
             }
 
-            if let Some(closed_group_index) = state
-                .iter()
-                .rposition(|group| group.expected_closing_parenthesis == c)
+            if !is_symmetric_paren
+                || (pre_isolation == TokenIsolation::StronglyConnected
+                    && post_isolation != TokenIsolation::StronglyConnected)
             {
-                self.close_unmatched_groups(state, range.start, &mut out, closed_group_index + 1);
-                state.pop();
-                out(TokenEvent::Paren(GroupEvent::End), range);
-                return;
+                if let Some(closed_group_index) = state
+                    .iter()
+                    .rposition(|group| group.expected_closing_parenthesis == c)
+                {
+                    self.close_unmatched_groups(
+                        state,
+                        range.start,
+                        &mut out,
+                        closed_group_index + 1,
+                    );
+                    state.pop();
+                    out(TokenEvent::Paren(GroupEvent::End), range);
+                    return;
+                }
             }
         }
 
@@ -129,7 +147,10 @@ mod tests {
         test_parenthesis_matching("", Vec::new(), &[])?;
         test_parenthesis_matching(
             "abc",
-            vec![ParenToken::Token(Token::Identifier("abc".into()))],
+            vec![ParenToken::Token(Token::Identifier(
+                "abc".into(),
+                IdentifierType::Unquoted,
+            ))],
             &[],
         )?;
         test_parenthesis_matching("()", vec![ParenToken::Paren('(', Vec::new())], &[])?;
@@ -137,32 +158,221 @@ mod tests {
             "(abc)",
             vec![ParenToken::Paren(
                 '(',
-                vec![ParenToken::Token(Token::Identifier("abc".into()))],
+                vec![ParenToken::Token(Token::Identifier(
+                    "abc".into(),
+                    IdentifierType::Unquoted,
+                ))],
+            )],
+            &[],
+        )?;
+        test_parenthesis_matching("||", vec![ParenToken::Paren('|', Vec::new())], &[])?;
+        test_parenthesis_matching(
+            "|abc|",
+            vec![ParenToken::Paren(
+                '|',
+                vec![ParenToken::Token(Token::Identifier(
+                    "abc".into(),
+                    IdentifierType::Unquoted,
+                ))],
             )],
             &[],
         )?;
         test_parenthesis_matching(
-            "a (b c [d|e]) f ⟦g⟧ h",
-            vec![
-                ParenToken::Token(Token::Identifier("a".into())),
-                ParenToken::Paren(
+            "(|abc|)",
+            vec![ParenToken::Paren(
+                '(',
+                vec![ParenToken::Paren(
+                    '|',
+                    vec![ParenToken::Token(Token::Identifier(
+                        "abc".into(),
+                        IdentifierType::Unquoted,
+                    ))],
+                )],
+            )],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|(abc)|",
+            vec![ParenToken::Paren(
+                '|',
+                vec![ParenToken::Paren(
                     '(',
+                    vec![ParenToken::Token(Token::Identifier(
+                        "abc".into(),
+                        IdentifierType::Unquoted,
+                    ))],
+                )],
+            )],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "(|(abc)|)",
+            vec![ParenToken::Paren(
+                '(',
+                vec![ParenToken::Paren(
+                    '|',
+                    vec![ParenToken::Paren(
+                        '(',
+                        vec![ParenToken::Token(Token::Identifier(
+                            "abc".into(),
+                            IdentifierType::Unquoted,
+                        ))],
+                    )],
+                )],
+            )],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|a|^b",
+            vec![
+                ParenToken::Paren(
+                    '|',
+                    vec![ParenToken::Token(Token::Identifier(
+                        "a".into(),
+                        IdentifierType::Unquoted,
+                    ))],
+                ),
+                ParenToken::Token(Token::ReservedChar(
+                    '^',
+                    TokenIsolation::StronglyConnected,
+                    TokenIsolation::StronglyConnected,
+                )),
+                ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+            ],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|a|⁻¹",
+            vec![
+                ParenToken::Paren(
+                    '|',
+                    vec![ParenToken::Token(Token::Identifier(
+                        "a".into(),
+                        IdentifierType::Unquoted,
+                    ))],
+                ),
+                ParenToken::Token(Token::Identifier("⁻¹".into(), IdentifierType::Unquoted)),
+            ],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|a²|⁻¹",
+            vec![
+                ParenToken::Paren(
+                    '|',
                     vec![
-                        ParenToken::Token(Token::Identifier("b".into())),
-                        ParenToken::Token(Token::Identifier("c".into())),
+                        ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::Identifier("²".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+                ParenToken::Token(Token::Identifier("⁻¹".into(), IdentifierType::Unquoted)),
+            ],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|a+(b-c)|⁻¹",
+            vec![
+                ParenToken::Paren(
+                    '|',
+                    vec![
+                        ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::Identifier("+".into(), IdentifierType::Unquoted)),
                         ParenToken::Paren(
-                            '[',
+                            '(',
                             vec![
-                                ParenToken::Token(Token::Identifier("d".into())),
-                                ParenToken::Token(Token::ReservedChar('|')),
-                                ParenToken::Token(Token::Identifier("e".into())),
+                                ParenToken::Token(Token::Identifier(
+                                    "b".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParenToken::Token(Token::Identifier(
+                                    "-".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParenToken::Token(Token::Identifier(
+                                    "c".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                             ],
                         ),
                     ],
                 ),
-                ParenToken::Token(Token::Identifier("f".into())),
-                ParenToken::Paren('⟦', vec![ParenToken::Token(Token::Identifier("g".into()))]),
-                ParenToken::Token(Token::Identifier("h".into())),
+                ParenToken::Token(Token::Identifier("⁻¹".into(), IdentifierType::Unquoted)),
+            ],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|||",
+            vec![ParenToken::Paren(
+                '|',
+                vec![ParenToken::Token(Token::ReservedChar(
+                    '|',
+                    TokenIsolation::StronglyConnected,
+                    TokenIsolation::StronglyConnected,
+                ))],
+            )],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "a (b c [d|e]) f ⟦g ‖ h⟧ ‖i‖.|j|",
+            vec![
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                ParenToken::Paren(
+                    '(',
+                    vec![
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::Identifier("c".into(), IdentifierType::Unquoted)),
+                        ParenToken::Paren(
+                            '[',
+                            vec![
+                                ParenToken::Token(Token::Identifier(
+                                    "d".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParenToken::Token(Token::ReservedChar(
+                                    '|',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::StronglyConnected,
+                                )),
+                                ParenToken::Token(Token::Identifier(
+                                    "e".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                            ],
+                        ),
+                    ],
+                ),
+                ParenToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
+                ParenToken::Paren(
+                    '⟦',
+                    vec![
+                        ParenToken::Token(Token::Identifier("g".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::ReservedChar(
+                            '‖',
+                            TokenIsolation::Isolated,
+                            TokenIsolation::Isolated,
+                        )),
+                        ParenToken::Token(Token::Identifier("h".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+                ParenToken::Paren(
+                    '‖',
+                    vec![ParenToken::Token(Token::Identifier(
+                        "i".into(),
+                        IdentifierType::Unquoted,
+                    ))],
+                ),
+                ParenToken::Token(Token::ReservedChar(
+                    '.',
+                    TokenIsolation::StronglyConnected,
+                    TokenIsolation::StronglyConnected,
+                )),
+                ParenToken::Paren(
+                    '|',
+                    vec![ParenToken::Token(Token::Identifier(
+                        "j".into(),
+                        IdentifierType::Unquoted,
+                    ))],
+                ),
             ],
             &[],
         )?;
@@ -183,12 +393,12 @@ mod tests {
         test_parenthesis_matching(
             "a (b c",
             vec![
-                ParenToken::Token(Token::Identifier("a".into())),
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
                 ParenToken::Paren(
                     '(',
                     vec![
-                        ParenToken::Token(Token::Identifier("b".into())),
-                        ParenToken::Token(Token::Identifier("c".into())),
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::Identifier("c".into(), IdentifierType::Unquoted)),
                     ],
                 ),
             ],
@@ -201,18 +411,21 @@ mod tests {
         test_parenthesis_matching(
             "a (b [c) d",
             vec![
-                ParenToken::Token(Token::Identifier("a".into())),
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
                 ParenToken::Paren(
                     '(',
                     vec![
-                        ParenToken::Token(Token::Identifier("b".into())),
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
                         ParenToken::Paren(
                             '[',
-                            vec![ParenToken::Token(Token::Identifier("c".into()))],
+                            vec![ParenToken::Token(Token::Identifier(
+                                "c".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
-                ParenToken::Token(Token::Identifier("d".into())),
+                ParenToken::Token(Token::Identifier("d".into(), IdentifierType::Unquoted)),
             ],
             &[TestDiagnosticMessage {
                 range_text: "[c".into(),
@@ -223,32 +436,44 @@ mod tests {
         test_parenthesis_matching(
             "a (b (c [d [e] f) g) h",
             vec![
-                ParenToken::Token(Token::Identifier("a".into())),
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
                 ParenToken::Paren(
                     '(',
                     vec![
-                        ParenToken::Token(Token::Identifier("b".into())),
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
                         ParenToken::Paren(
                             '(',
                             vec![
-                                ParenToken::Token(Token::Identifier("c".into())),
+                                ParenToken::Token(Token::Identifier(
+                                    "c".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                                 ParenToken::Paren(
                                     '[',
                                     vec![
-                                        ParenToken::Token(Token::Identifier("d".into())),
+                                        ParenToken::Token(Token::Identifier(
+                                            "d".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                         ParenToken::Paren(
                                             '[',
-                                            vec![ParenToken::Token(Token::Identifier("e".into()))],
+                                            vec![ParenToken::Token(Token::Identifier(
+                                                "e".into(),
+                                                IdentifierType::Unquoted,
+                                            ))],
                                         ),
-                                        ParenToken::Token(Token::Identifier("f".into())),
+                                        ParenToken::Token(Token::Identifier(
+                                            "f".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                     ],
                                 ),
                             ],
                         ),
-                        ParenToken::Token(Token::Identifier("g".into())),
+                        ParenToken::Token(Token::Identifier("g".into(), IdentifierType::Unquoted)),
                     ],
                 ),
-                ParenToken::Token(Token::Identifier("h".into())),
+                ParenToken::Token(Token::Identifier("h".into(), IdentifierType::Unquoted)),
             ],
             &[TestDiagnosticMessage {
                 range_text: "[d [e] f".into(),

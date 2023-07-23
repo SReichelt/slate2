@@ -140,7 +140,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
             }
 
             MetaModelState::AfterName { name, name_range } => {
-                if let TokenEvent::Token(Token::ReservedChar(';')) = event {
+                if let TokenEvent::Token(Token::ReservedChar(';', _, _)) = event {
                     match self.metamodel_getter.metamodel(name) {
                         Ok(metamodel) => {
                             out(
@@ -204,7 +204,11 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
                 if let Some(group_state) = &mut state.list_state.current_group {
                     if let Some(range) = self.parameter_group_event(
                         group_state,
-                        TokenEvent::Token(Token::ReservedChar(';')),
+                        TokenEvent::Token(Token::ReservedChar(
+                            ';',
+                            TokenIsolation::Isolated,
+                            TokenIsolation::Isolated,
+                        )),
                         end_marker..end_marker,
                         &mut out,
                         None,
@@ -295,7 +299,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     None
                 } else {
                     *after_dot = false;
-                    if let TokenEvent::Token(Token::ReservedChar(c)) = event {
+                    if let TokenEvent::Token(Token::ReservedChar(c, _, _)) = event {
                         if c == ',' || c == ';' {
                             *state = ExpressionState::Start;
                         } else if c == '.' {
@@ -356,7 +360,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 out(ParameterEvent::Token(event), range);
             }
         } else {
-            let is_special_delimiter = matches!(event, TokenEvent::Token(Token::ReservedChar(c)) if Some(c) == state.special_delimiter);
+            let is_special_delimiter = matches!(event, TokenEvent::Token(Token::ReservedChar(c, _, _)) if Some(c) == state.special_delimiter);
 
             if let Some(group_state) = &mut state.current_group {
                 if let Some(range) = self.parameter_group_event(
@@ -423,7 +427,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         match &mut state.content_state {
             ParameterGroupContentState::Start => {
                 match event {
-                    TokenEvent::Token(Token::ReservedChar(c))
+                    TokenEvent::Token(Token::ReservedChar(c, _, _))
                         if c == ';' || Some(c) == state.special_delimiter =>
                     {
                         return Some(range);
@@ -507,12 +511,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         TokenEvent::Paren(GroupEvent::End) => {
                             return Some(range);
                         }
-                        TokenEvent::Token(Token::ReservedChar(c))
+                        TokenEvent::Token(Token::ReservedChar(c, _, _))
                             if c == ';' || Some(c) == state.special_delimiter =>
                         {
                             return Some(range);
                         }
-                        TokenEvent::Token(Token::ReservedChar(',')) => {
+                        TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
                             *opt_notation_state = None;
                         }
                         _ => {
@@ -539,7 +543,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         TokenEvent::Paren(GroupEvent::End) => {
                             return Some(range);
                         }
-                        TokenEvent::Token(Token::ReservedChar(c))
+                        TokenEvent::Token(Token::ReservedChar(c, _, _))
                             if c == ';' || Some(c) == state.special_delimiter =>
                         {
                             return Some(range);
@@ -566,7 +570,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
     ) -> Option<(TokenEvent<'a>, Range<&'b Src::Marker>)> {
         match &mut state.current_item {
             NotationExpressionItemState::Start => match event {
-                TokenEvent::Token(Token::Identifier(identifier)) => {
+                TokenEvent::Token(Token::Identifier(identifier, identifier_type))
+                    if !(identifier_type == IdentifierType::Unquoted
+                        && metamodel.is_definition_symbol(&identifier)) =>
+                {
                     state.previous_items.push(
                         NotationExpression::Identifier(identifier).identify(parameterizations),
                     );
@@ -632,7 +639,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         }
                         return Some((event, range));
                     }
-                    TokenEvent::Token(Token::ReservedChar(',')) => {
+                    TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
                         if state.parameterizations.is_some() {
                             self.source.diagnostic(
                                 &range.start..&range.start,
@@ -721,7 +728,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         TokenEvent::Paren(GroupEvent::End) => {
                             return Some((event, range));
                         }
-                        TokenEvent::Token(Token::ReservedChar(',')) => {
+                        TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
                             state.current_item = NotationExpressionListItemState::Start;
                             state.parameterizations = None;
                         }
@@ -917,8 +924,8 @@ mod tests {
                         notation: NotationExpression::Identifier("x".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("T".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("T".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -934,10 +941,10 @@ mod tests {
                         notation: NotationExpression::Identifier("x".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("T".into())),
-                        ParamToken::Token(Token::Keyword(":=".into())),
-                        ParamToken::Token(Token::Identifier("y".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("T".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("y".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -954,8 +961,14 @@ mod tests {
                             notation: NotationExpression::Identifier("x".into()),
                         }],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("T".into())),
+                            ParamToken::Token(Token::Identifier(
+                                ":".into(),
+                                IdentifierType::Unquoted,
+                            )),
+                            ParamToken::Token(Token::Identifier(
+                                "T".into(),
+                                IdentifierType::Unquoted,
+                            )),
                         ],
                     },
                     ParameterGroup {
@@ -964,8 +977,14 @@ mod tests {
                             notation: NotationExpression::Identifier("y".into()),
                         }],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("U".into())),
+                            ParamToken::Token(Token::Identifier(
+                                ":".into(),
+                                IdentifierType::Unquoted,
+                            )),
+                            ParamToken::Token(Token::Identifier(
+                                "U".into(),
+                                IdentifierType::Unquoted,
+                            )),
                         ],
                     },
                 ],
@@ -1006,9 +1025,19 @@ mod tests {
                         ParamToken::Paren(
                             '(',
                             vec![
-                                ParamToken::Token(Token::Identifier("a".into())),
-                                ParamToken::Token(Token::ReservedChar(';')),
-                                ParamToken::Token(Token::Identifier("b".into())),
+                                ParamToken::Token(Token::Identifier(
+                                    "a".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParamToken::Token(Token::ReservedChar(
+                                    ';',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::StronglyConnected,
+                                )),
+                                ParamToken::Token(Token::Identifier(
+                                    "b".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                             ],
                         ),
                     ],
@@ -1263,8 +1292,8 @@ mod tests {
                         },
                     ],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("T".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("T".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1289,8 +1318,8 @@ mod tests {
                         },
                     ],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("T".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("T".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1328,16 +1357,22 @@ mod tests {
                             notation: NotationExpression::Identifier("b".into()),
                         }],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("B".into())),
+                            ParamToken::Token(Token::Identifier(
+                                ":".into(),
+                                IdentifierType::Unquoted,
+                            )),
+                            ParamToken::Token(Token::Identifier(
+                                "B".into(),
+                                IdentifierType::Unquoted,
+                            )),
                         ],
                     }],
                     params: vec![Parameter {
                         notation: NotationExpression::Identifier("a".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("A".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1354,8 +1389,14 @@ mod tests {
                             notation: NotationExpression::Identifier("b".into()),
                         }],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("B".into())),
+                            ParamToken::Token(Token::Identifier(
+                                ":".into(),
+                                IdentifierType::Unquoted,
+                            )),
+                            ParamToken::Token(Token::Identifier(
+                                "B".into(),
+                                IdentifierType::Unquoted,
+                            )),
                         ],
                     }],
                     params: vec![Parameter {
@@ -1365,8 +1406,8 @@ mod tests {
                         ]),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("A".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1384,8 +1425,14 @@ mod tests {
                                 notation: NotationExpression::Identifier("d".into()),
                             }],
                             data: vec![
-                                ParamToken::Token(Token::Keyword(":".into())),
-                                ParamToken::Token(Token::Identifier("D".into())),
+                                ParamToken::Token(Token::Identifier(
+                                    ":".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParamToken::Token(Token::Identifier(
+                                    "D".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                             ],
                         }],
                         params: vec![
@@ -1397,16 +1444,22 @@ mod tests {
                             },
                         ],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("B".into())),
+                            ParamToken::Token(Token::Identifier(
+                                ":".into(),
+                                IdentifierType::Unquoted,
+                            )),
+                            ParamToken::Token(Token::Identifier(
+                                "B".into(),
+                                IdentifierType::Unquoted,
+                            )),
                         ],
                     }],
                     params: vec![Parameter {
                         notation: NotationExpression::Identifier("a".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("A".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1424,8 +1477,14 @@ mod tests {
                                 notation: NotationExpression::Identifier("d".into()),
                             }],
                             data: vec![
-                                ParamToken::Token(Token::Keyword(":".into())),
-                                ParamToken::Token(Token::Identifier("D".into())),
+                                ParamToken::Token(Token::Identifier(
+                                    ":".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParamToken::Token(Token::Identifier(
+                                    "D".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                             ],
                         }],
                         params: vec![
@@ -1449,8 +1508,14 @@ mod tests {
                             },
                         ],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("B".into())),
+                            ParamToken::Token(Token::Identifier(
+                                ":".into(),
+                                IdentifierType::Unquoted,
+                            )),
+                            ParamToken::Token(Token::Identifier(
+                                "B".into(),
+                                IdentifierType::Unquoted,
+                            )),
                         ],
                     }],
                     params: vec![Parameter {
@@ -1463,8 +1528,8 @@ mod tests {
                         ]),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("A".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1483,8 +1548,8 @@ mod tests {
                                     notation: NotationExpression::Identifier("e".into()),
                                 }],
                                 data: vec![
-                                    ParamToken::Token(Token::Keyword(":".into())),
-                                    ParamToken::Token(Token::Identifier("E".into())),
+                                    ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                                    ParamToken::Token(Token::Identifier("E".into(), IdentifierType::Unquoted)),
                                 ],
                             }],
                             params: vec![Parameter {
@@ -1497,8 +1562,8 @@ mod tests {
                                 ]),
                             }],
                             data: vec![
-                                ParamToken::Token(Token::Keyword(":".into())),
-                                ParamToken::Token(Token::Identifier("D".into())),
+                                ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                                ParamToken::Token(Token::Identifier("D".into(), IdentifierType::Unquoted)),
                             ],
                         }],
                         params: vec![
@@ -1522,8 +1587,8 @@ mod tests {
                             },
                         ],
                         data: vec![
-                            ParamToken::Token(Token::Keyword(":".into())),
-                            ParamToken::Token(Token::Identifier("B".into())),
+                            ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                            ParamToken::Token(Token::Identifier("B".into(), IdentifierType::Unquoted)),
                         ],
                     }],
                     params: vec![Parameter {
@@ -1536,8 +1601,8 @@ mod tests {
                         ]),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("A".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },
@@ -1553,8 +1618,8 @@ mod tests {
                         notation: NotationExpression::Identifier("a".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
-                        ParamToken::Token(Token::Identifier("f".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
                         ParamToken::Paren(
                             '(',
                             vec![
@@ -1564,11 +1629,20 @@ mod tests {
                                         notation: NotationExpression::Identifier("b".into()),
                                     }],
                                     data: vec![
-                                        ParamToken::Token(Token::Keyword(":".into())),
-                                        ParamToken::Token(Token::Identifier("B".into())),
+                                        ParamToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        ParamToken::Token(Token::Identifier(
+                                            "B".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                     ],
                                 }),
-                                ParamToken::Token(Token::Identifier("b".into())),
+                                ParamToken::Token(Token::Identifier(
+                                    "b".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                             ],
                         ),
                     ],
@@ -1586,8 +1660,8 @@ mod tests {
                         notation: NotationExpression::Identifier("a".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
-                        ParamToken::Token(Token::Identifier("f".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
                         ParamToken::Paren(
                             '[',
                             vec![
@@ -1597,12 +1671,25 @@ mod tests {
                                         notation: NotationExpression::Identifier("b".into()),
                                     }],
                                     data: vec![
-                                        ParamToken::Token(Token::Keyword(":".into())),
-                                        ParamToken::Token(Token::Identifier("B".into())),
+                                        ParamToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        ParamToken::Token(Token::Identifier(
+                                            "B".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                     ],
                                 }),
-                                ParamToken::Token(Token::Identifier("b".into())),
-                                ParamToken::Token(Token::ReservedChar(',')),
+                                ParamToken::Token(Token::Identifier(
+                                    "b".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParamToken::Token(Token::ReservedChar(
+                                    ',',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::Isolated,
+                                )),
                                 ParamToken::ParamGroup(ParameterGroup {
                                     parameterizations: vec![
                                         ParameterGroup {
@@ -1613,8 +1700,14 @@ mod tests {
                                                 ),
                                             }],
                                             data: vec![
-                                                ParamToken::Token(Token::Keyword(":".into())),
-                                                ParamToken::Token(Token::Identifier("D".into())),
+                                                ParamToken::Token(Token::Identifier(
+                                                    ":".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
+                                                ParamToken::Token(Token::Identifier(
+                                                    "D".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
                                             ],
                                         },
                                         ParameterGroup {
@@ -1632,8 +1725,14 @@ mod tests {
                                                 },
                                             ],
                                             data: vec![
-                                                ParamToken::Token(Token::Keyword(":".into())),
-                                                ParamToken::Token(Token::Identifier("E".into())),
+                                                ParamToken::Token(Token::Identifier(
+                                                    ":".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
+                                                ParamToken::Token(Token::Identifier(
+                                                    "E".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
                                             ],
                                         },
                                     ],
@@ -1650,16 +1749,29 @@ mod tests {
                                         ]),
                                     }],
                                     data: vec![
-                                        ParamToken::Token(Token::Keyword(":".into())),
-                                        ParamToken::Token(Token::Identifier("C".into())),
+                                        ParamToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        ParamToken::Token(Token::Identifier(
+                                            "C".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                     ],
                                 }),
-                                ParamToken::Token(Token::Identifier("c".into())),
+                                ParamToken::Token(Token::Identifier(
+                                    "c".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                                 ParamToken::Paren(
                                     '[',
                                     vec![
                                         ParamToken::Token(Token::Number("0".into())),
-                                        ParamToken::Token(Token::ReservedChar(',')),
+                                        ParamToken::Token(Token::ReservedChar(
+                                            ',',
+                                            TokenIsolation::StronglyConnected,
+                                            TokenIsolation::StronglyConnected,
+                                        )),
                                         ParamToken::Token(Token::Number("1".into())),
                                     ],
                                 ),
@@ -1685,7 +1797,7 @@ mod tests {
                         notation: NotationExpression::Identifier("T".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
                         ParamToken::Object(Vec::new(), Vec::new()),
                     ],
                 }],
@@ -1702,7 +1814,7 @@ mod tests {
                         notation: NotationExpression::Identifier("T".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
                         ParamToken::Object(
                             vec![ParameterGroup {
                                 parameterizations: Vec::new(),
@@ -1719,7 +1831,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; T := {|x};",
+            "%slate \"test\"; T := { | x};",
             Document {
                 metamodel: Some(TestMetaModel::new_ref()),
                 definitions: vec![ParameterGroup {
@@ -1728,10 +1840,13 @@ mod tests {
                         notation: NotationExpression::Identifier("T".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
                         ParamToken::Object(
                             Vec::new(),
-                            vec![ParamToken::Token(Token::Identifier("x".into()))],
+                            vec![ParamToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 }],
@@ -1748,7 +1863,7 @@ mod tests {
                         notation: NotationExpression::Identifier("T".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
                         ParamToken::Object(
                             vec![
                                 ParameterGroup {
@@ -1758,8 +1873,14 @@ mod tests {
                                             notation: NotationExpression::Identifier("i".into()),
                                         }],
                                         data: vec![
-                                            ParamToken::Token(Token::Keyword(":".into())),
-                                            ParamToken::Token(Token::Identifier("I".into())),
+                                            ParamToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            ParamToken::Token(Token::Identifier(
+                                                "I".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
                                         ],
                                     }],
                                     params: vec![
@@ -1771,8 +1892,14 @@ mod tests {
                                         },
                                     ],
                                     data: vec![
-                                        ParamToken::Token(Token::Keyword(":".into())),
-                                        ParamToken::Token(Token::Identifier("X".into())),
+                                        ParamToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        ParamToken::Token(Token::Identifier(
+                                            "X".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                     ],
                                 },
                                 ParameterGroup {
@@ -1782,8 +1909,14 @@ mod tests {
                                             notation: NotationExpression::Identifier("j".into()),
                                         }],
                                         data: vec![
-                                            ParamToken::Token(Token::Keyword(":".into())),
-                                            ParamToken::Token(Token::Identifier("J".into())),
+                                            ParamToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            ParamToken::Token(Token::Identifier(
+                                                "J".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
                                         ],
                                     }],
                                     params: vec![
@@ -1795,18 +1928,38 @@ mod tests {
                                         },
                                     ],
                                     data: vec![
-                                        ParamToken::Token(Token::Keyword(":".into())),
-                                        ParamToken::Token(Token::Identifier("Y".into())),
+                                        ParamToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        ParamToken::Token(Token::Identifier(
+                                            "Y".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
                                     ],
                                 },
                             ],
                             vec![
-                                ParamToken::Token(Token::Identifier("a".into())),
-                                ParamToken::Token(Token::ReservedChar('|')),
-                                ParamToken::Token(Token::Identifier("b".into())),
+                                ParamToken::Token(Token::Identifier(
+                                    "a".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                ParamToken::Token(Token::ReservedChar(
+                                    '|',
+                                    TokenIsolation::Isolated,
+                                    TokenIsolation::Isolated,
+                                )),
+                                ParamToken::Token(Token::Identifier(
+                                    "b".into(),
+                                    IdentifierType::Unquoted,
+                                )),
                             ],
                         ),
-                        ParamToken::Token(Token::ReservedChar('|')),
+                        ParamToken::Token(Token::ReservedChar(
+                            '|',
+                            TokenIsolation::Isolated,
+                            TokenIsolation::Isolated,
+                        )),
                         ParamToken::Object(
                             vec![ParameterGroup {
                                 parameterizations: Vec::new(),
@@ -1832,7 +1985,7 @@ mod tests {
                         notation: NotationExpression::Identifier("ℕ".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
                         ParamToken::Object(
                             vec![
                                 ParameterGroup {
@@ -1849,8 +2002,14 @@ mod tests {
                                             notation: NotationExpression::Identifier("n".into()),
                                         }],
                                         data: vec![
-                                            ParamToken::Token(Token::Keyword(":".into())),
-                                            ParamToken::Token(Token::Identifier("ℕ".into())),
+                                            ParamToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            ParamToken::Token(Token::Identifier(
+                                                "ℕ".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
                                         ],
                                     }],
                                     params: vec![Parameter {
@@ -1882,12 +2041,19 @@ mod tests {
                         notation: NotationExpression::Identifier("x".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":=".into())),
-                        ParamToken::Token(Token::Identifier("T".into())),
-                        ParamToken::Token(Token::ReservedChar('.')),
+                        ParamToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("T".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::ReservedChar(
+                            '.',
+                            TokenIsolation::StronglyConnected,
+                            TokenIsolation::StronglyConnected,
+                        )),
                         ParamToken::Paren(
                             '{',
-                            vec![ParamToken::Token(Token::Identifier("t".into()))],
+                            vec![ParamToken::Token(Token::Identifier(
+                                "t".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 }],
@@ -1963,8 +2129,8 @@ mod tests {
                         notation: NotationExpression::Identifier("x".into()),
                     }],
                     data: vec![
-                        ParamToken::Token(Token::Keyword(":".into())),
-                        ParamToken::Token(Token::Identifier("T".into())),
+                        ParamToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        ParamToken::Token(Token::Identifier("T".into(), IdentifierType::Unquoted)),
                     ],
                 }],
             },

@@ -9,6 +9,8 @@ pub trait MetaModelGetter {
 pub trait MetaModel {
     fn name(&self) -> &str;
 
+    fn is_definition_symbol(&self, s: &str) -> bool;
+
     fn parameterization(&self, start_paren: char) -> Option<&dyn Parameterization>;
     fn object(&self, start_paren: char) -> Option<&dyn Object>;
 }
@@ -75,6 +77,10 @@ pub mod test_helpers {
     impl MetaModel for TestMetaModel {
         fn name(&self) -> &str {
             "test"
+        }
+
+        fn is_definition_symbol(&self, s: &str) -> bool {
+            s.starts_with(':')
         }
 
         fn parameterization(&self, start_paren: char) -> Option<&dyn Parameterization> {

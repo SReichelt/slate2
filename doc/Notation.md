@@ -12,8 +12,8 @@ Goals:
 * Forward references should be possible, even to symbols that introduce custom notations.
 * We want to enable as much standard mathematical notation as possible under the first three
   constraints.
-* Every print/parse cycle must round-trip reliably. (This implies that ambiguity is only allowed in
-  cases where it can be resolved by inserting parentheses.)
+* We want every print/parse cycle to round-trip reliably. (This implies that ambiguity is only
+  allowed in cases where it can be resolved by inserting parentheses.)
 
 To achieve these goals, the syntax is split into multiple layers, each of which adds more structure.
 This can be regarded as an extension of the traditional distinction between tokenization and
@@ -30,132 +30,169 @@ tokens is as follows.
 
 * Parenthesis characters, including many non-ASCII parentheses, vertical lines, and special
   quotation symbols.
-* Punctuation, limited to `.,;`. Note that a dot may be part of a number; see below. Moreover,
-  multiple dots directly following each other are treated equivalently to a keyword.
+* Punctuation, limited to `.,;`. Note that a dot may be part of a number instead; see below.
+* The subscript and superscript separator characters `_` and `^`.
 * Keywords, which consist of the character `%` possibly followed by an unquoted identifier as
   defined below.
 * Numbers, which can either start with an ASCII numeral or with a dot. A number starting with an
   ASCII numeral can contain ASCII alphanumeric characters or underscores, followed by an optional
   dot which can be followed by more ASCII alphanumeric characters as well as `+` or `-` if preceded
   by `e` or `E`. A number starting with a dot must be followed by an ASCII numeral and can only
-  follow a non-dot punctuation character, an opening parenthesis, a number (but not immediately), or
-  an unquoted identifier ending with a symbol (see below), possibly separated by whitespace.
-  Afterwards, the same rules apply as for the part of a number following a dot.
-  A number cannot follow a dot which is a punctuation symbol, even when separated by whitespace.
+  follow a non-dot punctuation character, an opening parenthesis, a number (but not immediately, and
+  not if the number ends with a dot), or an unquoted identifier consisting of symbol characters (see
+  below), possibly separated by whitespace. Afterwards, the same rules apply as for the part of a
+  number following a dot.
+  A number cannot follow a single dot, even when separated by whitespace. (It becomes an identifier
+  then.)
 * String literals surrounded by single or double quotes. These literals may contain the same escape
   sequences as Rust, and any character except ASCII control characters (which includes line breaks).
   (The backtick character is reserved for future use.)
 * Quoted identifiers, which consist of the character `@` followed by a string in double quotes.
-* Unquoted identifiers, consisting of groups of either symbols or alphanumeric characters, but not
-  both. The two types of characters can potentially span the entire unicode range, but we treat
-  uncategorized characters as alphanumeric. Underscores, apostrophes, and quotation marks are
-  allowed everywhere in identifiers, except that an unquoted identifier cannot start with an
-  apostrophe. These three characters can be used to connect groups of identifiers and symbols. An
-  unquoted identifier cannot start with `%` or `@`, or contain any of the parenthesis or punctuation
-  characters mentioned above, nor whitespace, ASCII control characters, or backticks. An identifier
-  cannot start with a numeral, except when the identifier follows a dot (possibly with whitespace
-  between).
-  An unquoted identifier starting with `:` is called a "definition symbol" and treated equivalently
-  to a keyword.
+* Unquoted identifiers, consisting of one of the following classes of characters.
+  * alphanumeric (which is the default for uncategorized characters),
+  * symbols,
+  * subscripts, or
+  * superscripts.
+
+  An unquoted identifier cannot start with `%` or `@` or the sequence `//` or `/*`, or contain any
+  of the parenthesis, punctuation, or subscript/superscript separator characters mentioned above,
+  nor whitespace, ASCII control characters, or backticks.
+  An unquoted identifier cannot start with a numeral, except when the identifier follows a dot
+  (possibly with whitespace between).
+  An unquoted identifier can optionally end with any number of apostrophes and quotation marks.
+  Quoted and unquoted identifiers are treated equivalently if they consist of the same characters,
+  except when explicitly specified otherwise.
 
 Tokens may be separated by whitespace and comments. Line comments start with `//`; block comments
-start with `/*` and end with `*/`, and may be nested. Therefore, unquoted identifiers are not
-allowed to start with `//` or `/*`. (The use of these character sequences at other positions within
-identifiers is allowed but discouraged.)
+start with `/*` and end with `*/`, and may be nested. Usually, whitespace between tokens has no
+syntactic significance other than delimiting the tokens. An exception is that reserved characters
+may behave differently depending on whether they are preceded and/or followed by whitespace (not
+including comments).
 
 ## Parenthesis Matching
 
 Each parenthesis character that has a clear "opening" and "closing" variant must appear in pairs,
 resulting in a token tree. In subsequent layers, the entire range from an opening to its closing
-parenthesis is regarded as a single token.
+parenthesis is regarded as a single element.
 
-(Since this rule does not apply to vertical lines, notation like `|x|` requires additional
-parentheses in contexts where the left vertical bar may also be regarded as a delimiter. Moreover,
-the requirement rules out certain particular notation like `]x[` or `[0,1)`.)
+Vertical line characters are classified as "opening" or "closing" based on the two adjacent
+characters, independently of the tokens that these characters may be part of.
+
+A vertical line is considered a possible opening parenthesis if it is located at the beginning of a
+document or preceded by
+* whitespace or
+* an opening parenthesis (that is not a vertical line) or
+* a punctuation or superscript or subscript separator character.
+
+It is considered a possible closing parenthesis if it is located at the end of the document or
+followed by
+* whitespace or
+* a closing parenthesis (that is not a vertical line) or
+* a punctuation or superscript or subscript separator character or
+* a character classified as subscript or superscript.
+
+It is considered an opening/closing parenthesis if exactly one of the two conditions is satisfied.
 
 ## Parameter Identification
 
 A parameter generally serves two functions.
 * It has a certain _scope_, in which the parameter can be referenced using its name or more
   generally its notation.
-* If it is part of a surrounding entity that can be referenced, then such a reference contains an
-  _argument_ for the parameter (which may, however, be empty for a given type of parameter).
+* If it is part of a surrounding entity that can be referenced, then such a reference may contain an
+  _argument_ for the parameter.
 
-We reserve a fixed basic syntax for all parameters, so that we can handle references and arguments
-fairly generically.
+In general, parameters can be combined into _groups_, where multiple parameters in a group are
+separated by `,`, and multiple groups can follow each other separated by `;`. The last group in a
+sequence can optionally be delimited by `;` a well. The scope of a parameter within a sequence of
+groups always covers the following groups, but may extend further.
 
-At top level, each document consists of a header followed by a series of global parameters (which
-are usually definitions). Both the header and each parameter are delimited by `;`. The header
-must be the keyword `slate` followed by the name of a _metamodel_ (roughly analogous to a schema)
-for the document.
+All parameters follow the same general syntax, but there are different locations where parameters
+may appear, with different surrounding syntax that determines that a given sequence of tokens
+denotes a parameter, and what the scope of that parameter is.
+* Each document consists of a header followed by a sequence of top-level parameter groups whose
+  scope is the entire document (and which are usually "definitions" in some sense). The header and
+  the first parameter group (if present) are separated by `;`, equivalently to the separation of
+  groups. The header must be the keyword `slate` followed by the name of a _metamodel_ (roughly
+  analogous to a schema) for the document.
+* The metamodel specifies zero or more pairs of parentheses that may be used to additionally
+  combine parameter groups into _sections_, such that a section may contain zero or more parameter
+  groups. A semicolon is required when a section follows a parameter group or the header, but is
+  optional at the end of a section.
+* The metamodel also specifies zero or more other pairs of parentheses that may be used for
+  _higher-order parameterization_ of parameters. Each parameter group or section may then be
+  prefixed by an arbitrary number of these parentheses, each of which contains zero or more
+  parameter groups and/or sections. The scope of each higher-order parameter extends from the next
+  higher-order parameter group (if any) to the end of the parameterized group or section.
+* Moreover, the metamodel specifies zero or more unquoted identifiers as _mapping symbols_. If a
+  mapping symbol appears in a location that does not play any special role within the parameter
+  identification layer, then it indicates a _mapping_ that extends to the left until the previous
+  comma, semicolon, or opening parenthesis, and to the right until the next comma, semicolon, or
+  closing parenthesis. The left part of the mapping defines parameters whose scope extends to the
+  right part of the mapping. The left part must be either
+  * empty, or
+  * a single parameter, or
+  * a pair of specific parentheses specified by the metamodel that encloses zero or more parameter
+    groups or sections.
+* Moreover, the metamodel may reserve zero or more specific pairs of parentheses for _objects_, each
+  together with a given vertical line character that will be used as an internal separator (but only
+  if it is not considered an opening or closing parenthesis at that location). Whenever these
+  parentheses occur in a location that does not play any special role within the parameter
+  identification layer, the contents are threated as parameters, called _items_, with a syntax that
+  differs from other parameters.
+  * Each item starts with a _notation expression_ as described below, optionally followed by
+    arbitrary content within parentheses that were reserved by the metamodel, and then optionally
+    followed by a mapping symbol and further arbitrary content, and finally followed by either the
+    separator character or the end of the object.
+  * The separator character may optionally be followed by one or more parameter groups and/or
+    sections, which parameterize the item in the sense that their scope extends from the notation
+    expression to the separator character. These parameters are again followed by either the
+    separator character or the end of the object.
+  * Arbitrary content may follow, including separator characters. The scope of the item includes
+    this content (but the scopes of its parameterizations do not). The item ends when two separator
+    characters are placed next to each other.
 
-The metamodel specifies other locations where parameters may occur. We distinguish between two
-general cases.
-
-* There may be an arbitrary number of _parameterizations_, each of which reserves a specific pair
-  of parentheses (such as `[]`) at four locations:
-  * after an opening parenthesis,
-  * after a comma,
-  * after a semicolon, or
-  * after another parameterization.
-
-  The pair of parentheses encloses a group of parameters separated by `;`. The scope of each
-  parameter extends from the next parameter (if any) to the next outer semicolon or closing
-  parenthesis.
-
-* In addition, there may be an arbitrary number of _objects_, each of which reserves a specific pair
-  of parentheses at every location except following a dot. The syntax for parameters within these
-  parentheses is the same as above, except that the list of parameters may be delimited by a
-  specified vertical line character. However, the parameters defined within an object are never
-  directly in scope.
-
-Each individual parameter consists of the following, in series.
-* Optionally an additional parameterization, as described above.
-* The name or more generally the notation of the parameter, or of several parameters separated by
-  `,`.
-* The data of this parameter (or these parameters, respectively), which must start with either a
-  definition symbol or a keyword, or be empty. (We will write this as `: ...` below.)
-
-For example, if parameterization with `[]` is defined in the metamodel, the following are some
-possible lists of parameters.
-* `[x : ...]` declares one parameter `x`.
-* `[x : ...; y : ...]` declares two parameters `x` and `y`.
-* `[x,y : ...]` declares two parameters `x` and `y` that have the same data.
-* `[[x : ...] f(x) : ...]` declares a parameter `f` that is additionally parameterized by `x`, i.e.
-  a second-order parameter, in function notation.
-* `[[x : ...] f(x),g(x) : ...]` declares two parameters `f` and `g` that are additionally
-  parameterized by `x`.
-* `[[a,b : ...] a + b : ...]` declares a parameter `+` that is additionally parameterized by `a`
-  and `b`, in infix notation.
-* In principle, this scheme may be continued recursively, but parameterizations must be included in
-  the notation. E.g. `[[[x : ...] f(x) : ...] g([x] f(x)) : ...]` declares a third-order parameter
-  `g`; `[[[[x : ...] f(x) : ...] g([x] f(x)) : ...] h([[x] f(x)] g([x] f(x))) : ...]` declares a
-  fourth-order parameter `h`.
-
-The notation expression of a (potentially additionally parameterized) parameter is recursively any
-of the following.
+A parameter group is not simply a list of parameters, but consists of a comma-separated list of
+_notation expressions_ for each parameter, optionally followed by _data_ separated by either a
+keyword or an unquoted identifier that is reserved for this purpose by the metamodel. A notation
+expression is recursively any of the following.
 * An identifier.
+* A subscript or superscript separator.
 * A sequence of notation expressions.
-* A comma-separated list of notation expressions surrounded by a chosen pair of parentheses or
-  vertical lines, unless that pair of parentheses has been reserved by the metamodel.
-  * If a pair of parentheses is reserved for parameterization, then it cannot be used at the
-    beginning of a notation expression of a local or global parameter, or inside a notation at a
-    location where parameterization is permitted.
-  * If a pair of parentheses is reserved for an object, then it cannot be used in a notation
-    expression, except at the beginning of the notation of an object parameter.
-  * The metamodel may reserve additional pairs of parentheses.
-  * The comma-separated list may be empty. A comma after the last list item is ignored in the sense
-    that the notation expressions with and without the trailing comma are considered equivalent.
-* A reference to one of the additional parameters, identified by a notation expression that is
-  equivalent to the notation expression of the parameter. If the parameter is additionally
-  parameterized, the reference must be parameterized equivalently, but concrete notations as well as
-  data may differ. (It is recommended to use the same notation but to omit data.)
+* A comma-separated list of notation expressions surrounded by an arbitrary pair of parentheses.
+  Whether a given pair of parentheses is allowed depends on reservations made by the metamodel.
+  The comma-separated list may be empty. A comma after the last list item is ignored in the sense
+  that the notation expressions with and without the trailing comma are considered equivalent.
+* If a higher-order parameterization exists, a parameter within that parameterization can be
+  referenced using a notation expression that is equivalent to the notation expression of the
+  parameter, in the following sense.
+  * If the referenced parameter does not have a higher-order parameterization again, the notation
+    expression must match exactly.
+  * If it does have a higher-order parameterization, then the notation expression must include a
+    mapping symbol and be interpretable as a mapping. The number of parameters on the left of the
+    mapping symbol must match the number of higher-order parameters, and the number of parameters in
+    their higher-order parameterizations must match recursively. The right side of the mapping must
+    match the expected notation when the matching parameters are substituted.
+
   This alternative takes precedence over all others. However, the entire notation expression is not
   allowed to consist purely of a parameter. Moreover, a notation expression which is parameterized
   or a sequence cannot appear within a sequence.
 
-The syntax for global parameters is identical except for the lack of parentheses and the requirement
-to end the last parameter with `;`. Their scope is the entire document.
+For example, if the metamodel defines `:` as a notation expression delimiter, higher-order
+parameterization with `[]`, and `↦` as a mapping symbol, the following are some possible lists of
+parameters.
+* `x : ...` declares one parameter `x`.
+* `x : ...; y : ...` declares two parameters `x` and `y`.
+* `x,y : ...` declares two parameters `x` and `y` that have the same data.
+* `[x : ...] f(x) : ...` declares a parameter `f` that is additionally parameterized by `x`, i.e.
+  a second-order parameter, in function notation.
+* `[x : ...] f(x),g(x) : ...` declares two parameters `f` and `g` that are additionally
+  parameterized by `x`.
+* `[a,b : ...] a + b : ...; [c : ...] -c` declares a parameter `+` that is additionally
+  parameterized by `a` and `b`, in infix notation, and a parameter `-` that is additionally
+  parameterized by `c`, in prefix notation.
+* `[[x : ...] f(x) : ...] g(x ↦ f(x)) : ...` declares a third-order parameter `g`.
+* `[[[x : ...] f(x) : ...] g(x ↦ f(x)) : ...] h(([x] f(x)) ↦ g(x ↦ f(x))) : ...` declares a
+  fourth-order parameter `h`.
 
 ## Expression Identification
 
@@ -178,12 +215,15 @@ _operator precedence_ and _associativity_ determine which match to use. Both are
 metamodel at the token level; they cannot be overridden by custom notations. If multiple matches are
 still possible after taking precedence into account, an error is reported.
 
-In contrast to global and local parameters, parameters within objects cannot be referenced directly
-as they lack a scope of their own. Instead, a reference must be prefixed by an expression followed
-by a dot. The metamodel defines how to evaluate that expression in order to determine the object in
-which to look for the parameter (or alternatively, that the tokens following the dot are not a
-reference to an object parameter). The evaluation may require parsing additional files, due to
-imports.
+Parameters within objects are often referenced at locations where they are not directly in scope.
+There are two possibilities.
+* A reference can be prefixed by an expression followed by a dot. The metamodel defines how to
+  evaluate that expression in order to determine the object in which to look for the item (or that
+  the tokens following the dot are not a reference to an item). The evaluation may require parsing
+  additional files, due to imports.
+* At certain locations, the metamodel can determine via a simplified type inference algorithm that
+  the expected type is an object. In these cases, items of the object may be referenced without
+  qualification.
 
 To enable object lookup, the expression identification layer must be evaluated in two passes. In the
 first pass, expressions are matched against global and local parameters as described above, as well
