@@ -202,8 +202,8 @@ mod tests {
                 },
                 TestDiagnosticMessage {
                     range_text: "".into(),
-                    severity: Severity::Error,
-                    msg: "';' expected".into(),
+                    severity: Severity::Warning,
+                    msg: "top-level item should be terminated with ';'".into(),
                 },
             ],
         )?;

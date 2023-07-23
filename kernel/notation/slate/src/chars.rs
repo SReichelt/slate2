@@ -19,11 +19,11 @@ pub fn is_post_weakly_connecting_char(c: char) -> bool {
         || is_closing_parenthesis(c)
 }
 
-fn is_basic_punctuation_char(c: char) -> bool {
+pub fn is_basic_punctuation_char(c: char) -> bool {
     matches!(c, '.' | ',' | ';')
 }
 
-fn is_script_separator_char(c: char) -> bool {
+pub fn is_script_separator_char(c: char) -> bool {
     matches!(c, '_' | '^')
 }
 

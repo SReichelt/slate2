@@ -2,9 +2,12 @@ use std::{borrow::Cow, mem::take, ops::Range, rc::Rc};
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
-use crate::{metamodel::*, parenthesis_matcher::*, tokenizer::*};
-
-// TODO: Use mathematical notation for parameterized notations.
+use crate::{
+    chars::{is_script_separator_char, is_symbol_char},
+    metamodel::*,
+    parenthesis_matcher::*,
+    tokenizer::*,
+};
 
 // `ParameterEvent` serializes `ParamToken` (defined in tests below) into events.
 #[derive(Clone, PartialEq, Debug)]
@@ -20,6 +23,7 @@ impl Event for ParameterEvent<'_> {}
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum NotationExpression<'a> {
+    ReservedChar(char),
     Identifier(Cow<'a, str>),
     Sequence(Vec<NotationExpression<'a>>),
     Paren(char, Vec<NotationExpression<'a>>),
@@ -100,9 +104,34 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
         range: Range<&Self::Marker>,
         mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) {
+        self.token_event(state, Some(event), range, &mut out)
+    }
+
+    fn next_pass(
+        self,
+        mut state: Self::State,
+        end_marker: &Self::Marker,
+        mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
+    ) -> Option<Self::NextPass> {
+        self.token_event(&mut state, None, end_marker..end_marker, &mut out);
+        None
+    }
+}
+
+// Consumes and outputs the event if it is part of an inner group or parameterization. Otherwise
+// returns the event again, so that the client can decide to just output it, or to end the
+// expression and then process it.
+impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
+    fn token_event(
+        &self,
+        state: &mut ParameterIdentifierState<'a, Src::Marker>,
+        event: Option<TokenEvent<'a>>,
+        range: Range<&Src::Marker>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+    ) {
         match &state.metamodel_state {
             MetaModelState::Start => {
-                if let TokenEvent::Token(Token::Keyword(keyword)) = event {
+                if let Some(TokenEvent::Token(Token::Keyword(keyword))) = event {
                     if keyword == "%slate" {
                         state.metamodel_state = MetaModelState::AfterKeyword;
                     } else {
@@ -124,7 +153,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
             }
 
             MetaModelState::AfterKeyword => {
-                if let TokenEvent::Token(Token::DoubleQuotedString(name)) = event {
+                if let Some(TokenEvent::Token(Token::DoubleQuotedString(name))) = event {
                     state.metamodel_state = MetaModelState::AfterName {
                         name,
                         name_range: range.start.clone()..range.end.clone(),
@@ -140,7 +169,17 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
             }
 
             MetaModelState::AfterName { name, name_range } => {
-                if let TokenEvent::Token(Token::ReservedChar(';', _, _)) = event {
+                if matches!(
+                    event,
+                    None | Some(TokenEvent::Token(Token::ReservedChar(';', _, _)))
+                ) {
+                    if event.is_none() {
+                        self.source.diagnostic(
+                            &name_range.end..&name_range.end,
+                            Severity::Warning,
+                            format!("metamodel reference should be terminated with ';'"),
+                        );
+                    }
                     match self.metamodel_getter.metamodel(name) {
                         Ok(metamodel) => {
                             out(
@@ -159,8 +198,11 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
                         }
                     }
                 } else {
-                    self.source
-                        .diagnostic(range, Severity::Error, format!("';' expected"));
+                    self.source.diagnostic(
+                        &name_range.end..&name_range.end,
+                        Severity::Error,
+                        format!("';' expected"),
+                    );
                     state.metamodel_state = MetaModelState::Failed;
                 }
             }
@@ -170,9 +212,10 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
                     &mut state.list_state,
                     event,
                     range,
-                    &mut out,
+                    out,
                     None,
                     metamodel.0.as_ref(),
+                    true,
                 );
             }
 
@@ -180,75 +223,20 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParameterIdentifierPass<
         }
     }
 
-    fn next_pass(
-        self,
-        mut state: Self::State,
-        end_marker: &Self::Marker,
-        mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
-    ) -> Option<Self::NextPass> {
-        match &state.metamodel_state {
-            MetaModelState::Start
-            | MetaModelState::AfterKeyword
-            | MetaModelState::AfterName {
-                name: _,
-                name_range: _,
-            } => {
-                self.source.diagnostic(
-                    end_marker..end_marker,
-                    Severity::Error,
-                    format!("incomplete file header"),
-                );
-            }
-
-            MetaModelState::Succeeded(metamodel) => {
-                if let Some(group_state) = &mut state.list_state.current_group {
-                    if let Some(range) = self.parameter_group_event(
-                        group_state,
-                        TokenEvent::Token(Token::ReservedChar(
-                            ';',
-                            TokenIsolation::Isolated,
-                            TokenIsolation::Isolated,
-                        )),
-                        end_marker..end_marker,
-                        &mut out,
-                        None,
-                        metamodel.0.as_ref(),
-                    ) {
-                        out(ParameterEvent::ParamGroup(GroupEvent::End), range);
-                    }
-                    self.source.diagnostic(
-                        &group_state.current_end..&group_state.current_end,
-                        Severity::Error,
-                        format!("';' expected"),
-                    );
-                }
-            }
-
-            MetaModelState::Failed => {}
-        }
-
-        None
-    }
-}
-
-// Consumes and outputs the event if it is part of an inner group or parameterization. Otherwise
-// returns the event again, so that the client can decide to just output it, or to end the
-// expression and then process it.
-impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
     fn expression_event<'b>(
         &self,
         state: &mut ExpressionState<'a, Src::Marker>,
-        event: TokenEvent<'a>,
+        event: Option<TokenEvent<'a>>,
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         metamodel: &dyn MetaModel,
         allow_parameterization: bool,
         allow_objects: bool,
-    ) -> Option<(TokenEvent<'a>, Range<&'b Src::Marker>)> {
+    ) -> Option<(Option<TokenEvent<'a>>, Range<&'b Src::Marker>)> {
         match state {
             ExpressionState::Start => {
                 if allow_parameterization {
-                    if let TokenEvent::Paren(GroupEvent::Start(paren)) = event {
+                    if let Some(TokenEvent::Paren(GroupEvent::Start(paren))) = event {
                         if let Some(_) = metamodel.parameterization(paren) {
                             *state = ExpressionState::Parameterization(Box::new(
                                 ParameterListState::new(None),
@@ -277,6 +265,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     out,
                     None,
                     metamodel,
+                    false,
                 ) {
                     *state = ExpressionState::Start;
                 }
@@ -284,7 +273,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             }
 
             ExpressionState::TopLevel { after_dot } => {
-                if let TokenEvent::Paren(GroupEvent::Start(paren)) = event {
+                if let Some(TokenEvent::Paren(GroupEvent::Start(paren))) = event {
                     if allow_objects && !*after_dot {
                         if let Some(object) = metamodel.object(paren) {
                             out(ParameterEvent::Object(GroupEvent::Start(())), range);
@@ -294,17 +283,19 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             return None;
                         }
                     }
-                    out(ParameterEvent::Token(event), range);
+                    out(ParameterEvent::Token(event.unwrap()), range);
                     *state = ExpressionState::Group(Box::new(ExpressionState::Start));
                     None
                 } else {
                     *after_dot = false;
-                    if let TokenEvent::Token(Token::ReservedChar(c, _, _)) = event {
+                    if let Some(TokenEvent::Token(Token::ReservedChar(c, _, _))) = event {
                         if c == ',' || c == ';' {
                             *state = ExpressionState::Start;
                         } else if c == '.' {
                             *after_dot = true;
                         }
+                    } else if event.is_none() {
+                        *state = ExpressionState::Start;
                     }
                     Some((event, range))
                 }
@@ -314,10 +305,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 if let Some((event, range)) =
                     self.expression_event(group, event, range, out, metamodel, true, allow_objects)
                 {
-                    if let TokenEvent::Paren(GroupEvent::End) = event {
+                    if matches!(event, None | Some(TokenEvent::Paren(GroupEvent::End))) {
                         *state = ExpressionState::TopLevel { after_dot: false };
                     }
-                    out(ParameterEvent::Token(event), range);
+                    if let Some(event) = event {
+                        out(ParameterEvent::Token(event), range);
+                    }
                 }
                 None
             }
@@ -330,6 +323,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     out,
                     None,
                     metamodel,
+                    false,
                 ) {
                     *state = ExpressionState::TopLevel { after_dot: false };
                     out(ParameterEvent::Object(GroupEvent::End), range);
@@ -342,13 +336,14 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
     fn parameter_list_event<'b>(
         &self,
         state: &mut ParameterListState<'a, Src::Marker>,
-        event: TokenEvent<'a>,
+        event: Option<TokenEvent<'a>>,
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         result_notations: Option<&mut Vec<NotationExpression<'a>>>,
         metamodel: &dyn MetaModel,
+        top_level: bool,
     ) -> Option<Range<&'b Src::Marker>> {
-        let is_group_end = event == TokenEvent::Paren(GroupEvent::End);
+        let is_group_end = matches!(event, None | Some(TokenEvent::Paren(GroupEvent::End)));
 
         if let Some(expr_state) = &mut state.after_special_delimiter {
             if let Some((event, range)) =
@@ -357,10 +352,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 if is_group_end {
                     return Some(range);
                 }
-                out(ParameterEvent::Token(event), range);
+                if let Some(event) = event {
+                    out(ParameterEvent::Token(event), range);
+                }
             }
         } else {
-            let is_special_delimiter = matches!(event, TokenEvent::Token(Token::ReservedChar(c, _, _)) if Some(c) == state.special_delimiter);
+            let is_special_delimiter = matches!(event, Some(TokenEvent::Token(Token::ReservedChar(c, _, _))) if Some(c) == state.special_delimiter);
 
             if let Some(group_state) = &mut state.current_group {
                 if let Some(range) = self.parameter_group_event(
@@ -371,12 +368,20 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     result_notations,
                     metamodel,
                 ) {
+                    let group_state = state.current_group.take().unwrap();
+                    let current_end = group_state.current_end;
                     out(
                         ParameterEvent::ParamGroup(GroupEvent::End),
-                        &group_state.current_end..&group_state.current_end,
+                        &current_end..&current_end,
                     );
-                    state.current_group = None;
                     if is_group_end {
+                        if top_level {
+                            self.source.diagnostic(
+                                &current_end..&current_end,
+                                Severity::Warning,
+                                format!("top-level item should be terminated with ';'"),
+                            );
+                        }
                         return Some(range);
                     }
                     if is_special_delimiter {
@@ -407,6 +412,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         out,
                         result_notations,
                         metamodel,
+                        top_level,
                     );
                 }
             }
@@ -418,7 +424,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
     fn parameter_group_event<'b>(
         &self,
         state: &mut ParameterGroupState<'a, Src::Marker>,
-        event: TokenEvent<'a>,
+        event: Option<TokenEvent<'a>>,
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         mut result_notations: Option<&mut Vec<NotationExpression<'a>>>,
@@ -427,12 +433,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         match &mut state.content_state {
             ParameterGroupContentState::Start => {
                 match event {
-                    TokenEvent::Token(Token::ReservedChar(c, _, _))
+                    Some(TokenEvent::Token(Token::ReservedChar(c, _, _)))
                         if c == ';' || Some(c) == state.special_delimiter =>
                     {
                         return Some(range);
                     }
-                    TokenEvent::Paren(GroupEvent::Start(paren)) => {
+                    Some(TokenEvent::Paren(GroupEvent::Start(paren))) => {
                         if let Some(_) = metamodel.parameterization(paren) {
                             state.content_state = ParameterGroupContentState::Parameterization(
                                 Box::new(ParameterListState::new(None)),
@@ -461,6 +467,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     out,
                     Some(&mut state.parameterizations),
                     metamodel,
+                    false,
                 ) {
                     state.content_state = ParameterGroupContentState::Start;
                     state.current_end = range.end.clone();
@@ -508,15 +515,15 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         );
                     }
                     match event {
-                        TokenEvent::Paren(GroupEvent::End) => {
+                        None | Some(TokenEvent::Paren(GroupEvent::End)) => {
                             return Some(range);
                         }
-                        TokenEvent::Token(Token::ReservedChar(c, _, _))
+                        Some(TokenEvent::Token(Token::ReservedChar(c, _, _)))
                             if c == ';' || Some(c) == state.special_delimiter =>
                         {
                             return Some(range);
                         }
-                        TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
+                        Some(TokenEvent::Token(Token::ReservedChar(',', _, _))) => {
                             *opt_notation_state = None;
                         }
                         _ => {
@@ -540,15 +547,15 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     self.expression_event(expr_state, event, range, out, metamodel, false, true)
                 {
                     match event {
-                        TokenEvent::Paren(GroupEvent::End) => {
+                        None | Some(TokenEvent::Paren(GroupEvent::End)) => {
                             return Some(range);
                         }
-                        TokenEvent::Token(Token::ReservedChar(c, _, _))
+                        Some(TokenEvent::Token(Token::ReservedChar(c, _, _)))
                             if c == ';' || Some(c) == state.special_delimiter =>
                         {
                             return Some(range);
                         }
-                        _ => {
+                        Some(event) => {
                             state.current_end = range.end.clone();
                             out(ParameterEvent::Token(event), range);
                         }
@@ -564,13 +571,21 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         &self,
         state: &mut NotationExpressionState<'a, Src::Marker>,
         parameterizations: &Vec<NotationExpression<'a>>,
-        event: TokenEvent<'a>,
+        event: Option<TokenEvent<'a>>,
         range: Range<&'b Src::Marker>,
         metamodel: &dyn MetaModel,
-    ) -> Option<(TokenEvent<'a>, Range<&'b Src::Marker>)> {
+    ) -> Option<(Option<TokenEvent<'a>>, Range<&'b Src::Marker>)> {
         match &mut state.current_item {
             NotationExpressionItemState::Start => match event {
-                TokenEvent::Token(Token::Identifier(identifier, identifier_type))
+                Some(TokenEvent::Token(Token::ReservedChar(c, _, _)))
+                    if is_script_separator_char(c) =>
+                {
+                    state
+                        .previous_items
+                        .push(NotationExpression::ReservedChar(c));
+                    state.current_end = range.end.clone();
+                }
+                Some(TokenEvent::Token(Token::Identifier(identifier, identifier_type)))
                     if !(identifier_type == IdentifierType::Unquoted
                         && metamodel.is_definition_symbol(&identifier)) =>
                 {
@@ -579,7 +594,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     );
                     state.current_end = range.end.clone();
                 }
-                TokenEvent::Paren(GroupEvent::Start(paren)) => {
+                Some(TokenEvent::Paren(GroupEvent::Start(paren))) => {
                     state.current_item = NotationExpressionItemState::Paren(
                         paren,
                         Box::new(NotationExpressionListState {
@@ -603,7 +618,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     metamodel,
                 ) {
-                    if let TokenEvent::Paren(GroupEvent::End) = event {
+                    if matches!(event, None | Some(TokenEvent::Paren(GroupEvent::End))) {
                         state.previous_items.push(
                             NotationExpression::Paren(*paren, take(&mut list_state.previous_items))
                                 .identify(parameterizations),
@@ -622,14 +637,14 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         &self,
         state: &mut NotationExpressionListState<'a, Src::Marker>,
         parameterizations: &Vec<NotationExpression<'a>>,
-        event: TokenEvent<'a>,
+        event: Option<TokenEvent<'a>>,
         range: Range<&'b Src::Marker>,
         metamodel: &dyn MetaModel,
-    ) -> Option<(TokenEvent<'a>, Range<&'b Src::Marker>)> {
+    ) -> Option<(Option<TokenEvent<'a>>, Range<&'b Src::Marker>)> {
         match &mut state.current_item {
             NotationExpressionListItemState::Start => {
                 match event {
-                    TokenEvent::Paren(GroupEvent::End) => {
+                    Some(TokenEvent::Paren(GroupEvent::End)) => {
                         if state.parameterizations.is_some() {
                             self.source.diagnostic(
                                 &range.start..&range.start,
@@ -639,7 +654,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         }
                         return Some((event, range));
                     }
-                    TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
+                    Some(TokenEvent::Token(Token::ReservedChar(',', _, _))) => {
                         if state.parameterizations.is_some() {
                             self.source.diagnostic(
                                 &range.start..&range.start,
@@ -656,7 +671,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         }
                         return None;
                     }
-                    TokenEvent::Paren(GroupEvent::Start(paren)) => {
+                    Some(TokenEvent::Paren(GroupEvent::Start(paren))) => {
                         if let Some(_) = metamodel.parameterization(paren) {
                             if state.parameterizations.is_none() {
                                 state.parameterizations = Some(Vec::new());
@@ -693,6 +708,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     &mut |_, _| {},
                     Some(state.parameterizations.as_mut().unwrap()),
                     metamodel,
+                    false,
                 ) {
                     state.current_item = NotationExpressionListItemState::Start;
                 }
@@ -725,10 +741,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         state.previous_items.push(notation);
                     }
                     match event {
-                        TokenEvent::Paren(GroupEvent::End) => {
+                        None | Some(TokenEvent::Paren(GroupEvent::End)) => {
                             return Some((event, range));
                         }
-                        TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
+                        Some(TokenEvent::Token(Token::ReservedChar(',', _, _))) => {
                             state.current_item = NotationExpressionListItemState::Start;
                             state.parameterizations = None;
                         }
@@ -2074,19 +2090,19 @@ mod tests {
             &[TestDiagnosticMessage {
                 range_text: "".into(),
                 severity: Severity::Error,
-                msg: "incomplete file header".into(),
+                msg: "metamodel reference expected".into(),
             }],
         )?;
         test_parameter_identification(
             "%slate \"test\"",
             Document {
-                metamodel: None,
+                metamodel: Some(TestMetaModel::new_ref()),
                 definitions: Vec::new(),
             },
             &[TestDiagnosticMessage {
                 range_text: "".into(),
-                severity: Severity::Error,
-                msg: "incomplete file header".into(),
+                severity: Severity::Warning,
+                msg: "metamodel reference should be terminated with ';'".into(),
             }],
         )?;
         test_parameter_identification(
@@ -2115,8 +2131,8 @@ mod tests {
             },
             &[TestDiagnosticMessage {
                 range_text: "".into(),
-                severity: Severity::Error,
-                msg: "';' expected".into(),
+                severity: Severity::Warning,
+                msg: "top-level item should be terminated with ';'".into(),
             }],
         )?;
         test_parameter_identification(
@@ -2136,8 +2152,8 @@ mod tests {
             },
             &[TestDiagnosticMessage {
                 range_text: "".into(),
-                severity: Severity::Error,
-                msg: "';' expected".into(),
+                severity: Severity::Warning,
+                msg: "top-level item should be terminated with ';'".into(),
             }],
         )?;
         Ok(())
