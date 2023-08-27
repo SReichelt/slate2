@@ -91,7 +91,8 @@ followed by
 * a punctuation or superscript or subscript separator character or
 * a character classified as subscript or superscript.
 
-It is considered an opening/closing parenthesis if exactly one of the two conditions is satisfied.
+It is considered an opening/closing parenthesis if exactly one of the two conditions is satisfied,
+and if it is not preceded or followed by itself.
 
 ## Parameter Identification
 
@@ -101,60 +102,67 @@ A parameter generally serves two functions.
 * If it is part of a surrounding entity that can be referenced, then such a reference may contain an
   _argument_ for the parameter.
 
-In general, parameters can be combined into _groups_, where multiple parameters in a group are
-separated by `,`, and multiple groups can follow each other separated by `;`. The last group in a
-sequence can optionally be delimited by `;` a well. The scope of a parameter within a sequence of
-groups always covers the following groups, but may extend further.
+Parameters may occur at several different locations; their syntax depends on the type of location.
 
-All parameters follow the same general syntax, but there are different locations where parameters
-may appear, with different surrounding syntax that determines that a given sequence of tokens
-denotes a parameter, and what the scope of that parameter is.
-* Each document consists of a header followed by a sequence of top-level parameter groups whose
-  scope is the entire document (and which are usually "definitions" in some sense). The header and
-  the first parameter group (if present) are separated by `;`, equivalently to the separation of
-  groups. The header must be the keyword `slate` followed by the name of a _metamodel_ (roughly
-  analogous to a schema) for the document.
-* The metamodel specifies zero or more pairs of parentheses that may be used to additionally
-  combine parameter groups into _sections_, such that a section may contain zero or more parameter
-  groups. A semicolon is required when a section follows a parameter group or the header, but is
-  optional at the end of a section.
-* The metamodel also specifies zero or more other pairs of parentheses that may be used for
-  _higher-order parameterization_ of parameters. Each parameter group or section may then be
-  prefixed by an arbitrary number of these parentheses, each of which contains zero or more
-  parameter groups and/or sections. The scope of each higher-order parameter extends from the next
-  higher-order parameter group (if any) to the end of the parameterized group or section.
-* Moreover, the metamodel specifies zero or more unquoted identifiers as _mapping symbols_. If a
-  mapping symbol appears in a location that does not play any special role within the parameter
-  identification layer, then it indicates a _mapping_ that extends to the left until the previous
-  comma, semicolon, or opening parenthesis, and to the right until the next comma, semicolon, or
-  closing parenthesis. The left part of the mapping defines parameters whose scope extends to the
-  right part of the mapping. The left part must be either
-  * empty, or
-  * a single parameter, or
-  * a pair of specific parentheses specified by the metamodel that encloses zero or more parameter
-    groups or sections.
-* Moreover, the metamodel may reserve zero or more specific pairs of parentheses for _objects_, each
+* The most common syntax is shared by top-level parameters and parameterizations.
+
+  Such parameters can be combined into _groups_, where parameters in a group are given by
+  _notation expressions_ as defined below, separated by `,`, and multiple groups can follow each
+  other separated by `;`. The last group in a sequence can optionally be delimited by `;` as well.
+  The scope of a parameter within a sequence of groups always covers the following groups, but may
+  extend further.
+
+  This syntax, which is described in more detail below, is used at three locations.
+  * Each document consists of a header followed by a sequence of top-level parameter groups whose
+    scope is the entire document (and which are usually "definitions" in some sense). The header and
+    the first parameter group (if present) are separated by `;`, equivalently to the separation of
+    groups. The header must be the keyword `slate` followed by the name of a _metamodel_ (roughly
+    analogous to a schema) for the document.
+  * The metamodel specifies zero or more pairs of parentheses that may be used to additionally
+    combine parameter groups into _sections_, such that a section may contain zero or more parameter
+    groups. A semicolon is required when a section follows a parameter group or the header, but is
+    optional at the end of a section.
+  * The metamodel also specifies zero or more other pairs of parentheses that may be used for
+    _higher-order parameterization_ of parameters. Each parameter group or section may then be
+    prefixed by an arbitrary number of these parentheses, each of which contains zero or more
+    parameter groups and/or sections. The scope of each higher-order parameter extends from the next
+    higher-order parameter group (if any) to the end of the parameterized group or section.
+
+* Moreover, the metamodel specifies zero or more unquoted identifiers as _mapping symbols_, which
+  play a role in notation expressions and in unstructured data. Each mapping symbol is specified to
+  be either prefix or infix. In both cases, the mapping symbol indicates a _mapping_ which consists
+  of a _source_ containing zero or more parameters and a _target_ containing data where those
+  parameters are in scope.
+  * In the prefix case, source and target are separated by the first `.` following the mapping
+    symbol, and the target extends from this `.` until the next comma, semicolon, or closing
+    parenthesis (disregarding commas and semicolons that are part of mappings). The source consists
+    of zero or more parameters separated by `,`, where each parameter is a notation expression
+    optionally followed by data.
+  * In the infix case, the source extends from the previous comma, semicolon, or opening parenthesis
+    until the mapping symbol, and the target extends from the mapping symbol until the next comma,
+    semicolon, or closing parenthesis. The source must be either a single parameter or a pair of
+    specific parentheses specified by the metamodel that encloses zero or more parameters separated
+    by `,`. The source cannot be empty; a mapping symbol with an empty source is allowed but does
+    not denote a mapping. Each parameter is either a notation expression optionally followed by
+    data, or a mapping whose target is a notation expression optionally followed by data. In the
+    latter case, parentheses are required around the parameters.
+
+* Finally, the metamodel may reserve zero or more specific pairs of parentheses for _objects_, each
   together with a given vertical line character that will be used as an internal separator (but only
   if it is not considered an opening or closing parenthesis at that location). Whenever these
   parentheses occur in a location that does not play any special role within the parameter
-  identification layer, the contents are threated as parameters, called _items_, with a syntax that
-  differs from other parameters.
-  * Each item starts with a _notation expression_ as described below, optionally followed by
-    arbitrary content within parentheses that were reserved by the metamodel, and then optionally
-    followed by a mapping symbol and further arbitrary content, and finally followed by either the
-    separator character or the end of the object.
+  identification layer, the contents are treated as parameters, called _items_.
+  * Each item starts with a notation expression as described below, optionally followed by
+    arbitrary data until the next separator character or the end of the object.
   * The separator character may optionally be followed by one or more parameter groups and/or
     sections, which parameterize the item in the sense that their scope extends from the notation
     expression to the separator character. These parameters are again followed by either the
     separator character or the end of the object.
-  * Arbitrary content may follow, including separator characters. The scope of the item includes
-    this content (but the scopes of its parameterizations do not). The item ends when two separator
+  * Arbitrary data may follow, including separator characters. The scope of the item includes
+    this data (but the scopes of its parameterizations do not). The item ends when two separator
     characters are placed next to each other.
 
-A parameter group is not simply a list of parameters, but consists of a comma-separated list of
-_notation expressions_ for each parameter, optionally followed by _data_ separated by either a
-keyword or an unquoted identifier that is reserved for this purpose by the metamodel. A notation
-expression is recursively any of the following.
+A _notation expression_ is recursively any of the following.
 * An identifier.
 * A subscript or superscript separator.
 * A sequence of notation expressions.
@@ -168,18 +176,32 @@ expression is recursively any of the following.
   * If the referenced parameter does not have a higher-order parameterization again, the notation
     expression must match exactly.
   * If it does have a higher-order parameterization, then the notation expression must include a
-    mapping symbol and be interpretable as a mapping. The number of parameters on the left of the
-    mapping symbol must match the number of higher-order parameters, and the number of parameters in
-    their higher-order parameterizations must match recursively. The right side of the mapping must
-    match the expected notation when the matching parameters are substituted.
+    mapping symbol and be interpretable as a mapping. The number of source parameters of the mapping
+    must match the number of higher-order parameters. If one of those higher-order parameters is
+    parameterized, the corresponding source parameter must be written as a mapping, such that the
+    same rules apply recursively. The mapping target must match the expected notation when the
+    matching parameters are substituted.
 
   This alternative takes precedence over all others. However, the entire notation expression is not
   allowed to consist purely of a parameter. Moreover, a notation expression which is parameterized
   or a sequence cannot appear within a sequence.
 
+A _notation expression_ may optionally be followed by _data_ separated by
+* a dot,
+* a keyword,
+* an unquoted identifier that is reserved for this purpose by the metamodel,
+* an opening parenthesis reserved by the metamodel, or
+* an infix mapping symbol.
+
+If the notation expression is part of a group, the data ends the group and applies to the entire
+group.
+A dot, keyword, reserved identifier, or reserved parenthesis is considered a data separator even if
+it occurs within parentheses. The data then begins at the previous top-level opening parenthesis.
+A parameter group may consist only of data.
+
 For example, if the metamodel defines `:` as a notation expression delimiter, higher-order
-parameterization with `[]`, and `↦` as a mapping symbol, the following are some possible lists of
-parameters.
+parameterization with `[]`, and `↦` as an infix mapping symbol, the following are some possible
+lists of parameters.
 * `x : ...` declares one parameter `x`.
 * `x : ...; y : ...` declares two parameters `x` and `y`.
 * `x,y : ...` declares two parameters `x` and `y` that have the same data.
@@ -187,11 +209,11 @@ parameters.
   a second-order parameter, in function notation.
 * `[x : ...] f(x),g(x) : ...` declares two parameters `f` and `g` that are additionally
   parameterized by `x`.
-* `[a,b : ...] a + b : ...; [c : ...] -c` declares a parameter `+` that is additionally
+* `[a,b : ...] a + b : ...; [c : ...] -c : ...` declares a parameter `+` that is additionally
   parameterized by `a` and `b`, in infix notation, and a parameter `-` that is additionally
   parameterized by `c`, in prefix notation.
 * `[[x : ...] f(x) : ...] g(x ↦ f(x)) : ...` declares a third-order parameter `g`.
-* `[[[x : ...] f(x) : ...] g(x ↦ f(x)) : ...] h(([x] f(x)) ↦ g(x ↦ f(x))) : ...` declares a
+* `[[[x : ...] f(x) : ...] g(x ↦ f(x)) : ...] h((x ↦ f(x)) ↦ g(x ↦ f(x))) : ...` declares a
   fourth-order parameter `h`.
 
 ## Expression Identification

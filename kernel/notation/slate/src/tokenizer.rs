@@ -100,7 +100,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
                         let prev = state.prev;
                         let pre_isolation = if prev == '\0' || prev.is_whitespace() {
                             TokenIsolation::Isolated
-                        } else if is_pre_weakly_connecting_char(prev) {
+                        } else if is_pre_weakly_connecting_char(prev) || prev == c {
                             TokenIsolation::WeaklyConnected
                         } else {
                             TokenIsolation::StronglyConnected
@@ -489,7 +489,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 } else {
                     let post_isolation = if c == '\0' || c.is_whitespace() {
                         TokenIsolation::Isolated
-                    } else if is_post_weakly_connecting_char(c) {
+                    } else if is_post_weakly_connecting_char(c) || c == ch {
                         TokenIsolation::WeaklyConnected
                     } else {
                         TokenIsolation::StronglyConnected
@@ -813,6 +813,22 @@ mod tests {
                 ),
                 Token::ReservedChar(
                     '〉',
+                    TokenIsolation::WeaklyConnected,
+                    TokenIsolation::Isolated,
+                ),
+            ],
+            &[],
+        )?;
+        test_tokenization(
+            "||",
+            &[
+                Token::ReservedChar(
+                    '|',
+                    TokenIsolation::Isolated,
+                    TokenIsolation::WeaklyConnected,
+                ),
+                Token::ReservedChar(
+                    '|',
                     TokenIsolation::WeaklyConnected,
                     TokenIsolation::Isolated,
                 ),

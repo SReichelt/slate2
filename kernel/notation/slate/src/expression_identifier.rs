@@ -79,12 +79,12 @@ impl<'a, Src: EventSource + 'a> GlobalParamRecordingPass<'a, Src> {
         if let Some(group_state) = &mut state.current_group_state {
             if let Some(event) = self.group_event(group_state, &mut state.recorded_notations, event)
             {
-                if let ParameterEvent::ParamGroup(GroupEvent::End) = event {
+                if let ParameterEvent::SectionItem(GroupEvent::End) = event {
                     state.current_group_state = None;
                 }
             }
             None
-        } else if let ParameterEvent::ParamGroup(GroupEvent::Start(_)) = event {
+        } else if let ParameterEvent::SectionItem(GroupEvent::Start(_)) = event {
             state.current_group_state = Some(Box::new(GroupNotationRecordingState {
                 parameterization_state: NotationsRecordingState {
                     recorded_notations: Vec::new(),
@@ -186,11 +186,6 @@ mod tests {
             },
             &[
                 TestDiagnosticMessage {
-                    range_text: "".into(),
-                    severity: Severity::Error,
-                    msg: "parameter expected".into(),
-                },
-                TestDiagnosticMessage {
                     range_text: "\"endless".into(),
                     severity: Severity::Error,
                     msg: "unterminated string".into(),
@@ -202,8 +197,8 @@ mod tests {
                 },
                 TestDiagnosticMessage {
                     range_text: "".into(),
-                    severity: Severity::Warning,
-                    msg: "top-level item should be terminated with ';'".into(),
+                    severity: Severity::Error,
+                    msg: "parameter expected".into(),
                 },
             ],
         )?;
@@ -223,12 +218,10 @@ mod tests {
         expected_document: Document,
         expected_diagnostics: &[TestDiagnosticMessage],
     ) -> Result<(), Message> {
+        let metamodel = TestMetaModel;
         let mut expression_events = Vec::new();
         let expression_sink = TranslatorInst::new(ExpressionIdentifier, &mut expression_events);
-        let param_sink = TranslatorInst::new(
-            ParameterIdentifier::new(TestMetaModelGetter),
-            expression_sink,
-        );
+        let param_sink = TranslatorInst::new(ParameterIdentifier::new(&metamodel), expression_sink);
         let token_sink = TranslatorInst::new(ParenthesisMatcher, param_sink);
         let char_sink = TranslatorInst::new(Tokenizer, token_sink);
         let diag_sink = DiagnosticsRecorder::new(input);

@@ -285,6 +285,14 @@ pub mod test_helpers {
         }
     }
 
+    impl<T, Item: IntoEvents<T>> IntoEvents<T> for Option<Item> {
+        fn fill_events(self, result: &mut Vec<T>) {
+            if let Some(item) = self {
+                item.fill_events(result);
+            }
+        }
+    }
+
     impl<T, Item: IntoEvents<T>> IntoEvents<T> for Vec<Item> {
         fn fill_events(self, result: &mut Vec<T>) {
             for group in self {

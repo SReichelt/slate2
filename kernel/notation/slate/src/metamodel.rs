@@ -1,47 +1,85 @@
-use std::{fmt::Debug, rc::Rc};
+use std::fmt::Debug;
 
 use anyhow::Result;
 
 pub trait MetaModelGetter {
-    fn metamodel(&self, name: &str) -> Result<MetaModelRef>;
+    fn metamodel(&self, name: &str) -> Result<&dyn MetaModel>;
 }
 
-pub trait MetaModel {
+pub trait MetaModel: Debug {
     fn name(&self) -> &str;
 
-    fn is_definition_symbol(&self, s: &str) -> bool;
-
-    fn parameterization(&self, start_paren: char) -> Option<&dyn Parameterization>;
-    fn object(&self, start_paren: char) -> Option<&dyn Object>;
+    // The section which implicitly surrounds the entire document.
+    fn top_level_section_kind(&self) -> &dyn SectionKind;
 }
 
-#[derive(Clone)]
-pub struct MetaModelRef(pub Rc<dyn MetaModel>);
-
-impl MetaModelRef {
-    pub fn new(metamodel: impl MetaModel + 'static) -> Self {
-        MetaModelRef(Rc::new(metamodel))
-    }
+// See https://github.com/rust-lang/rust/issues/106447.
+macro_rules! dyn_ptr_eq {
+    ($trait:ident) => {
+        impl PartialEq for &dyn $trait {
+            fn eq(&self, other: &Self) -> bool {
+                *self as *const dyn $trait as *const u8 == *other as *const dyn $trait as *const u8
+            }
+        }
+    };
 }
 
-impl PartialEq for MetaModelRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.name() == other.0.name()
-    }
+dyn_ptr_eq!(MetaModel);
+
+pub trait DataKind: Debug {
+    fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
+    fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind>;
 }
 
-impl Debug for MetaModelRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = self.0.name();
-        f.write_fmt(format_args!("MetaModel({name})"))
-    }
+dyn_ptr_eq!(DataKind);
+
+pub trait ParamKind: Debug {
+    fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool;
+    fn paren_is_notation_delimiter(&self, start_paren: char) -> bool;
+
+    fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
+
+    fn data_kind(&self) -> Option<&dyn DataKind>;
 }
 
-pub trait Parameterization {}
+dyn_ptr_eq!(ParamKind);
 
-pub trait Object {
-    fn param_delimiter(&self) -> Option<char>;
+pub trait SectionKind: Debug {
+    fn param_kind(&self) -> &dyn ParamKind;
+
+    fn parenthesis_role(&self, start_paren: char) -> SectionParenthesisRole;
 }
+
+dyn_ptr_eq!(SectionKind);
+
+pub enum SectionParenthesisRole<'a> {
+    None,
+    Parameterization(&'a dyn SectionKind),
+    Section(&'a dyn SectionKind),
+}
+
+pub trait MappingKind: Debug {
+    fn notation(&self) -> MappingNotation;
+
+    fn param_kind(&self) -> &dyn ParamKind;
+}
+
+dyn_ptr_eq!(MappingKind);
+
+pub enum MappingNotation {
+    Prefix,
+    Infix { binder_paren: char },
+}
+
+pub trait ObjectKind: Debug {
+    fn separator(&self) -> char;
+
+    fn parameterization(&self) -> &dyn SectionKind;
+    fn param_kind(&self) -> &dyn ParamKind;
+    fn extra_data_kind(&self, extra_data_idx: u32) -> Option<&dyn DataKind>;
+}
+
+dyn_ptr_eq!(ObjectKind);
 
 #[cfg(test)]
 pub mod test_helpers {
@@ -49,28 +87,15 @@ pub mod test_helpers {
 
     use super::*;
 
-    pub struct TestMetaModelGetter;
+    #[derive(Debug)]
+    pub struct TestMetaModel;
 
-    impl MetaModelGetter for TestMetaModelGetter {
-        fn metamodel(&self, name: &str) -> Result<MetaModelRef> {
+    impl MetaModelGetter for TestMetaModel {
+        fn metamodel(&self, name: &str) -> Result<&dyn MetaModel> {
             match name {
-                "test" => Ok(TestMetaModel::new_ref()),
-                name => Err(anyhow!("unknown metamodel '{name}'")),
+                "test" => Ok(self),
+                name => Err(anyhow!("unknown metamodel \"{name}\"")),
             }
-        }
-    }
-
-    pub struct TestMetaModel {
-        bracket_parameterization: TestParameterization,
-        brace_object: TestObject,
-    }
-
-    impl TestMetaModel {
-        pub fn new_ref() -> MetaModelRef {
-            MetaModelRef::new(TestMetaModel {
-                bracket_parameterization: TestParameterization,
-                brace_object: TestObject,
-            })
         }
     }
 
@@ -79,34 +104,84 @@ pub mod test_helpers {
             "test"
         }
 
-        fn is_definition_symbol(&self, s: &str) -> bool {
-            s.starts_with(':')
+        fn top_level_section_kind(&self) -> &dyn SectionKind {
+            self
         }
+    }
 
-        fn parameterization(&self, start_paren: char) -> Option<&dyn Parameterization> {
-            match start_paren {
-                '[' | '⟦' => Some(&self.bracket_parameterization),
+    impl DataKind for TestMetaModel {
+        fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
+            match identifier {
+                "↦" => Some(self),
                 _ => None,
             }
         }
 
-        fn object(&self, start_paren: char) -> Option<&dyn Object> {
+        fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind> {
             match start_paren {
-                '{' => Some(&self.brace_object),
+                '{' => Some(self),
                 _ => None,
             }
         }
     }
 
-    struct TestParameterization;
+    impl ParamKind for TestMetaModel {
+        fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool {
+            identifier.starts_with(':')
+        }
 
-    impl Parameterization for TestParameterization {}
+        fn paren_is_notation_delimiter(&self, start_paren: char) -> bool {
+            start_paren == '⎿'
+        }
 
-    struct TestObject;
+        fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
+            DataKind::mapping_kind(self, identifier)
+        }
 
-    impl Object for TestObject {
-        fn param_delimiter(&self) -> Option<char> {
-            Some('|')
+        fn data_kind(&self) -> Option<&dyn DataKind> {
+            Some(self)
+        }
+    }
+
+    impl SectionKind for TestMetaModel {
+        fn param_kind(&self) -> &dyn ParamKind {
+            self
+        }
+
+        fn parenthesis_role(&self, start_paren: char) -> SectionParenthesisRole {
+            match start_paren {
+                '[' | '⟦' => SectionParenthesisRole::Parameterization(self),
+                '{' | '⦃' => SectionParenthesisRole::Section(self),
+                _ => SectionParenthesisRole::None,
+            }
+        }
+    }
+
+    impl MappingKind for TestMetaModel {
+        fn notation(&self) -> MappingNotation {
+            MappingNotation::Infix { binder_paren: '(' }
+        }
+
+        fn param_kind(&self) -> &dyn ParamKind {
+            self
+        }
+    }
+
+    impl ObjectKind for TestMetaModel {
+        fn separator(&self) -> char {
+            '|'
+        }
+
+        fn parameterization(&self) -> &dyn SectionKind {
+            self
+        }
+
+        fn param_kind(&self) -> &dyn ParamKind {
+            self
+        }
+
+        fn extra_data_kind(&self, _extra_data_idx: u32) -> Option<&dyn DataKind> {
+            Some(self)
         }
     }
 }

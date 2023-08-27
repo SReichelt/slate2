@@ -165,7 +165,6 @@ mod tests {
             )],
             &[],
         )?;
-        test_parenthesis_matching("||", vec![ParenToken::Paren('|', Vec::new())], &[])?;
         test_parenthesis_matching(
             "|abc|",
             vec![ParenToken::Paren(
@@ -301,15 +300,40 @@ mod tests {
             &[],
         )?;
         test_parenthesis_matching(
-            "|||",
-            vec![ParenToken::Paren(
-                '|',
-                vec![ParenToken::Token(Token::ReservedChar(
+            "||",
+            vec![
+                ParenToken::Token(Token::ReservedChar(
                     '|',
-                    TokenIsolation::StronglyConnected,
-                    TokenIsolation::StronglyConnected,
-                ))],
-            )],
+                    TokenIsolation::Isolated,
+                    TokenIsolation::WeaklyConnected,
+                )),
+                ParenToken::Token(Token::ReservedChar(
+                    '|',
+                    TokenIsolation::WeaklyConnected,
+                    TokenIsolation::Isolated,
+                )),
+            ],
+            &[],
+        )?;
+        test_parenthesis_matching(
+            "|||",
+            vec![
+                ParenToken::Token(Token::ReservedChar(
+                    '|',
+                    TokenIsolation::Isolated,
+                    TokenIsolation::WeaklyConnected,
+                )),
+                ParenToken::Token(Token::ReservedChar(
+                    '|',
+                    TokenIsolation::WeaklyConnected,
+                    TokenIsolation::WeaklyConnected,
+                )),
+                ParenToken::Token(Token::ReservedChar(
+                    '|',
+                    TokenIsolation::WeaklyConnected,
+                    TokenIsolation::Isolated,
+                )),
+            ],
             &[],
         )?;
         test_parenthesis_matching(

@@ -1,3 +1,5 @@
+// TODO: delete
+
 pub fn is_ascii_identifier_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || is_additional_identifier_char(c)
 }
