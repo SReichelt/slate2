@@ -1,8 +1,9 @@
-use std::{borrow::Cow, collections::VecDeque, mem::swap, ops::Range};
+use std::{borrow::Cow, collections::VecDeque, ops::Range};
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
+use slate_kernel_util::queue_slice::*;
 
-use crate::{chars::is_script_separator_char, metamodel::*, parenthesis_matcher::*, tokenizer::*};
+use crate::{chars::*, metamodel::*, parenthesis_matcher::*, tokenizer::*};
 
 // `ParameterEvent` serializes `ParamToken` (defined in tests below) into events.
 #[derive(Clone, PartialEq, Debug)]
@@ -13,8 +14,9 @@ pub enum ParameterEvent<'a> {
     SectionItemBody(GroupEvent<SectionItemType<'a>>),
     ParamNotation(NotationExpression<'a>),
     Token(TokenEvent<'a>),
+    SpecialData(GroupEvent<&'a dyn DataKind>),
     Mapping(GroupEvent<&'a dyn MappingKind>),
-    MappingParam(GroupEvent<()>),
+    MappingParam(GroupEvent),
     Object(GroupEvent<&'a dyn ObjectKind>),
     ObjectItem(GroupEvent),
     ObjectItemExtra(GroupEvent),
@@ -291,6 +293,14 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     match event {
                         Some(TokenEvent::Paren(GroupEvent::End)) | None => Some((event, range)),
                         Some(TokenEvent::Token(Token::ReservedChar(';', _, _))) => None,
+                        Some(TokenEvent::Token(Token::ReservedChar(',', _, _))) => {
+                            self.source.diagnostic(
+                                range,
+                                Severity::Error,
+                                format!("expected semicolon instead of comma"),
+                            );
+                            None
+                        }
                         _ => self.section_event(
                             state,
                             event,
@@ -367,14 +377,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             }
                         }
                     }
-                    Some(TokenEvent::Paren(GroupEvent::End))
-                    | Some(TokenEvent::Token(Token::ReservedChar(';', _, _)))
-                    | None => {
+                    Some(TokenEvent::Paren(GroupEvent::End)) | None => {
                         item_expected();
                         return Some((event, range));
                     }
                     Some(TokenEvent::Token(Token::ReservedChar(c, _, _)))
-                        if Some(c) == separator =>
+                        if c == ',' || c == ';' || Some(c) == separator =>
                     {
                         item_expected();
                         return Some((event, range));
@@ -387,8 +395,8 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range.start..range.start,
                 );
                 *state = SectionItemState::ParamGroup {
-                    recorded_tokens: RecordedTokens::new(),
-                    paren_depth: 0,
+                    group_state: ParamGroupState::new(),
+                    end_marker: range.start.clone(),
                 };
                 self.section_item_event(
                     parameterizations,
@@ -424,57 +432,33 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             }
 
             SectionItemState::ParamGroup {
-                recorded_tokens,
-                paren_depth,
+                group_state,
+                end_marker,
             } => {
-                let mut end_group = |marker| {
-                    self.output_group(
-                        recorded_tokens,
-                        out,
-                        section_kind.param_kind(),
-                        &Parameterization::concat(
-                            outer_parameterizations,
-                            parameterizations.as_deref(),
-                        ),
-                        result_params,
-                    );
+                let end = range.end;
+                if let Some((event, range)) = self.param_group_event(
+                    group_state,
+                    event,
+                    range,
+                    out,
+                    section_kind.param_kind(),
+                    separator,
+                    outer_parameterizations,
+                    parameterizations.as_deref(),
+                    result_params,
+                ) {
                     out(
                         ParameterEvent::SectionItemBody(GroupEvent::End),
-                        marker..marker,
+                        end_marker..end_marker,
                     );
-                    out(ParameterEvent::SectionItem(GroupEvent::End), marker..marker);
-                };
-
-                if let Some(event) = event {
-                    match event {
-                        TokenEvent::Token(Token::ReservedChar(';', _, _)) if *paren_depth == 0 => {
-                            end_group(range.start);
-                            return Some((Some(event), range));
-                        }
-                        TokenEvent::Token(Token::ReservedChar(c, _, _))
-                            if *paren_depth == 0 && Some(c) == separator =>
-                        {
-                            end_group(range.start);
-                            return Some((Some(event), range));
-                        }
-                        TokenEvent::Paren(GroupEvent::Start(_)) => {
-                            *paren_depth += 1;
-                        }
-                        TokenEvent::Paren(GroupEvent::End) => {
-                            if *paren_depth > 0 {
-                                *paren_depth -= 1;
-                            } else {
-                                end_group(range.end);
-                                return Some((Some(event), range));
-                            }
-                        }
-                        _ => {}
-                    }
-                    recorded_tokens.push_back((event, range.start.clone()..range.end.clone()));
-                    None
+                    out(
+                        ParameterEvent::SectionItem(GroupEvent::End),
+                        end_marker..end_marker,
+                    );
+                    Some((event, range))
                 } else {
-                    end_group(range.start);
-                    Some((None, range))
+                    *end_marker = end.clone();
+                    None
                 }
             }
 
@@ -509,116 +493,136 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         }
     }
 
-    fn output_group(
+    fn param_group_event<'b>(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        state: &mut ParamGroupState<'a, Src::Marker>,
+        event: Option<TokenEvent<'a>>,
+        range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         param_kind: &'a dyn ParamKind,
-        parameterizations: &[&Parameterization<'a>],
+        separator: Option<char>,
+        outer_parameterizations: &[&Parameterization<'a>],
+        inner_parameterizations: Option<&[Parameterization<'a>]>,
         result_params: &mut Option<Vec<Parameterization<'a>>>,
-    ) {
-        while self.output_notation_and_check_continuation(
-            recorded_tokens,
-            out,
-            param_kind,
-            parameterizations,
-            result_params,
-        ) {}
-
-        self.output_data(recorded_tokens, out, param_kind.data_kind(), None);
-    }
-
-    fn output_notation_and_check_continuation(
-        &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
-        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
-        param_kind: &'a dyn ParamKind,
-        parameterizations: &[&Parameterization<'a>],
-        result_params: &mut Option<Vec<Parameterization<'a>>>,
-    ) -> bool {
-        let mut paren_depth: u32 = 0;
-        let mut outer_idx = 0;
-
-        for (idx, (event, range)) in recorded_tokens.iter().enumerate() {
-            match event {
-                TokenEvent::Token(Token::ReservedChar(',', _, _)) if paren_depth == 0 => {
-                    if idx > 0 {
+    ) -> Option<(Option<TokenEvent<'a>>, Range<&'b Src::Marker>)> {
+        let mut end_segment = |end_group| {
+            let mut result = false;
+            if state.notation_len > 0 {
+                RecordedTokenSlice::new(&mut state.recorded_tokens).with_subslice(
+                    state.notation_len,
+                    |notation_tokens| {
                         self.output_notation(
-                            recorded_tokens,
-                            idx,
+                            notation_tokens,
                             out,
-                            parameterizations,
+                            &Parameterization::concat(
+                                outer_parameterizations,
+                                inner_parameterizations,
+                            ),
                             result_params,
                         );
-                    } else {
+                        assert!(notation_tokens.is_empty());
+                    },
+                );
+                state.notation_len = 0;
+                result = true;
+            }
+            if end_group {
+                self.output_data(
+                    &mut RecordedTokenSlice::new(&mut state.recorded_tokens),
+                    None,
+                    out,
+                    param_kind.data_kind(),
+                );
+                result = true;
+            }
+            result
+        };
+
+        if let Some(event) = event {
+            match &event {
+                TokenEvent::Token(Token::ReservedChar(',', _, _))
+                    if state.paren_depth == 0 && !state.in_data =>
+                {
+                    if !end_segment(false) {
                         self.source.diagnostic(
-                            &range.start..&range.start,
+                            range,
                             Severity::Error,
-                            format!("parameter expected"),
+                            format!("superfluous comma"),
                         );
                     }
-                    recorded_tokens.pop_front();
-                    return true;
+                    return None;
                 }
                 TokenEvent::Token(Token::ReservedChar('.', _, _))
-                | TokenEvent::Token(Token::Keyword(_)) => {
-                    break;
+                | TokenEvent::Token(Token::Keyword(_))
+                    if !state.in_data =>
+                {
+                    end_segment(false);
+                    state.in_data = true;
                 }
-                TokenEvent::Token(Token::Identifier(identifier, IdentifierType::Unquoted)) => {
+                TokenEvent::Token(Token::ReservedChar(c, _, _))
+                    if state.paren_depth == 0
+                        && (*c == ',' || *c == ';' || Some(*c) == separator) =>
+                {
+                    end_segment(true);
+                    return Some((Some(event), range));
+                }
+                TokenEvent::Token(Token::Identifier(identifier, IdentifierType::Unquoted))
+                    if !state.in_data =>
+                {
                     if param_kind.identifier_is_notation_delimiter(identifier) {
-                        break;
+                        end_segment(false);
+                        state.in_data = true;
                     }
-                    if paren_depth == 0 {
+                    if state.paren_depth == 0 {
                         if let Some(mapping_kind) = param_kind.mapping_kind(identifier) {
                             if matches!(
                                 mapping_kind.notation(),
                                 MappingNotation::Infix { binder_paren: _ }
                             ) {
-                                break;
+                                end_segment(false);
+                                state.in_data = true;
                             }
                         }
                     }
                 }
                 TokenEvent::Paren(GroupEvent::Start(start_paren)) => {
                     if param_kind.paren_is_notation_delimiter(*start_paren) {
-                        break;
+                        end_segment(false);
+                        state.in_data = true;
                     }
-                    paren_depth += 1;
+                    state.paren_depth += 1;
                 }
                 TokenEvent::Paren(GroupEvent::End) => {
-                    assert!(paren_depth > 0);
-                    paren_depth -= 1;
+                    if state.paren_depth > 0 {
+                        state.paren_depth -= 1;
+                    } else {
+                        end_segment(true);
+                        return Some((Some(event), range));
+                    }
                 }
                 _ => {}
             }
-
-            if paren_depth == 0 {
-                outer_idx = idx + 1;
+            state
+                .recorded_tokens
+                .push_back((event, range.start.clone()..range.end.clone()));
+            if state.paren_depth == 0 && !state.in_data {
+                state.notation_len = state.recorded_tokens.len();
             }
+            None
+        } else {
+            end_segment(true);
+            Some((None, range))
         }
-
-        if outer_idx > 0 {
-            self.output_notation(
-                recorded_tokens,
-                outer_idx,
-                out,
-                parameterizations,
-                result_params,
-            );
-        }
-        false
     }
 
     fn output_notation(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
-        mut len: usize,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         parameterizations: &[&Parameterization<'a>],
         result_params: &mut Option<Vec<Parameterization<'a>>>,
     ) -> bool {
-        if let Some((notation, range)) =
-            self.create_notation_expression(recorded_tokens, &mut len, parameterizations)
+        if let Some((notation, range)) = self.create_notation_expression(tokens, parameterizations)
         {
             if let Some(result_params) = result_params {
                 result_params.push(Parameterization {
@@ -637,16 +641,14 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
     fn create_notation_expression(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
-        max_len: &mut usize,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         parameterizations: &[&Parameterization<'a>],
     ) -> Option<(NotationExpression<'a>, Range<Src::Marker>)> {
         let mut current_sequence = Vec::new();
         let mut start = None;
         let mut end = None;
 
-        while *max_len > 0 {
-            let (event, _) = recorded_tokens.front().unwrap();
+        while let Some((event, _)) = tokens.front() {
             if matches!(
                 event,
                 TokenEvent::Token(Token::ReservedChar(',', _, _))
@@ -655,10 +657,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 break;
             }
 
-            *max_len -= 1;
-            let (event, range) = recorded_tokens.pop_front().unwrap();
+            let (event, range) = tokens.pop_front().unwrap();
+
+            if start.is_none() {
+                start = Some(range.start.clone());
+            }
+
             match event {
-                TokenEvent::Token(Token::ReservedChar(',', _, _)) => break,
                 TokenEvent::Token(Token::ReservedChar(c, _, _)) if is_script_separator_char(c) => {
                     current_sequence.push(NotationExpression::ReservedChar(c));
                 }
@@ -670,26 +675,22 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 TokenEvent::Paren(GroupEvent::Start(start_paren)) => {
                     let mut items = Vec::new();
                     loop {
-                        let prev_max_len = *max_len;
-                        if let Some((item, _)) = self.create_notation_expression(
-                            recorded_tokens,
-                            max_len,
-                            parameterizations,
-                        ) {
+                        let prev_len = tokens.len();
+                        if let Some((item, _)) =
+                            self.create_notation_expression(tokens, parameterizations)
+                        {
                             items.push(item);
                         }
-                        let item_read = *max_len < prev_max_len;
-                        assert!(*max_len > 0);
-                        *max_len -= 1;
-                        let (event, range) = recorded_tokens.pop_front().unwrap();
+                        let item_read = tokens.len() < prev_len;
+                        let (event, range) = tokens.pop_front().unwrap();
                         match event {
                             TokenEvent::Paren(GroupEvent::End) => break,
                             TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
                                 if !item_read {
                                     self.source.diagnostic(
-                                        &range.start..&range.start,
+                                        &range.start..&range.end,
                                         Severity::Error,
-                                        format!("item expected"),
+                                        format!("superfluous comma"),
                                     );
                                 }
                             }
@@ -704,9 +705,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     format!("token not allowed in notation"),
                 ),
             }
-            if start.is_none() {
-                start = Some(range.start);
-            }
+
             end = Some(range.end);
         }
 
@@ -727,51 +726,102 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
     fn output_data(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        separator: Option<char>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         data_kind: Option<&'a dyn DataKind>,
-        separator: Option<char>,
     ) -> Option<Src::Marker> {
-        let mut paren_depth: u32 = 0;
-        let mut start = None;
+        let get_mapping_kind = |identifier: &str| {
+            if let Some(data_kind) = data_kind {
+                data_kind.mapping_kind(identifier)
+            } else {
+                None
+            }
+        };
+
         let mut end = None;
+        let mut mapping_depth: u32 = 0;
 
         loop {
-            if paren_depth == 0 {
-                let Some((event, _)) = recorded_tokens.front() else { break };
-                if matches!(event, TokenEvent::Paren(GroupEvent::End)) {
-                    break;
+            let (content_len, full_len, paren, mapping_kind) =
+                self.analyze_data_segment(tokens, separator, get_mapping_kind);
+
+            if let Some(mapping_kind) = mapping_kind {
+                if matches!(mapping_kind.notation(), MappingNotation::Prefix) && content_len > 0 {
+                    tokens.with_subslice(content_len, |segment_tokens| {
+                        self.output_data_segment(segment_tokens, out, data_kind);
+                        assert!(segment_tokens.is_empty());
+                    });
                 }
-                if matches!(event, TokenEvent::Token(Token::ReservedChar(c, _, _)) if Some(*c) == separator)
-                {
+
+                let (_, range) = tokens.front().unwrap();
+                out(
+                    ParameterEvent::Mapping(GroupEvent::Start(mapping_kind)),
+                    &range.start..&range.start,
+                );
+                mapping_depth += 1;
+
+                end = Some(self.output_mapping_source_by_notation(
+                    tokens,
+                    out,
+                    mapping_kind,
+                    paren,
+                    content_len,
+                    get_mapping_kind,
+                    &mut None,
+                ));
+            } else {
+                if content_len > 0 {
+                    tokens.with_subslice(content_len, |segment_tokens| {
+                        end = self.output_data_segment(segment_tokens, out, data_kind);
+                        assert!(segment_tokens.is_empty());
+                    });
+                }
+
+                while mapping_depth > 0 {
+                    mapping_depth -= 1;
+                    let mapping_end = end.as_ref().unwrap();
+                    out(
+                        ParameterEvent::Mapping(GroupEvent::End),
+                        mapping_end..mapping_end,
+                    );
+                }
+
+                if full_len > content_len {
+                    assert_eq!(full_len, content_len + 1);
+                    let (event, range) = tokens.pop_front().unwrap();
+                    out(ParameterEvent::Token(event), &range.start..&range.end);
+                    end = Some(range.end);
+                } else if full_len == 0 {
                     break;
                 }
             }
+        }
 
-            let (event, range) = recorded_tokens.pop_front().unwrap();
+        assert_eq!(mapping_depth, 0);
+        end
+    }
+
+    fn analyze_data_segment(
+        &self,
+        tokens: &RecordedTokenSlice<'a, '_, Src::Marker>,
+        separator: Option<char>,
+        get_mapping_kind: impl Fn(&str) -> Option<&'a dyn MappingKind>,
+    ) -> (usize, usize, Option<char>, Option<&'a dyn MappingKind>) {
+        let mut paren_depth: u32 = 0;
+        let mut end_idx = 0;
+        let mut paren = None;
+
+        for (idx, (event, _)) in tokens.iter().enumerate() {
             match event {
-                // TODO: mappings
                 TokenEvent::Token(Token::ReservedChar(c, _, _))
-                    if paren_depth == 0 && Some(c) == separator =>
+                    if paren_depth == 0 && Some(*c) == separator =>
                 {
-                    break;
+                    break
                 }
                 TokenEvent::Paren(GroupEvent::Start(start_paren)) => {
-                    if let Some(data_kind) = data_kind {
-                        if let Some(object_kind) = data_kind.object_kind(start_paren) {
-                            out(
-                                ParameterEvent::Object(GroupEvent::Start(object_kind)),
-                                &range.start..&range.end,
-                            );
-                            self.output_object(recorded_tokens, out, object_kind);
-                            let (event, range) = recorded_tokens.pop_front().unwrap();
-                            assert_eq!(event, TokenEvent::Paren(GroupEvent::End));
-                            out(
-                                ParameterEvent::Object(GroupEvent::End),
-                                &range.start..&range.end,
-                            );
-                            continue;
-                        }
+                    if idx == 0 {
+                        paren = Some(*start_paren);
                     }
                     paren_depth += 1;
                 }
@@ -784,22 +834,403 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 }
                 _ => {}
             }
-            if data_kind.is_some() {
+
+            end_idx = idx + 1;
+
+            if paren_depth == 0 {
+                match event {
+                    TokenEvent::Token(Token::ReservedChar(',', _, _))
+                    | TokenEvent::Token(Token::ReservedChar(';', _, _)) => {
+                        return (idx, end_idx, paren, None);
+                    }
+                    TokenEvent::Token(Token::Identifier(identifier, IdentifierType::Unquoted)) => {
+                        if let Some(mapping_kind) = get_mapping_kind(identifier) {
+                            if idx > 0 || matches!(mapping_kind.notation(), MappingNotation::Prefix)
+                            {
+                                return (idx, end_idx, paren, Some(mapping_kind));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
+                if idx > 0 && !matches!(event, TokenEvent::Paren(GroupEvent::End)) {
+                    paren = None;
+                }
+            }
+        }
+
+        (end_idx, end_idx, paren, None)
+    }
+
+    fn output_data_segment(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+        data_kind: Option<&'a dyn DataKind>,
+    ) -> Option<Src::Marker> {
+        let mut end = None;
+
+        while let Some((event, range)) = tokens.pop_front() {
+            if let TokenEvent::Paren(GroupEvent::Start(start_paren)) = event {
+                if let Some(data_kind) = data_kind {
+                    if let Some(special_data_kind) = data_kind.special_data_kind(start_paren) {
+                        out(
+                            ParameterEvent::SpecialData(GroupEvent::Start(special_data_kind)),
+                            &range.start..&range.end,
+                        );
+                        self.output_data(tokens, None, out, Some(special_data_kind));
+                        let (event, range) = tokens.pop_front().unwrap();
+                        assert_eq!(event, TokenEvent::Paren(GroupEvent::End));
+                        out(
+                            ParameterEvent::SpecialData(GroupEvent::End),
+                            &range.start..&range.end,
+                        );
+                        end = Some(range.end);
+                        continue;
+                    }
+
+                    if let Some(object_kind) = data_kind.object_kind(start_paren) {
+                        out(
+                            ParameterEvent::Object(GroupEvent::Start(object_kind)),
+                            &range.start..&range.end,
+                        );
+                        self.output_object(tokens, out, object_kind);
+                        let (event, range) = tokens.pop_front().unwrap();
+                        assert_eq!(event, TokenEvent::Paren(GroupEvent::End));
+                        out(
+                            ParameterEvent::Object(GroupEvent::End),
+                            &range.start..&range.end,
+                        );
+                        end = Some(range.end);
+                        continue;
+                    }
+                }
+
                 out(ParameterEvent::Token(event), &range.start..&range.end);
+                self.output_data(tokens, None, out, data_kind);
+                let (event, range) = tokens.pop_front().unwrap();
+                assert_eq!(event, TokenEvent::Paren(GroupEvent::End));
+                out(ParameterEvent::Token(event), &range.start..&range.end);
+                end = Some(range.end);
+                continue;
             }
-            if start.is_none() {
-                start = Some(range.start);
-            }
+
+            out(ParameterEvent::Token(event), &range.start..&range.end);
+
             end = Some(range.end);
         }
 
-        if data_kind.is_none() {
-            if let (Some(start), Some(end)) = (&start, &end) {
-                self.source.diagnostic(
-                    start..end,
-                    Severity::Error,
-                    format!("unexpected parameter data"),
+        end
+    }
+
+    fn output_mapping_source_by_notation(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+        mapping_kind: &'a dyn MappingKind,
+        paren: Option<char>,
+        mut source_len: usize,
+        get_mapping_kind: impl Fn(&str) -> Option<&'a dyn MappingKind>,
+        result_params: &mut Option<Vec<Parameterization<'a>>>,
+    ) -> Src::Marker {
+        match mapping_kind.notation() {
+            MappingNotation::Prefix => {
+                let (event, range) = tokens.pop_front().unwrap();
+                assert!(matches!(event,
+                                 TokenEvent::Token(Token::Identifier(identifier, IdentifierType::Unquoted))
+                                     if get_mapping_kind(&identifier) == Some(mapping_kind)));
+                let source_end = self
+                    .output_mapping_source(
+                        tokens,
+                        Some('.'),
+                        out,
+                        mapping_kind.param_kind(),
+                        &[],
+                        result_params,
+                    )
+                    .unwrap_or(range.end);
+                if let Some((event, range)) = tokens.pop_front() {
+                    assert!(matches!(
+                        event,
+                        TokenEvent::Token(Token::ReservedChar('.', _, _))
+                    ));
+                    range.end
+                } else {
+                    self.source.diagnostic(
+                        &source_end..&source_end,
+                        Severity::Error,
+                        format!("'.' expected"),
+                    );
+                    source_end
+                }
+            }
+
+            MappingNotation::Infix { binder_paren } => {
+                if paren == Some(binder_paren) {
+                    source_len -= 2;
+                    let (event, _) = tokens.pop_front().unwrap();
+                    assert!(matches!(
+                        event,
+                        TokenEvent::Paren(GroupEvent::Start(start_paren))
+                            if start_paren == binder_paren
+                    ));
+                }
+                tokens.with_subslice(source_len, |source_tokens| {
+                    self.output_mapping_source(
+                        source_tokens,
+                        None,
+                        out,
+                        mapping_kind.param_kind(),
+                        &[],
+                        result_params,
+                    );
+                    assert!(source_tokens.is_empty());
+                });
+                if paren == Some(binder_paren) {
+                    let (event, _) = tokens.pop_front().unwrap();
+                    assert!(matches!(event, TokenEvent::Paren(GroupEvent::End)));
+                }
+                let (event, range) = tokens.pop_front().unwrap();
+                assert!(matches!(event,
+                                 TokenEvent::Token(Token::Identifier(identifier, IdentifierType::Unquoted))
+                                     if get_mapping_kind(&identifier) == Some(mapping_kind)));
+                range.end
+            }
+        }
+    }
+
+    fn output_mapping_source(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        separator: Option<char>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+        param_kind: &'a dyn ParamKind,
+        parameterizations: &[&Parameterization<'a>],
+        result_params: &mut Option<Vec<Parameterization<'a>>>,
+    ) -> Option<Src::Marker> {
+        let get_mapping_kind = |identifier: &str| param_kind.mapping_kind(identifier);
+
+        let mut end = None;
+
+        loop {
+            let (content_len, full_len, paren, mapping_kind) =
+                self.analyze_data_segment(tokens, separator, get_mapping_kind);
+
+            if let Some(mapping_kind) = mapping_kind {
+                if matches!(mapping_kind.notation(), MappingNotation::Prefix) && content_len > 0 {
+                    tokens.with_subslice(content_len, |param_tokens| {
+                        end = self.output_mapping_param(
+                            param_tokens,
+                            out,
+                            param_kind,
+                            parameterizations,
+                            result_params,
+                        );
+                        assert!(param_tokens.is_empty());
+                    });
+                    let end_ref = end.as_ref().unwrap();
+                    self.source.diagnostic(
+                        &end_ref..&end_ref,
+                        Severity::Error,
+                        format!("',' expected"),
+                    );
+                }
+
+                let (_, range) = tokens.front().unwrap();
+                out(
+                    ParameterEvent::MappingParam(GroupEvent::Start(())),
+                    &range.start..&range.start,
                 );
+                out(
+                    ParameterEvent::Mapping(GroupEvent::Start(mapping_kind)),
+                    &range.start..&range.start,
+                );
+
+                let mut source_params = Some(Vec::new());
+                end = Some(self.output_mapping_source_by_notation(
+                    tokens,
+                    out,
+                    mapping_kind,
+                    paren,
+                    content_len,
+                    get_mapping_kind,
+                    &mut source_params,
+                ));
+
+                let end = self.output_param(
+                    tokens,
+                    out,
+                    param_kind,
+                    &Parameterization::concat(parameterizations, source_params.as_deref()),
+                    result_params,
+                );
+
+                let mapping_end = end.as_ref().unwrap();
+                out(
+                    ParameterEvent::Mapping(GroupEvent::End),
+                    mapping_end..mapping_end,
+                );
+                out(
+                    ParameterEvent::MappingParam(GroupEvent::End),
+                    mapping_end..mapping_end,
+                );
+
+                if let Some((event, range)) = tokens.front() {
+                    match event {
+                        TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
+                            tokens.pop_front();
+                        }
+                        TokenEvent::Token(Token::ReservedChar(';', _, _)) => {
+                            self.source.diagnostic(
+                                &range.start..&range.end,
+                                Severity::Error,
+                                format!("expected comma instead of semicolon"),
+                            );
+                            tokens.pop_front();
+                        }
+                        _ => {
+                            self.source.diagnostic(
+                                &mapping_end..&mapping_end,
+                                Severity::Error,
+                                format!("',' expected"),
+                            );
+                        }
+                    }
+                } else {
+                    break;
+                }
+            } else if full_len > 0 {
+                if content_len > 0 {
+                    tokens.with_subslice(content_len, |param_tokens| {
+                        end = self.output_mapping_param(
+                            param_tokens,
+                            out,
+                            param_kind,
+                            parameterizations,
+                            result_params,
+                        );
+                        assert!(param_tokens.is_empty());
+                    });
+                }
+
+                if full_len > content_len {
+                    assert_eq!(full_len, content_len + 1);
+                    let (event, range) = tokens.pop_front().unwrap();
+                    match event {
+                        TokenEvent::Token(Token::ReservedChar(',', _, _)) => {
+                            if content_len == 0 {
+                                self.source.diagnostic(
+                                    &range.start..&range.end,
+                                    Severity::Error,
+                                    format!("superfluous comma"),
+                                );
+                            }
+                        }
+                        TokenEvent::Token(Token::ReservedChar(';', _, _)) => {
+                            self.source.diagnostic(
+                                &range.start..&range.end,
+                                Severity::Error,
+                                format!("expected comma instead of semicolon"),
+                            );
+                        }
+                        _ => panic!("unexpected end of segment"),
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        end
+    }
+
+    fn output_mapping_param(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+        param_kind: &'a dyn ParamKind,
+        parameterizations: &[&Parameterization<'a>],
+        result_params: &mut Option<Vec<Parameterization<'a>>>,
+    ) -> Option<Src::Marker> {
+        let (_, range) = tokens.front().unwrap();
+        let start = range.start.clone();
+        out(
+            ParameterEvent::MappingParam(GroupEvent::Start(())),
+            &start..&start,
+        );
+        let end =
+            self.output_single_param(tokens, out, param_kind, parameterizations, result_params);
+        let end_ref = end.as_ref().unwrap();
+        out(
+            ParameterEvent::MappingParam(GroupEvent::End),
+            end_ref..end_ref,
+        );
+        end
+    }
+
+    fn output_single_param(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+        param_kind: &'a dyn ParamKind,
+        parameterizations: &[&Parameterization<'a>],
+        result_params: &mut Option<Vec<Parameterization<'a>>>,
+    ) -> Option<Src::Marker> {
+        let end = self.output_param(tokens, out, param_kind, parameterizations, result_params);
+        if let Some((_, range)) = tokens.pop_front() {
+            self.source.diagnostic(
+                &range.start..&range.end,
+                Severity::Error,
+                format!("unexpected delimiter"),
+            );
+            while tokens.pop_front().is_some() {}
+        }
+        end
+    }
+
+    fn output_param(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
+        param_kind: &'a dyn ParamKind,
+        parameterizations: &[&Parameterization<'a>],
+        result_params: &mut Option<Vec<Parameterization<'a>>>,
+    ) -> Option<Src::Marker> {
+        let mut end = None;
+        let mut state = ParamGroupState::new();
+
+        loop {
+            let mut event = None;
+            let mut range_holder = None;
+            let range: Range<&Src::Marker>;
+            if let Some((cur_event, cur_range)) = tokens.pop_front() {
+                event = Some(cur_event);
+                range_holder = Some(cur_range);
+                let range_holder_ref = range_holder.as_ref().unwrap();
+                range = &range_holder_ref.start..&range_holder_ref.end;
+            } else {
+                let end_ref = end.as_ref().unwrap();
+                range = end_ref..end_ref;
+            }
+
+            if let Some((event, _)) = self.param_group_event(
+                &mut state,
+                event,
+                range,
+                out,
+                param_kind,
+                None,
+                parameterizations,
+                None,
+                result_params,
+            ) {
+                if let Some(event) = event {
+                    tokens.push_front((event, range_holder.unwrap()));
+                }
+                break;
+            } else if let Some(range_holder) = range_holder {
+                end = Some(range_holder.end);
             }
         }
 
@@ -808,12 +1239,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
     fn output_object(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         object_kind: &'a dyn ObjectKind,
     ) {
         loop {
-            let (event, range) = recorded_tokens.front().unwrap();
+            let (event, range) = tokens.front().unwrap();
             if matches!(event, TokenEvent::Paren(GroupEvent::End)) {
                 break;
             }
@@ -823,7 +1254,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 &start..&start,
             );
             let end = self
-                .output_object_item(recorded_tokens, out, object_kind)
+                .output_object_item(tokens, out, object_kind)
                 .unwrap_or(start);
             out(ParameterEvent::ObjectItem(GroupEvent::End), &end..&end);
         }
@@ -831,49 +1262,51 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
     fn output_object_item(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         object_kind: &'a dyn ObjectKind,
     ) -> Option<Src::Marker> {
         let separator = object_kind.separator();
 
-        let mut param_tokens = self.extract_recorded_tokens(recorded_tokens, Some(separator));
-        if self.skip_separator_and_check_end(recorded_tokens, separator) {
-            return self.output_object_item_param(
-                &mut param_tokens,
+        let mut param_tokens = self.extract_recorded_tokens(tokens, Some(separator));
+        if self.skip_separator_and_check_end(tokens, separator) {
+            return self.output_single_param(
+                &mut RecordedTokenSlice::new(&mut param_tokens),
                 out,
                 object_kind.param_kind(),
                 &[],
+                &mut None,
             );
         }
 
         let mut parameterizations = Some(Vec::new());
         let end = self.output_object_item_parameterizations(
-            recorded_tokens,
+            tokens,
             out,
             object_kind.parameterization(),
             Some(separator),
             &mut parameterizations,
         );
-        self.output_object_item_param(
-            &mut param_tokens,
+        self.output_single_param(
+            &mut RecordedTokenSlice::new(&mut param_tokens),
             out,
             object_kind.param_kind(),
             &Parameterization::concat(&[], parameterizations.as_deref()),
+            &mut None,
         );
-        if self.skip_separator_and_check_end(recorded_tokens, separator) {
+        if self.skip_separator_and_check_end(tokens, separator) {
             return end;
         }
 
         let mut extra_data_idx = 0;
         loop {
             let end = self.output_object_item_extra(
-                recorded_tokens,
+                tokens,
                 out,
                 object_kind.extra_data_kind(extra_data_idx),
                 Some(separator),
             );
-            if self.skip_separator_and_check_end(recorded_tokens, separator) {
+            if self.skip_separator_and_check_end(tokens, separator) {
                 return end;
             }
             extra_data_idx += 1;
@@ -882,28 +1315,28 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
     fn skip_separator_and_check_end(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         separator: char,
     ) -> bool {
         if matches!(
-            recorded_tokens.front().unwrap(),
+            tokens.front().unwrap(),
             (TokenEvent::Paren(GroupEvent::End), _)
         ) {
             return true;
         }
-        recorded_tokens.pop_front();
+        tokens.pop_front();
 
         if matches!(
-            recorded_tokens.front().unwrap(),
+            tokens.front().unwrap(),
             (TokenEvent::Token(Token::ReservedChar(c, _, _)), _) if *c == separator
         ) {
-            recorded_tokens.pop_front();
+            tokens.pop_front();
 
             while matches!(
-                recorded_tokens.front().unwrap(),
+                tokens.front().unwrap(),
                 (TokenEvent::Token(Token::ReservedChar(c, _, _)), _) if *c == separator
             ) {
-                let (_, range) = recorded_tokens.pop_front().unwrap();
+                let (_, range) = tokens.pop_front().unwrap();
                 self.source.diagnostic(
                     &range.start..&range.end,
                     Severity::Error,
@@ -919,13 +1352,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
 
     fn extract_recorded_tokens(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         separator: Option<char>,
     ) -> RecordedTokens<'a, Src::Marker> {
         let mut paren_depth: u32 = 0;
         let mut end_idx = 0;
 
-        for (idx, (event, _)) in recorded_tokens.iter().enumerate() {
+        for (idx, (event, _)) in tokens.iter().enumerate() {
             match event {
                 TokenEvent::Token(Token::ReservedChar(c, _, _))
                     if paren_depth == 0 && Some(*c) == separator =>
@@ -948,29 +1381,28 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             end_idx = idx + 1;
         }
 
-        let mut result = recorded_tokens.split_off(end_idx);
-        swap(&mut result, recorded_tokens);
-        result
+        tokens.with_subslice(end_idx, |result| result.into_queue())
     }
 
     fn output_object_item_parameterizations(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         parameterization_kind: &'a dyn SectionKind,
         separator: Option<char>,
         result_params: &mut Option<Vec<Parameterization<'a>>>,
     ) -> Option<Src::Marker> {
-        let (_, range) = recorded_tokens.front().unwrap();
+        let (_, range) = tokens.front().unwrap();
         out(
             ParameterEvent::Parameterization(GroupEvent::Start(parameterization_kind)),
             &range.start..&range.start,
         );
 
+        let mut end = range.start.clone();
         let mut state = SectionState::Start;
 
-        let end = loop {
-            let (event, range) = recorded_tokens.pop_front().unwrap();
+        loop {
+            let (event, range) = tokens.pop_front().unwrap();
             if let Some((event, _)) = self.section_event(
                 &mut state,
                 Some(event),
@@ -981,11 +1413,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 &[],
                 result_params,
             ) {
-                let end = range.end.clone();
-                recorded_tokens.push_front((event.unwrap(), range));
-                break end;
+                tokens.push_front((event.unwrap(), range));
+                break;
+            } else {
+                end = range.end;
             }
-        };
+        }
 
         out(
             ParameterEvent::Parameterization(GroupEvent::End),
@@ -995,39 +1428,21 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         Some(end)
     }
 
-    fn output_object_item_param(
-        &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
-        out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
-        param_kind: &'a dyn ParamKind,
-        parameterizations: &[&Parameterization<'a>],
-    ) -> Option<Src::Marker> {
-        self.output_notation_and_check_continuation(
-            recorded_tokens,
-            out,
-            param_kind,
-            parameterizations,
-            &mut None,
-        );
-
-        self.output_data(recorded_tokens, out, param_kind.data_kind(), None)
-    }
-
     fn output_object_item_extra(
         &self,
-        recorded_tokens: &mut RecordedTokens<'a, Src::Marker>,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         data_kind: Option<&'a dyn DataKind>,
         separator: Option<char>,
     ) -> Option<Src::Marker> {
-        let (_, range) = recorded_tokens.front().unwrap();
+        let (_, range) = tokens.front().unwrap();
         let start = range.start.clone();
         out(
             ParameterEvent::ObjectItemExtra(GroupEvent::Start(())),
             &start..&start,
         );
 
-        let end = self.output_data(recorded_tokens, out, data_kind, separator);
+        let end = self.output_data(tokens, separator, out, data_kind);
 
         let end_or_start = end.as_ref().unwrap_or(&start);
         out(
@@ -1056,6 +1471,8 @@ pub enum ParameterIdentifierState<'a, Marker: Clone + PartialEq> {
 
 pub type RecordedTokens<'a, Marker> = VecDeque<(TokenEvent<'a>, Range<Marker>)>;
 
+type RecordedTokenSlice<'a, 'b, Marker> = QueueSlice<'b, (TokenEvent<'a>, Range<Marker>)>;
+
 #[derive(Clone, PartialEq)]
 pub enum SectionState<'a, Marker: Clone + PartialEq> {
     Start,
@@ -1070,11 +1487,30 @@ pub enum SectionItemState<'a, Marker: Clone + PartialEq> {
     Start,
     Parameterization(&'a dyn SectionKind, Box<SectionState<'a, Marker>>),
     ParamGroup {
-        recorded_tokens: RecordedTokens<'a, Marker>,
-        paren_depth: u32,
+        group_state: ParamGroupState<'a, Marker>,
+        end_marker: Marker,
     },
     Subsection(&'a dyn SectionKind, Box<SectionState<'a, Marker>>),
     AfterSubsection,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct ParamGroupState<'a, Marker: Clone + PartialEq> {
+    recorded_tokens: RecordedTokens<'a, Marker>,
+    paren_depth: u32,
+    notation_len: usize,
+    in_data: bool,
+}
+
+impl<'a, Marker: Clone + PartialEq> ParamGroupState<'a, Marker> {
+    fn new() -> Self {
+        ParamGroupState {
+            recorded_tokens: VecDeque::new(),
+            paren_depth: 0,
+            notation_len: 0,
+            in_data: false,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -1428,9 +1864,9 @@ mod tests {
                 ),
             }],
             &[TestDiagnosticMessage {
-                range_text: "".into(),
+                range_text: ",".into(),
                 severity: Severity::Error,
-                msg: "item expected".into(),
+                msg: "superfluous comma".into(),
             }],
         )?;
         test_parameter_identification(
@@ -1501,9 +1937,9 @@ mod tests {
                 ),
             }],
             &[TestDiagnosticMessage {
-                range_text: "".into(),
+                range_text: ",".into(),
                 severity: Severity::Error,
-                msg: "item expected".into(),
+                msg: "superfluous comma".into(),
             }],
         )?;
         test_parameter_identification(
@@ -1528,9 +1964,9 @@ mod tests {
                 ),
             }],
             &[TestDiagnosticMessage {
-                range_text: "".into(),
+                range_text: ",".into(),
                 severity: Severity::Error,
-                msg: "item expected".into(),
+                msg: "superfluous comma".into(),
             }],
         )?;
         test_parameter_identification(
@@ -1555,9 +1991,9 @@ mod tests {
                 ),
             }],
             &[TestDiagnosticMessage {
-                range_text: "".into(),
+                range_text: ",".into(),
                 severity: Severity::Error,
-                msg: "item expected".into(),
+                msg: "superfluous comma".into(),
             }],
         )?;
         test_parameter_identification(
@@ -1670,9 +2106,9 @@ mod tests {
                 ),
             }],
             &[TestDiagnosticMessage {
-                range_text: "".into(),
+                range_text: ",".into(),
                 severity: Severity::Error,
-                msg: "parameter expected".into(),
+                msg: "superfluous comma".into(),
             }],
         )?;
         test_parameter_identification(
@@ -1832,6 +2268,155 @@ mod tests {
                 ),
             }],
             &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; [[d : D] b; c : C] a : A;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![
+                        SectionItem {
+                            parameterizations: vec![Parameterization(
+                                &metamodel,
+                                vec![SectionItem {
+                                    parameterizations: Vec::new(),
+                                    body: SectionItemBody::ParamGroup(
+                                        vec![Parameter {
+                                            notation: NotationExpression::Identifier("d".into()),
+                                        }],
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "D".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                }],
+                            )],
+                            body: SectionItemBody::ParamGroup(
+                                vec![Parameter {
+                                    notation: NotationExpression::Identifier("b".into()),
+                                }],
+                                Vec::new(),
+                            ),
+                        },
+                        SectionItem {
+                            parameterizations: Vec::new(),
+                            body: SectionItemBody::ParamGroup(
+                                vec![Parameter {
+                                    notation: NotationExpression::Identifier("c".into()),
+                                }],
+                                vec![
+                                    DataToken::Token(Token::Identifier(
+                                        ":".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                    DataToken::Token(Token::Identifier(
+                                        "C".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                ],
+                            ),
+                        },
+                    ],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("a".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; [[d : D] b : B, c : C] a : A;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![
+                        SectionItem {
+                            parameterizations: vec![Parameterization(
+                                &metamodel,
+                                vec![SectionItem {
+                                    parameterizations: Vec::new(),
+                                    body: SectionItemBody::ParamGroup(
+                                        vec![Parameter {
+                                            notation: NotationExpression::Identifier("d".into()),
+                                        }],
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "D".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                }],
+                            )],
+                            body: SectionItemBody::ParamGroup(
+                                vec![Parameter {
+                                    notation: NotationExpression::Identifier("b".into()),
+                                }],
+                                vec![
+                                    DataToken::Token(Token::Identifier(
+                                        ":".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                    DataToken::Token(Token::Identifier(
+                                        "B".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                ],
+                            ),
+                        },
+                        SectionItem {
+                            parameterizations: Vec::new(),
+                            body: SectionItemBody::ParamGroup(
+                                vec![Parameter {
+                                    notation: NotationExpression::Identifier("c".into()),
+                                }],
+                                vec![
+                                    DataToken::Token(Token::Identifier(
+                                        ":".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                    DataToken::Token(Token::Identifier(
+                                        "C".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                ],
+                            ),
+                        },
+                    ],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("a".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+            }],
+            &[TestDiagnosticMessage {
+                range_text: ",".into(),
+                severity: Severity::Error,
+                msg: "expected semicolon instead of comma".into(),
+            }],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[d : D] b(d),c(d) : B] a(d ↦ b(d), d ↦ c(d)) : A;",
@@ -2010,203 +2595,6 @@ mod tests {
                     vec![
                         DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
                         DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; a := f((b : B) ↦ b);",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("a".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![MappingParameter(
-                                    None,
-                                    Parameter {
-                                        notation: NotationExpression::Identifier("b".into()),
-                                    },
-                                    vec![
-                                        DataToken::Token(Token::Identifier(
-                                            ":".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                        DataToken::Token(Token::Identifier(
-                                            "B".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                    ],
-                                )],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "b".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
-                        ),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; a := f[(b : B) ↦ b, ((d : D, e : E, f : E) ↦ c[d,f] : C) ↦ c[0,1]];",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("a".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '[',
-                            vec![
-                                DataToken::Mapping(
-                                    &metamodel,
-                                    vec![MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("b".into()),
-                                        },
-                                        vec![
-                                            DataToken::Token(Token::Identifier(
-                                                ":".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                            DataToken::Token(Token::Identifier(
-                                                "B".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                        ],
-                                    )],
-                                    vec![DataToken::Token(Token::Identifier(
-                                        "b".into(),
-                                        IdentifierType::Unquoted,
-                                    ))],
-                                ),
-                                DataToken::Token(Token::ReservedChar(
-                                    ',',
-                                    TokenIsolation::StronglyConnected,
-                                    TokenIsolation::Isolated,
-                                )),
-                                DataToken::Mapping(
-                                    &metamodel,
-                                    vec![MappingParameter(
-                                        Some(MappingParameterization(
-                                            &metamodel,
-                                            vec![
-                                                MappingParameter(
-                                                    None,
-                                                    Parameter {
-                                                        notation: NotationExpression::Identifier(
-                                                            "d".into(),
-                                                        ),
-                                                    },
-                                                    vec![
-                                                        DataToken::Token(Token::Identifier(
-                                                            ":".into(),
-                                                            IdentifierType::Unquoted,
-                                                        )),
-                                                        DataToken::Token(Token::Identifier(
-                                                            "D".into(),
-                                                            IdentifierType::Unquoted,
-                                                        )),
-                                                    ],
-                                                ),
-                                                MappingParameter(
-                                                    None,
-                                                    Parameter {
-                                                        notation: NotationExpression::Identifier(
-                                                            "e".into(),
-                                                        ),
-                                                    },
-                                                    vec![
-                                                        DataToken::Token(Token::Identifier(
-                                                            ":".into(),
-                                                            IdentifierType::Unquoted,
-                                                        )),
-                                                        DataToken::Token(Token::Identifier(
-                                                            "E".into(),
-                                                            IdentifierType::Unquoted,
-                                                        )),
-                                                    ],
-                                                ),
-                                                MappingParameter(
-                                                    None,
-                                                    Parameter {
-                                                        notation: NotationExpression::Identifier(
-                                                            "f".into(),
-                                                        ),
-                                                    },
-                                                    vec![
-                                                        DataToken::Token(Token::Identifier(
-                                                            ":".into(),
-                                                            IdentifierType::Unquoted,
-                                                        )),
-                                                        DataToken::Token(Token::Identifier(
-                                                            "E".into(),
-                                                            IdentifierType::Unquoted,
-                                                        )),
-                                                    ],
-                                                ),
-                                            ],
-                                        )),
-                                        Parameter {
-                                            notation: NotationExpression::Sequence(vec![
-                                                NotationExpression::Identifier("c".into()),
-                                                NotationExpression::Paren(
-                                                    '[',
-                                                    vec![
-                                                        NotationExpression::Param(0),
-                                                        NotationExpression::Param(2),
-                                                    ],
-                                                ),
-                                            ]),
-                                        },
-                                        vec![
-                                            DataToken::Token(Token::Identifier(
-                                                ":".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                            DataToken::Token(Token::Identifier(
-                                                "C".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                        ],
-                                    )],
-                                    vec![
-                                        DataToken::Token(Token::Identifier(
-                                            "c".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                        DataToken::Paren(
-                                            '[',
-                                            vec![
-                                                DataToken::Token(Token::Number("0".into())),
-                                                DataToken::Token(Token::ReservedChar(
-                                                    ',',
-                                                    TokenIsolation::StronglyConnected,
-                                                    TokenIsolation::StronglyConnected,
-                                                )),
-                                                DataToken::Token(Token::Number("1".into())),
-                                            ],
-                                        ),
-                                    ],
-                                ),
-                            ],
-                        ),
                     ],
                 ),
             }],
@@ -3133,6 +3521,60 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
+            "%slate \"test\"; f := (a ↦ x, b ↦ y);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![
+                                DataToken::Mapping(
+                                    &metamodel,
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "x".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                                DataToken::Token(Token::ReservedChar(
+                                    ',',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::Isolated,
+                                )),
+                                DataToken::Mapping(
+                                    &metamodel,
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "y".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
             "%slate \"test\"; f := ((a,b) ↦ x);",
             &metamodel,
             vec![SectionItem {
@@ -3173,6 +3615,94 @@ mod tests {
                 ),
             }],
             &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a,b,) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                &metamodel,
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a,,b) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                &metamodel,
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[TestDiagnosticMessage {
+                range_text: ",".into(),
+                severity: Severity::Error,
+                msg: "superfluous comma".into(),
+            }],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a : A, b : B) ↦ x);",
@@ -3312,6 +3842,160 @@ mod tests {
                                     IdentifierType::Unquoted,
                                 ))],
                             )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; a := f[(b : B) ↦ b, ((d : D, e : E, f : E) ↦ c[d,f] : C) ↦ c[0,1]];",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("a".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '[',
+                            vec![
+                                DataToken::Mapping(
+                                    &metamodel,
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "B".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "b".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                                DataToken::Token(Token::ReservedChar(
+                                    ',',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::Isolated,
+                                )),
+                                DataToken::Mapping(
+                                    &metamodel,
+                                    vec![MappingParameter(
+                                        Some(MappingParameterization(
+                                            &metamodel,
+                                            vec![
+                                                MappingParameter(
+                                                    None,
+                                                    Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "d".into(),
+                                                        ),
+                                                    },
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "D".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                                MappingParameter(
+                                                    None,
+                                                    Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "e".into(),
+                                                        ),
+                                                    },
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "E".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                                MappingParameter(
+                                                    None,
+                                                    Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "f".into(),
+                                                        ),
+                                                    },
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "E".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                            ],
+                                        )),
+                                        Parameter {
+                                            notation: NotationExpression::Sequence(vec![
+                                                NotationExpression::Identifier("c".into()),
+                                                NotationExpression::Paren(
+                                                    '[',
+                                                    vec![
+                                                        NotationExpression::Param(0),
+                                                        NotationExpression::Param(2),
+                                                    ],
+                                                ),
+                                            ]),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "C".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    )],
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            "c".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Paren(
+                                            '[',
+                                            vec![
+                                                DataToken::Token(Token::Number("0".into())),
+                                                DataToken::Token(Token::ReservedChar(
+                                                    ',',
+                                                    TokenIsolation::StronglyConnected,
+                                                    TokenIsolation::StronglyConnected,
+                                                )),
+                                                DataToken::Token(Token::Number("1".into())),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
                         ),
                     ],
                 ),

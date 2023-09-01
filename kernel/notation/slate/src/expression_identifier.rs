@@ -186,6 +186,11 @@ mod tests {
             },
             &[
                 TestDiagnosticMessage {
+                    range_text: ",".into(),
+                    severity: Severity::Error,
+                    msg: "superfluous comma".into(),
+                },
+                TestDiagnosticMessage {
                     range_text: "\"endless".into(),
                     severity: Severity::Error,
                     msg: "unterminated string".into(),
@@ -194,11 +199,6 @@ mod tests {
                     range_text: "(\"endless".into(),
                     severity: Severity::Error,
                     msg: "unmatched parenthesis: ')' expected".into(),
-                },
-                TestDiagnosticMessage {
-                    range_text: "".into(),
-                    severity: Severity::Error,
-                    msg: "parameter expected".into(),
                 },
             ],
         )?;

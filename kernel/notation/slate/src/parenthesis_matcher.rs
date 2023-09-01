@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use slate_kernel_notation_generic::{event::*, event_translator::*};
 
-use crate::{chars::matching_closing_parenthesis, tokenizer::*};
+use crate::{chars::*, tokenizer::*};
 
 // `TokenEvent` serializes `ParenToken` (defined in tests below) into events.
 #[derive(Clone, PartialEq, Debug)]
@@ -67,8 +67,9 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
                 }
             }
 
-            if !is_symmetric_paren
-                || (pre_isolation == TokenIsolation::StronglyConnected
+            if is_closing_parenthesis(c)
+                || (is_symmetric_paren
+                    && pre_isolation == TokenIsolation::StronglyConnected
                     && post_isolation != TokenIsolation::StronglyConnected)
             {
                 if let Some(closed_group_index) = state
@@ -83,8 +84,14 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
                     );
                     state.pop();
                     out(TokenEvent::Paren(GroupEvent::End), range);
-                    return;
+                } else {
+                    self.source.diagnostic(
+                        range,
+                        Severity::Error,
+                        format!("unmatched parenthesis"),
+                    );
                 }
+                return;
             }
         }
 
@@ -415,6 +422,15 @@ mod tests {
             }],
         )?;
         test_parenthesis_matching(
+            ")",
+            Vec::new(),
+            &[TestDiagnosticMessage {
+                range_text: ")".into(),
+                severity: Severity::Error,
+                msg: "unmatched parenthesis".into(),
+            }],
+        )?;
+        test_parenthesis_matching(
             "a (b c",
             vec![
                 ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
@@ -430,6 +446,19 @@ mod tests {
                 range_text: "(b c".into(),
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: ')' expected".into(),
+            }],
+        )?;
+        test_parenthesis_matching(
+            "a b) c",
+            vec![
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+                ParenToken::Token(Token::Identifier("c".into(), IdentifierType::Unquoted)),
+            ],
+            &[TestDiagnosticMessage {
+                range_text: ")".into(),
+                severity: Severity::Error,
+                msg: "unmatched parenthesis".into(),
             }],
         )?;
         test_parenthesis_matching(
@@ -455,6 +484,69 @@ mod tests {
                 range_text: "[c".into(),
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: ']' expected".into(),
+            }],
+        )?;
+        test_parenthesis_matching(
+            "a (b |c) d",
+            vec![
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                ParenToken::Paren(
+                    '(',
+                    vec![
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+                        ParenToken::Paren(
+                            '|',
+                            vec![ParenToken::Token(Token::Identifier(
+                                "c".into(),
+                                IdentifierType::Unquoted,
+                            ))],
+                        ),
+                    ],
+                ),
+                ParenToken::Token(Token::Identifier("d".into(), IdentifierType::Unquoted)),
+            ],
+            &[TestDiagnosticMessage {
+                range_text: "|c".into(),
+                severity: Severity::Error,
+                msg: "unmatched parenthesis: '|' expected".into(),
+            }],
+        )?;
+        test_parenthesis_matching(
+            "a (b] c) d",
+            vec![
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                ParenToken::Paren(
+                    '(',
+                    vec![
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::Identifier("c".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+                ParenToken::Token(Token::Identifier("d".into(), IdentifierType::Unquoted)),
+            ],
+            &[TestDiagnosticMessage {
+                range_text: "]".into(),
+                severity: Severity::Error,
+                msg: "unmatched parenthesis".into(),
+            }],
+        )?;
+        test_parenthesis_matching(
+            "a (b| c) d",
+            vec![
+                ParenToken::Token(Token::Identifier("a".into(), IdentifierType::Unquoted)),
+                ParenToken::Paren(
+                    '(',
+                    vec![
+                        ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
+                        ParenToken::Token(Token::Identifier("c".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+                ParenToken::Token(Token::Identifier("d".into(), IdentifierType::Unquoted)),
+            ],
+            &[TestDiagnosticMessage {
+                range_text: "|".into(),
+                severity: Severity::Error,
+                msg: "unmatched parenthesis".into(),
             }],
         )?;
         test_parenthesis_matching(

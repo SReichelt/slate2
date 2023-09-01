@@ -136,7 +136,8 @@ Parameters may occur at several different locations; their syntax depends on the
   * In the prefix case, source and target are separated by the first `.` following the mapping
     symbol, and the target extends from this `.` until the next comma, semicolon, or closing
     parenthesis (disregarding commas and semicolons that are part of mappings). The source consists
-    of zero or more parameters separated by `,`, where each parameter is a notation expression
+    of zero or more parameters separated by `,`, where each parameter is either a notation
+    expression optionally followed by data, or a mapping whose target is a notation expression
     optionally followed by data.
   * In the infix case, the source extends from the previous comma, semicolon, or opening parenthesis
     until the mapping symbol, and the target extends from the mapping symbol until the next comma,

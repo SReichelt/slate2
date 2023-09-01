@@ -27,6 +27,7 @@ macro_rules! dyn_ptr_eq {
 dyn_ptr_eq!(MetaModel);
 
 pub trait DataKind: Debug {
+    fn special_data_kind(&self, start_paren: char) -> Option<&dyn DataKind>;
     fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
     fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind>;
 }
@@ -62,6 +63,7 @@ pub trait MappingKind: Debug {
     fn notation(&self) -> MappingNotation;
 
     fn param_kind(&self) -> &dyn ParamKind;
+    fn target_data_kind(&self) -> Option<&dyn DataKind>;
 }
 
 dyn_ptr_eq!(MappingKind);
@@ -110,6 +112,10 @@ pub mod test_helpers {
     }
 
     impl DataKind for TestMetaModel {
+        fn special_data_kind(&self, _start_paren: char) -> Option<&dyn DataKind> {
+            None
+        }
+
         fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
             match identifier {
                 "↦" => Some(self),
@@ -164,6 +170,10 @@ pub mod test_helpers {
 
         fn param_kind(&self) -> &dyn ParamKind {
             self
+        }
+
+        fn target_data_kind(&self) -> Option<&dyn DataKind> {
+            Some(self)
         }
     }
 
