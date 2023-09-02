@@ -218,7 +218,7 @@ mod tests {
         expected_document: Document,
         expected_diagnostics: &[TestDiagnosticMessage],
     ) -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         let mut expression_events = Vec::new();
         let expression_sink = TranslatorInst::new(ExpressionIdentifier, &mut expression_events);
         let param_sink = TranslatorInst::new(ParameterIdentifier::new(&metamodel), expression_sink);

@@ -89,8 +89,35 @@ pub mod test_helpers {
 
     use super::*;
 
-    #[derive(Debug)]
-    pub struct TestMetaModel;
+    pub struct TestMetaModel {
+        pub is_infix_mapping: bool,
+        pub opposite_mapping: Option<Box<TestMetaModel>>,
+    }
+
+    impl TestMetaModel {
+        pub fn new() -> Self {
+            TestMetaModel {
+                is_infix_mapping: false,
+                opposite_mapping: Some(Box::new(TestMetaModel {
+                    is_infix_mapping: true,
+                    opposite_mapping: Some(Box::new(TestMetaModel {
+                        is_infix_mapping: false,
+                        opposite_mapping: None,
+                    })),
+                })),
+            }
+        }
+    }
+
+    impl Debug for TestMetaModel {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            if self.is_infix_mapping {
+                f.write_str("infix")
+            } else {
+                f.write_str("test")
+            }
+        }
+    }
 
     impl MetaModelGetter for TestMetaModel {
         fn metamodel(&self, name: &str) -> Result<&dyn MetaModel> {
@@ -118,7 +145,28 @@ pub mod test_helpers {
 
         fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
             match identifier {
-                "↦" => Some(self),
+                "λ" => {
+                    if self.is_infix_mapping {
+                        if let Some(prefix_mapping) = &self.opposite_mapping {
+                            Some(prefix_mapping.as_ref())
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(self)
+                    }
+                }
+                "↦" => {
+                    if self.is_infix_mapping {
+                        Some(self)
+                    } else {
+                        if let Some(infix_mapping) = &self.opposite_mapping {
+                            Some(infix_mapping.as_ref())
+                        } else {
+                            None
+                        }
+                    }
+                }
                 _ => None,
             }
         }
@@ -156,8 +204,8 @@ pub mod test_helpers {
 
         fn parenthesis_role(&self, start_paren: char) -> SectionParenthesisRole {
             match start_paren {
-                '[' | '⟦' => SectionParenthesisRole::Parameterization(self),
-                '{' | '⦃' => SectionParenthesisRole::Section(self),
+                '[' => SectionParenthesisRole::Parameterization(self),
+                '{' => SectionParenthesisRole::Section(self),
                 _ => SectionParenthesisRole::None,
             }
         }
@@ -165,7 +213,11 @@ pub mod test_helpers {
 
     impl MappingKind for TestMetaModel {
         fn notation(&self) -> MappingNotation {
-            MappingNotation::Infix { binder_paren: '(' }
+            if self.is_infix_mapping {
+                MappingNotation::Infix { binder_paren: '(' }
+            } else {
+                MappingNotation::Prefix
+            }
         }
 
         fn param_kind(&self) -> &dyn ParamKind {

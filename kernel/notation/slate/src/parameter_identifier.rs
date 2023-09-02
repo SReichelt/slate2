@@ -1546,7 +1546,7 @@ mod tests {
 
     #[test]
     fn globals() -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         test_parameter_identification("%slate \"test\";", &metamodel, Vec::new(), &[])?;
         test_parameter_identification(
             "%slate \"test\"; x;",
@@ -2129,7 +2129,7 @@ mod tests {
 
     #[test]
     fn parameterizations() -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         test_parameter_identification(
             "%slate \"test\"; [b : B] a : A;",
             &metamodel,
@@ -2499,6 +2499,93 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
+            "%slate \"test\"; [[c : C; d : D] b(c,d) : B] λ c,d. b(c,d) : A;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: vec![Parameterization(
+                            &metamodel,
+                            vec![
+                                SectionItem {
+                                    parameterizations: Vec::new(),
+                                    body: SectionItemBody::ParamGroup(
+                                        vec![Parameter {
+                                            notation: NotationExpression::Identifier("c".into()),
+                                        }],
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "C".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                },
+                                SectionItem {
+                                    parameterizations: Vec::new(),
+                                    body: SectionItemBody::ParamGroup(
+                                        vec![Parameter {
+                                            notation: NotationExpression::Identifier("d".into()),
+                                        }],
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "D".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                },
+                            ],
+                        )],
+                        body: SectionItemBody::ParamGroup(
+                            vec![Parameter {
+                                notation: NotationExpression::Sequence(vec![
+                                    NotationExpression::Identifier("b".into()),
+                                    NotationExpression::Paren(
+                                        '(',
+                                        vec![
+                                            NotationExpression::Param(0),
+                                            NotationExpression::Param(1),
+                                        ],
+                                    ),
+                                ]),
+                            }],
+                            vec![
+                                DataToken::Token(Token::Identifier(
+                                    ":".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                DataToken::Token(Token::Identifier(
+                                    "B".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                            ],
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        // TODO mapping kind
+                        notation: NotationExpression::Param(0),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
             "%slate \"test\"; [[[e : E] d(e) : D] b(e ↦ d(e)),c(e ↦ d(e)) : B] a(([e] d(e)) ↦ b(e ↦ d(e)), ([e] d(e)) ↦ c(e ↦ d(e))) : A;",&metamodel, 
             vec![SectionItem {
                 parameterizations: vec![Parameterization(
@@ -2605,7 +2692,7 @@ mod tests {
 
     #[test]
     fn sections() -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         test_parameter_identification(
             "%slate \"test\"; {}",
             &metamodel,
@@ -2826,7 +2913,7 @@ mod tests {
 
     #[test]
     fn objects() -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         test_parameter_identification(
             "%slate \"test\"; T := {};",
             &metamodel,
@@ -3293,14 +3380,9 @@ mod tests {
 
     #[test]
     fn prefix_mappings() -> Result<(), Message> {
-        todo!()
-    }
-
-    #[test]
-    fn infix_mappings() -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         test_parameter_identification(
-            "%slate \"test\"; f := (() ↦ x);",
+            "%slate \"test\"; f := λ. x;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3310,16 +3392,43 @@ mod tests {
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
+                        DataToken::Mapping(
+                            &metamodel,
+                            Vec::new(),
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := λ a. x;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![MappingParameter(
+                                None,
+                                Parameter {
+                                    notation: NotationExpression::Identifier("a".into()),
+                                },
                                 Vec::new(),
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
                             )],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
@@ -3327,7 +3436,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; f := (a ↦ x);",
+            "%slate \"test\"; f := λ a : A. x;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3337,183 +3446,28 @@ mod tests {
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![MappingParameter(
-                                    None,
-                                    Parameter {
-                                        notation: NotationExpression::Identifier("a".into()),
-                                    },
-                                    Vec::new(),
-                                )],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
-                        ),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; f := (a : A ↦ x);",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("f".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![MappingParameter(
-                                    None,
-                                    Parameter {
-                                        notation: NotationExpression::Identifier("a".into()),
-                                    },
-                                    vec![
-                                        DataToken::Token(Token::Identifier(
-                                            ":".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                        DataToken::Token(Token::Identifier(
-                                            "A".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                    ],
-                                )],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
-                        ),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; f := ((a) ↦ x);",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("f".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![MappingParameter(
-                                    None,
-                                    Parameter {
-                                        notation: NotationExpression::Identifier("a".into()),
-                                    },
-                                    Vec::new(),
-                                )],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
-                        ),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; f := ((a : A) ↦ x);",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("f".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![MappingParameter(
-                                    None,
-                                    Parameter {
-                                        notation: NotationExpression::Identifier("a".into()),
-                                    },
-                                    vec![
-                                        DataToken::Token(Token::Identifier(
-                                            ":".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                        DataToken::Token(Token::Identifier(
-                                            "A".into(),
-                                            IdentifierType::Unquoted,
-                                        )),
-                                    ],
-                                )],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
-                        ),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; f := (a, b ↦ x);",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("f".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![
-                                DataToken::Token(Token::Identifier(
-                                    "a".into(),
-                                    IdentifierType::Unquoted,
-                                )),
-                                DataToken::Token(Token::ReservedChar(
-                                    ',',
-                                    TokenIsolation::StronglyConnected,
-                                    TokenIsolation::Isolated,
-                                )),
-                                DataToken::Mapping(
-                                    &metamodel,
-                                    vec![MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("b".into()),
-                                        },
-                                        Vec::new(),
-                                    )],
-                                    vec![DataToken::Token(Token::Identifier(
-                                        "x".into(),
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![MappingParameter(
+                                None,
+                                Parameter {
+                                    notation: NotationExpression::Identifier("a".into()),
+                                },
+                                vec![
+                                    DataToken::Token(Token::Identifier(
+                                        ":".into(),
                                         IdentifierType::Unquoted,
-                                    ))],
-                                ),
-                            ],
+                                    )),
+                                    DataToken::Token(Token::Identifier(
+                                        "A".into(),
+                                        IdentifierType::Unquoted,
+                                    )),
+                                ],
+                            )],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
@@ -3521,7 +3475,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; f := (a ↦ x, b ↦ y);",
+            "%slate \"test\"; f := (λ a. x, λ b. y);",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3575,7 +3529,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; f := ((a,b) ↦ x);",
+            "%slate \"test\"; f := λ a,b. x;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3585,31 +3539,28 @@ mod tests {
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("a".into()),
-                                        },
-                                        Vec::new(),
-                                    ),
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("b".into()),
-                                        },
-                                        Vec::new(),
-                                    ),
-                                ],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    Vec::new(),
+                                ),
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("b".into()),
+                                    },
+                                    Vec::new(),
+                                ),
+                            ],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
@@ -3617,7 +3568,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; f := ((a,b,) ↦ x);",
+            "%slate \"test\"; f := λ a,b,. x;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3627,31 +3578,28 @@ mod tests {
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("a".into()),
-                                        },
-                                        Vec::new(),
-                                    ),
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("b".into()),
-                                        },
-                                        Vec::new(),
-                                    ),
-                                ],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    Vec::new(),
+                                ),
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("b".into()),
+                                    },
+                                    Vec::new(),
+                                ),
+                            ],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
@@ -3659,7 +3607,7 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; f := ((a,,b) ↦ x);",
+            "%slate \"test\"; f := λ a,,b. x;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3669,31 +3617,28 @@ mod tests {
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("a".into()),
-                                        },
-                                        Vec::new(),
-                                    ),
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("b".into()),
-                                        },
-                                        Vec::new(),
-                                    ),
-                                ],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    Vec::new(),
+                                ),
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("b".into()),
+                                    },
+                                    Vec::new(),
+                                ),
+                            ],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
@@ -3705,7 +3650,7 @@ mod tests {
             }],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; f := ((a : A, b : B) ↦ x);",
+            "%slate \"test\"; f := λ a : A, b : B. x;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3715,133 +3660,46 @@ mod tests {
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("a".into()),
-                                        },
-                                        vec![
-                                            DataToken::Token(Token::Identifier(
-                                                ":".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                            DataToken::Token(Token::Identifier(
-                                                "A".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                        ],
-                                    ),
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("b".into()),
-                                        },
-                                        vec![
-                                            DataToken::Token(Token::Identifier(
-                                                ":".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                            DataToken::Token(Token::Identifier(
-                                                "B".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                        ],
-                                    ),
-                                ],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
-                        ),
-                    ],
-                ),
-            }],
-            &[],
-        )?;
-        test_parameter_identification(
-            "%slate \"test\"; f := ((a : A, b : B ↦ c_b : C) ↦ x);",
-            &metamodel,
-            vec![SectionItem {
-                parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(
-                    vec![Parameter {
-                        notation: NotationExpression::Identifier("f".into()),
-                    }],
-                    vec![
-                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
-                        DataToken::Paren(
-                            '(',
-                            vec![DataToken::Mapping(
-                                &metamodel,
-                                vec![
-                                    MappingParameter(
-                                        None,
-                                        Parameter {
-                                            notation: NotationExpression::Identifier("a".into()),
-                                        },
-                                        vec![
-                                            DataToken::Token(Token::Identifier(
-                                                ":".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                            DataToken::Token(Token::Identifier(
-                                                "A".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                        ],
-                                    ),
-                                    MappingParameter(
-                                        Some(MappingParameterization(
-                                            &metamodel,
-                                            vec![MappingParameter(
-                                                None,
-                                                Parameter {
-                                                    notation: NotationExpression::Identifier(
-                                                        "b".into(),
-                                                    ),
-                                                },
-                                                vec![
-                                                    DataToken::Token(Token::Identifier(
-                                                        ":".into(),
-                                                        IdentifierType::Unquoted,
-                                                    )),
-                                                    DataToken::Token(Token::Identifier(
-                                                        "B".into(),
-                                                        IdentifierType::Unquoted,
-                                                    )),
-                                                ],
-                                            )],
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
                                         )),
-                                        Parameter {
-                                            notation: NotationExpression::Sequence(vec![
-                                                NotationExpression::Identifier("c".into()),
-                                                NotationExpression::ReservedChar('_'),
-                                                NotationExpression::Param(0),
-                                            ]),
-                                        },
-                                        vec![
-                                            DataToken::Token(Token::Identifier(
-                                                ":".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                            DataToken::Token(Token::Identifier(
-                                                "C".into(),
-                                                IdentifierType::Unquoted,
-                                            )),
-                                        ],
-                                    ),
-                                ],
-                                vec![DataToken::Token(Token::Identifier(
-                                    "x".into(),
-                                    IdentifierType::Unquoted,
-                                ))],
-                            )],
+                                        DataToken::Token(Token::Identifier(
+                                            "A".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("b".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "B".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                            ],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
                         ),
                     ],
                 ),
@@ -3849,7 +3707,201 @@ mod tests {
             &[],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; a := f[(b : B) ↦ b, ((d : D, e : E, f : E) ↦ c[d,f] : C) ↦ c[0,1]];",
+            "%slate \"test\"; f := λ a : A, λ b : B. c_b : C, d : D. x;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "A".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                                MappingParameter(
+                                    Some(MappingParameterization(
+                                        &metamodel,
+                                        vec![MappingParameter(
+                                            None,
+                                            Parameter {
+                                                notation: NotationExpression::Identifier(
+                                                    "b".into(),
+                                                ),
+                                            },
+                                            vec![
+                                                DataToken::Token(Token::Identifier(
+                                                    ":".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
+                                                DataToken::Token(Token::Identifier(
+                                                    "B".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
+                                            ],
+                                        )],
+                                    )),
+                                    Parameter {
+                                        notation: NotationExpression::Sequence(vec![
+                                            NotationExpression::Identifier("c".into()),
+                                            NotationExpression::ReservedChar('_'),
+                                            NotationExpression::Param(0),
+                                        ]),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "C".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("d".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "D".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                            ],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := λ a : A, b : B ↦ c_b : C, d : D. x;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Mapping(
+                            &metamodel,
+                            vec![
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "A".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                                MappingParameter(
+                                    Some(MappingParameterization(
+                                        metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                        vec![MappingParameter(
+                                            None,
+                                            Parameter {
+                                                notation: NotationExpression::Identifier(
+                                                    "b".into(),
+                                                ),
+                                            },
+                                            vec![
+                                                DataToken::Token(Token::Identifier(
+                                                    ":".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
+                                                DataToken::Token(Token::Identifier(
+                                                    "B".into(),
+                                                    IdentifierType::Unquoted,
+                                                )),
+                                            ],
+                                        )],
+                                    )),
+                                    Parameter {
+                                        notation: NotationExpression::Sequence(vec![
+                                            NotationExpression::Identifier("c".into()),
+                                            NotationExpression::ReservedChar('_'),
+                                            NotationExpression::Param(0),
+                                        ]),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "C".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                                MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("d".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "D".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                            ],
+                            vec![DataToken::Token(Token::Identifier(
+                                "x".into(),
+                                IdentifierType::Unquoted,
+                            ))],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; a := f[λ b : B. b, λ λ d : D, e : E, f : E. c[d,f] : C. c[0,1]];",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -4006,8 +4058,879 @@ mod tests {
     }
 
     #[test]
+    fn infix_mappings() -> Result<(), Message> {
+        let metamodel = TestMetaModel::new();
+        test_parameter_identification(
+            "%slate \"test\"; f := (() ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                Vec::new(),
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := (a ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    Vec::new(),
+                                )],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := (a : A ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "A".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                )],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    Vec::new(),
+                                )],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a : A) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    },
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "A".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                )],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := (a(b) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![MappingParameter(
+                                    None,
+                                    Parameter {
+                                        notation: NotationExpression::Sequence(vec![
+                                            NotationExpression::Identifier("a".into()),
+                                            NotationExpression::Paren(
+                                                '(',
+                                                vec![NotationExpression::Identifier("b".into())],
+                                            ),
+                                        ]),
+                                    },
+                                    Vec::new(),
+                                )],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := (a, b ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![
+                                DataToken::Token(Token::Identifier(
+                                    "a".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                DataToken::Token(Token::ReservedChar(
+                                    ',',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::Isolated,
+                                )),
+                                DataToken::Mapping(
+                                    metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "x".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := (a ↦ x, b ↦ y);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![
+                                DataToken::Mapping(
+                                    metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "x".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                                DataToken::Token(Token::ReservedChar(
+                                    ',',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::Isolated,
+                                )),
+                                DataToken::Mapping(
+                                    metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "y".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a,b) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a,b,) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a,,b) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        Vec::new(),
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[TestDiagnosticMessage {
+                range_text: ",".into(),
+                severity: Severity::Error,
+                msg: "superfluous comma".into(),
+            }],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a : A, b : B) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "A".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "B".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a : A, b : B ↦ c_b : C, d : D) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "A".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                    MappingParameter(
+                                        Some(MappingParameterization(
+                                            metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                            vec![MappingParameter(
+                                                None,
+                                                Parameter {
+                                                    notation: NotationExpression::Identifier(
+                                                        "b".into(),
+                                                    ),
+                                                },
+                                                vec![
+                                                    DataToken::Token(Token::Identifier(
+                                                        ":".into(),
+                                                        IdentifierType::Unquoted,
+                                                    )),
+                                                    DataToken::Token(Token::Identifier(
+                                                        "B".into(),
+                                                        IdentifierType::Unquoted,
+                                                    )),
+                                                ],
+                                            )],
+                                        )),
+                                        Parameter {
+                                            notation: NotationExpression::Sequence(vec![
+                                                NotationExpression::Identifier("c".into()),
+                                                NotationExpression::ReservedChar('_'),
+                                                NotationExpression::Param(0),
+                                            ]),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "C".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("d".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "D".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; f := ((a : A, λ b : B. c_b : C, d : D) ↦ x);",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("f".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '(',
+                            vec![DataToken::Mapping(
+                                metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                vec![
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("a".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "A".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                    MappingParameter(
+                                        Some(MappingParameterization(
+                                            metamodel
+                                                .opposite_mapping
+                                                .as_ref()
+                                                .unwrap()
+                                                .opposite_mapping
+                                                .as_ref()
+                                                .unwrap()
+                                                .as_ref(),
+                                            vec![MappingParameter(
+                                                None,
+                                                Parameter {
+                                                    notation: NotationExpression::Identifier(
+                                                        "b".into(),
+                                                    ),
+                                                },
+                                                vec![
+                                                    DataToken::Token(Token::Identifier(
+                                                        ":".into(),
+                                                        IdentifierType::Unquoted,
+                                                    )),
+                                                    DataToken::Token(Token::Identifier(
+                                                        "B".into(),
+                                                        IdentifierType::Unquoted,
+                                                    )),
+                                                ],
+                                            )],
+                                        )),
+                                        Parameter {
+                                            notation: NotationExpression::Sequence(vec![
+                                                NotationExpression::Identifier("c".into()),
+                                                NotationExpression::ReservedChar('_'),
+                                                NotationExpression::Param(0),
+                                            ]),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "C".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                    MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("d".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "D".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    ),
+                                ],
+                                vec![DataToken::Token(Token::Identifier(
+                                    "x".into(),
+                                    IdentifierType::Unquoted,
+                                ))],
+                            )],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; a := f[(b : B) ↦ b, ((d : D, e : E, f : E) ↦ c[d,f] : C) ↦ c[0,1]];",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: Vec::new(),
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Identifier("a".into()),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("f".into(), IdentifierType::Unquoted)),
+                        DataToken::Paren(
+                            '[',
+                            vec![
+                                DataToken::Mapping(
+                                    metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                    vec![MappingParameter(
+                                        None,
+                                        Parameter {
+                                            notation: NotationExpression::Identifier("b".into()),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "B".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    )],
+                                    vec![DataToken::Token(Token::Identifier(
+                                        "b".into(),
+                                        IdentifierType::Unquoted,
+                                    ))],
+                                ),
+                                DataToken::Token(Token::ReservedChar(
+                                    ',',
+                                    TokenIsolation::StronglyConnected,
+                                    TokenIsolation::Isolated,
+                                )),
+                                DataToken::Mapping(
+                                    metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                    vec![MappingParameter(
+                                        Some(MappingParameterization(
+                                            metamodel.opposite_mapping.as_ref().unwrap().as_ref(),
+                                            vec![
+                                                MappingParameter(
+                                                    None,
+                                                    Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "d".into(),
+                                                        ),
+                                                    },
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "D".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                                MappingParameter(
+                                                    None,
+                                                    Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "e".into(),
+                                                        ),
+                                                    },
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "E".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                                MappingParameter(
+                                                    None,
+                                                    Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "f".into(),
+                                                        ),
+                                                    },
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "E".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                            ],
+                                        )),
+                                        Parameter {
+                                            notation: NotationExpression::Sequence(vec![
+                                                NotationExpression::Identifier("c".into()),
+                                                NotationExpression::Paren(
+                                                    '[',
+                                                    vec![
+                                                        NotationExpression::Param(0),
+                                                        NotationExpression::Param(2),
+                                                    ],
+                                                ),
+                                            ]),
+                                        },
+                                        vec![
+                                            DataToken::Token(Token::Identifier(
+                                                ":".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                            DataToken::Token(Token::Identifier(
+                                                "C".into(),
+                                                IdentifierType::Unquoted,
+                                            )),
+                                        ],
+                                    )],
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            "c".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Paren(
+                                            '[',
+                                            vec![
+                                                DataToken::Token(Token::Number("0".into())),
+                                                DataToken::Token(Token::ReservedChar(
+                                                    ',',
+                                                    TokenIsolation::StronglyConnected,
+                                                    TokenIsolation::StronglyConnected,
+                                                )),
+                                                DataToken::Token(Token::Number("1".into())),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            }],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn top_level_errors() -> Result<(), Message> {
-        let metamodel = TestMetaModel;
+        let metamodel = TestMetaModel::new();
         test_parameter_identification_with_document(
             "",
             &metamodel,
