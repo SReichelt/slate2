@@ -3760,7 +3760,7 @@ mod tests {
             }],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; T := {x_i ↦ i | i : I || y_j ↦ j | j : J | a | b} | {z};",
+            "%slate \"test\"; T := {x_i ↦ i | i : I || y_j_k ↦ j k | j : J; k : K | a | b} | {z};",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
@@ -3819,32 +3819,56 @@ mod tests {
                                 ObjectItem {
                                     parameterizations: vec![Parameterization(
                                         &metamodel,
-                                        vec![SectionItem {
-                                            parameterizations: Vec::new(),
-                                            body: SectionItemBody::ParamGroup(
-                                                vec![Parameter {
-                                                    notation: NotationExpression::Identifier(
-                                                        "j".into(),
-                                                    ),
-                                                }],
-                                                vec![
-                                                    DataToken::Token(Token::Identifier(
-                                                        ":".into(),
-                                                        IdentifierType::Unquoted,
-                                                    )),
-                                                    DataToken::Token(Token::Identifier(
-                                                        "J".into(),
-                                                        IdentifierType::Unquoted,
-                                                    )),
-                                                ],
-                                            ),
-                                        }],
+                                        vec![
+                                            SectionItem {
+                                                parameterizations: Vec::new(),
+                                                body: SectionItemBody::ParamGroup(
+                                                    vec![Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "j".into(),
+                                                        ),
+                                                    }],
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "J".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                            },
+                                            SectionItem {
+                                                parameterizations: Vec::new(),
+                                                body: SectionItemBody::ParamGroup(
+                                                    vec![Parameter {
+                                                        notation: NotationExpression::Identifier(
+                                                            "k".into(),
+                                                        ),
+                                                    }],
+                                                    vec![
+                                                        DataToken::Token(Token::Identifier(
+                                                            ":".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                        DataToken::Token(Token::Identifier(
+                                                            "K".into(),
+                                                            IdentifierType::Unquoted,
+                                                        )),
+                                                    ],
+                                                ),
+                                            },
+                                        ],
                                     )],
                                     param: Parameter {
                                         notation: NotationExpression::Sequence(vec![
                                             NotationExpression::Identifier("y".into()),
                                             NotationExpression::ReservedChar('_'),
                                             NotationExpression::Param(0),
+                                            NotationExpression::ReservedChar('_'),
+                                            NotationExpression::Param(1),
                                         ]),
                                     },
                                     param_data: vec![
@@ -3854,6 +3878,10 @@ mod tests {
                                         )),
                                         DataToken::Token(Token::Identifier(
                                             "j".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "k".into(),
                                             IdentifierType::Unquoted,
                                         )),
                                     ],
