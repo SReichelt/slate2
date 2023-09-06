@@ -15,35 +15,17 @@ pub trait MetaModel: Debug {
 
 // See https://github.com/rust-lang/rust/issues/106447.
 macro_rules! dyn_ptr_eq {
-    ($trait:ident) => {
-        impl PartialEq for &dyn $trait {
+    ($($trait:tt)+) => {
+        impl PartialEq for &dyn $($trait)+ {
             fn eq(&self, other: &Self) -> bool {
-                *self as *const dyn $trait as *const u8 == *other as *const dyn $trait as *const u8
+                *self as *const dyn $($trait)+ as *const u8
+                    == *other as *const dyn $($trait)+ as *const u8
             }
         }
     };
 }
 
 dyn_ptr_eq!(MetaModel);
-
-pub trait DataKind: Debug {
-    fn special_data_kind(&self, start_paren: char) -> Option<&dyn DataKind>;
-    fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
-    fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind>;
-}
-
-dyn_ptr_eq!(DataKind);
-
-pub trait ParamKind: Debug {
-    fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool;
-    fn paren_is_notation_delimiter(&self, start_paren: char) -> bool;
-
-    fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
-
-    fn data_kind(&self) -> Option<&dyn DataKind>;
-}
-
-dyn_ptr_eq!(ParamKind);
 
 pub trait SectionKind: Debug {
     fn param_kind(&self) -> &dyn ParamKind;
@@ -59,26 +41,55 @@ pub enum SectionParenthesisRole<'a> {
     Section(&'a dyn SectionKind),
 }
 
-pub trait MappingKind: Debug {
+pub trait ParamKind: Debug {
+    fn notation_kind(&self) -> Option<&dyn NotationKind>;
+    fn data_kind(&self) -> Option<&dyn DataKind>;
+}
+
+dyn_ptr_eq!(ParamKind);
+
+pub trait NotationKind: Debug {
+    fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool;
+    fn paren_is_notation_delimiter(&self, start_paren: char) -> bool;
+
+    fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind<dyn ParamKind>>;
+}
+
+dyn_ptr_eq!(NotationKind);
+
+pub trait MappingKind<T: ?Sized>: Debug {
     fn notation(&self) -> MappingNotation;
 
     fn param_kind(&self) -> &dyn ParamKind;
-    fn target_data_kind(&self) -> Option<&dyn DataKind>;
+    fn target_kind(&self) -> &T;
 }
 
-dyn_ptr_eq!(MappingKind);
+impl<T: ?Sized> PartialEq for &dyn MappingKind<T> {
+    fn eq(&self, other: &Self) -> bool {
+        *self as *const dyn MappingKind<T> as *const u8
+            == *other as *const dyn MappingKind<T> as *const u8
+    }
+}
 
 pub enum MappingNotation {
     Prefix,
     Infix { binder_paren: char },
 }
 
+pub trait DataKind: Debug {
+    fn special_data_kind(&self, start_paren: char) -> Option<&dyn DataKind>;
+    fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind<dyn DataKind>>;
+    fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind>;
+}
+
+dyn_ptr_eq!(DataKind);
+
 pub trait ObjectKind: Debug {
     fn separator(&self) -> char;
 
     fn parameterization(&self) -> &dyn SectionKind;
     fn param_kind(&self) -> &dyn ParamKind;
-    fn extra_data_kind(&self, extra_data_idx: u32) -> Option<&dyn DataKind>;
+    fn extra_section_kind(&self, extra_section_idx: u32) -> Option<&dyn SectionKind>;
 }
 
 dyn_ptr_eq!(ObjectKind);
@@ -105,6 +116,34 @@ pub mod test_helpers {
                         opposite_mapping: None,
                     })),
                 })),
+            }
+        }
+
+        fn get_mapping(&self, identifier: &str) -> Option<&Self> {
+            match identifier {
+                "λ" => {
+                    if self.is_infix_mapping {
+                        if let Some(prefix_mapping) = &self.opposite_mapping {
+                            Some(prefix_mapping.as_ref())
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(self)
+                    }
+                }
+                "↦" => {
+                    if self.is_infix_mapping {
+                        Some(self)
+                    } else {
+                        if let Some(infix_mapping) = &self.opposite_mapping {
+                            Some(infix_mapping.as_ref())
+                        } else {
+                            None
+                        }
+                    }
+                }
+                _ => None,
             }
         }
     }
@@ -138,65 +177,6 @@ pub mod test_helpers {
         }
     }
 
-    impl DataKind for TestMetaModel {
-        fn special_data_kind(&self, _start_paren: char) -> Option<&dyn DataKind> {
-            None
-        }
-
-        fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
-            match identifier {
-                "λ" => {
-                    if self.is_infix_mapping {
-                        if let Some(prefix_mapping) = &self.opposite_mapping {
-                            Some(prefix_mapping.as_ref())
-                        } else {
-                            None
-                        }
-                    } else {
-                        Some(self)
-                    }
-                }
-                "↦" => {
-                    if self.is_infix_mapping {
-                        Some(self)
-                    } else {
-                        if let Some(infix_mapping) = &self.opposite_mapping {
-                            Some(infix_mapping.as_ref())
-                        } else {
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            }
-        }
-
-        fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind> {
-            match start_paren {
-                '{' => Some(self),
-                _ => None,
-            }
-        }
-    }
-
-    impl ParamKind for TestMetaModel {
-        fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool {
-            identifier.starts_with(':')
-        }
-
-        fn paren_is_notation_delimiter(&self, start_paren: char) -> bool {
-            start_paren == '⎿'
-        }
-
-        fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
-            DataKind::mapping_kind(self, identifier)
-        }
-
-        fn data_kind(&self) -> Option<&dyn DataKind> {
-            Some(self)
-        }
-    }
-
     impl SectionKind for TestMetaModel {
         fn param_kind(&self) -> &dyn ParamKind {
             self
@@ -211,7 +191,31 @@ pub mod test_helpers {
         }
     }
 
-    impl MappingKind for TestMetaModel {
+    impl ParamKind for TestMetaModel {
+        fn notation_kind(&self) -> Option<&dyn NotationKind> {
+            Some(self)
+        }
+
+        fn data_kind(&self) -> Option<&dyn DataKind> {
+            Some(self)
+        }
+    }
+
+    impl NotationKind for TestMetaModel {
+        fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool {
+            identifier.starts_with(':')
+        }
+
+        fn paren_is_notation_delimiter(&self, start_paren: char) -> bool {
+            start_paren == '⎿'
+        }
+
+        fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind<dyn ParamKind>> {
+            Some(self.get_mapping(identifier)?)
+        }
+    }
+
+    impl MappingKind<dyn ParamKind> for TestMetaModel {
         fn notation(&self) -> MappingNotation {
             if self.is_infix_mapping {
                 MappingNotation::Infix { binder_paren: '(' }
@@ -224,8 +228,43 @@ pub mod test_helpers {
             self
         }
 
-        fn target_data_kind(&self) -> Option<&dyn DataKind> {
-            Some(self)
+        fn target_kind(&self) -> &(dyn ParamKind + 'static) {
+            self
+        }
+    }
+
+    impl MappingKind<dyn DataKind> for TestMetaModel {
+        fn notation(&self) -> MappingNotation {
+            if self.is_infix_mapping {
+                MappingNotation::Infix { binder_paren: '(' }
+            } else {
+                MappingNotation::Prefix
+            }
+        }
+
+        fn param_kind(&self) -> &dyn ParamKind {
+            self
+        }
+
+        fn target_kind(&self) -> &(dyn DataKind + 'static) {
+            self
+        }
+    }
+
+    impl DataKind for TestMetaModel {
+        fn special_data_kind(&self, _start_paren: char) -> Option<&dyn DataKind> {
+            None
+        }
+
+        fn mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind<dyn DataKind>> {
+            Some(self.get_mapping(identifier)?)
+        }
+
+        fn object_kind(&self, start_paren: char) -> Option<&dyn ObjectKind> {
+            match start_paren {
+                '{' => Some(self),
+                _ => None,
+            }
         }
     }
 
@@ -242,7 +281,7 @@ pub mod test_helpers {
             self
         }
 
-        fn extra_data_kind(&self, _extra_data_idx: u32) -> Option<&dyn DataKind> {
+        fn extra_section_kind(&self, _extra_section_idx: u32) -> Option<&dyn SectionKind> {
             Some(self)
         }
     }

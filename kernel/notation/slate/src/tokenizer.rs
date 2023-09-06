@@ -584,6 +584,8 @@ enum NumberState<Marker: Clone + PartialEq> {
 #[derive(Clone, PartialEq)]
 enum IdentifierContent {
     None,
+    // TODO: We probably want to distinguish between different classes of alphanumeric content, so
+    //       that things like `λa` are two separate tokens.
     Alphanumeric,
     Symbol,
     Subscript,

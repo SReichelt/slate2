@@ -159,9 +159,10 @@ Parameters may occur at several different locations; their syntax depends on the
     sections, which parameterize the item in the sense that their scope extends from the notation
     expression to the separator character. These parameters are again followed by either the
     separator character or the end of the object.
-  * Arbitrary data may follow, including separator characters. The scope of the item includes
-    this data (but the scopes of its parameterizations do not). The item ends when two separator
-    characters are placed next to each other.
+  * Zero or more sections of parameters may follow, delimited by separator characters. The scope of
+    the item includes these sections (but the scopes of its parameterizations do not). The item ends
+    when two separator characters are placed next to each other. (In particular, this implies that
+    unparameterized items cannot contain extra sections.)
 
 A _notation expression_ is recursively any of the following.
 * An identifier.
@@ -198,7 +199,8 @@ If the notation expression is part of a group, the data ends the group and appli
 group.
 A dot, keyword, reserved identifier, or reserved parenthesis is considered a data separator even if
 it occurs within parentheses. The data then begins at the previous top-level opening parenthesis.
-A parameter group may consist only of data.
+A parameter group may consist only of data. The metamodel may also specify that _all_ parameter
+groups in a section are to be interpreted as data, without requiring a separator.
 
 For example, if the metamodel defines `:` as a notation expression delimiter, higher-order
 parameterization with `[]`, and `↦` as an infix mapping symbol, the following are some possible
