@@ -9,8 +9,7 @@ pub enum Token<'a> {
     ReservedChar(char, TokenIsolation, TokenIsolation),
     Keyword(Cow<'a, str>),
     Number(Cow<'a, str>),
-    SingleQuotedString(Cow<'a, str>),
-    DoubleQuotedString(Cow<'a, str>),
+    String(char, Cow<'a, str>),
     Identifier(Cow<'a, str>, IdentifierType),
 }
 
@@ -57,7 +56,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
     fn new_state(&self) -> Self::State {
         TokenizerState {
             prev: '\0',
-            after_dot: Some(false),
+            single_dot: false,
             dot_number_allowed: true,
             started_token: None,
         }
@@ -81,20 +80,32 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
             };
 
             match event {
+                '%' => {
+                    self.source
+                        .range_event(RangeClassEvent::Start(RangeClass::Keyword), range.start);
+                    start_token(StartedToken::UnquotedIdentifier {
+                        content: IdentifierContent::None,
+                        post_init: false,
+                    });
+                }
                 '@' => start_token(StartedToken::String {
                     is_quoted_identifier: true,
-                    is_double_quoted: false,
+                    quote_char: '\0',
                     content_start: None,
                     escape_start: None,
                     value: None,
                 }),
-                '\'' | '"' => start_token(StartedToken::String {
-                    is_quoted_identifier: false,
-                    is_double_quoted: event == '"',
-                    content_start: Some(range.end.clone()),
-                    escape_start: None,
-                    value: None,
-                }),
+                '\'' | '"' => {
+                    self.source
+                        .range_event(RangeClassEvent::Start(RangeClass::String), range.start);
+                    start_token(StartedToken::String {
+                        is_quoted_identifier: false,
+                        quote_char: event,
+                        content_start: Some(range.end.clone()),
+                        escape_start: None,
+                        value: None,
+                    });
+                }
                 c if is_delimiter_char(c) => {
                     if !c.is_whitespace() {
                         let prev = state.prev;
@@ -108,21 +119,21 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
                         start_token(StartedToken::ReservedChar { pre_isolation });
                     }
                 }
-                c if c.is_ascii_digit() && state.after_dot != Some(true) => {
+                c if c.is_ascii_digit() && !state.single_dot => {
+                    self.source
+                        .range_event(RangeClassEvent::Start(RangeClass::Number), range.start);
                     start_token(StartedToken::Number {
                         number_state: NumberState::BeforeDot,
                     })
                 }
                 c => start_token(StartedToken::UnquotedIdentifier {
-                    content: if c == '%' {
-                        IdentifierContent::None
-                    } else {
-                        Self::identifier_content(c)
-                    },
+                    content: Self::identifier_content(c),
+                    post_init: false,
                 }),
             }
         }
 
+        state.single_dot = event == '.' && state.prev != '.';
         state.prev = event;
     }
 
@@ -132,22 +143,14 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for TokenizerPass<'a, Src> {
         end_marker: &Self::Marker,
         mut out: impl FnMut(Self::Out, Range<&Self::Marker>),
     ) -> Option<Self::NextPass> {
-        self.handle_char_in_current_state(&mut state, '\0', &(end_marker..end_marker), &mut out);
-
-        if let Some(StartedTokenState { token_start, token }) = state.started_token {
-            self.source.diagnostic(
-                &token_start..end_marker,
-                Severity::Error,
-                match token {
-                    StartedToken::BlockComment { .. } | StartedToken::LineComment => {
-                        format!("unterminated comment")
-                    }
-                    StartedToken::String { .. } => format!("unterminated string"),
-                    _ => format!("unterminated token"),
-                },
-            );
-        }
-
+        let handled = self.handle_char_in_current_state(
+            &mut state,
+            '\0',
+            &(end_marker..end_marker),
+            &mut out,
+        );
+        assert!(!handled);
+        assert!(state.started_token.is_none());
         None
     }
 }
@@ -167,6 +170,8 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
         match token {
             StartedToken::LineComment => {
                 if c == '\r' || c == '\n' || c == '\0' {
+                    self.source
+                        .range_event(RangeClassEvent::End(RangeClass::Comment), range.start);
                     state.started_token = None;
                     return false;
                 }
@@ -177,6 +182,17 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 slash_seen,
                 asterisk_seen,
             } => {
+                if c == '\0' {
+                    self.source.diagnostic(
+                        &*token_start..range.start,
+                        Severity::Error,
+                        format!("unterminated comment"),
+                    );
+                    self.source
+                        .range_event(RangeClassEvent::End(RangeClass::Comment), range.end);
+                    state.started_token = None;
+                    return false;
+                }
                 if *slash_seen {
                     *slash_seen = false;
                     if c == '*' {
@@ -189,6 +205,8 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         if *nesting_level > 0 {
                             *nesting_level -= 1;
                         } else {
+                            self.source
+                                .range_event(RangeClassEvent::End(RangeClass::Comment), range.end);
                             state.started_token = None;
                         }
                         return true;
@@ -217,6 +235,8 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                             if let Some(marker) = marker {
                                 let number = self.source.slice(&*token_start..&*marker);
                                 out(Token::Number(number), &*token_start..&*marker);
+                                self.source
+                                    .range_event(RangeClassEvent::End(RangeClass::Number), marker);
                                 out(
                                     Token::ReservedChar(
                                         '.',
@@ -226,10 +246,9 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                                     &*marker..range.start,
                                 );
                                 *state = TokenizerState {
-                                    prev: state.prev,
-                                    after_dot: Some(true),
                                     dot_number_allowed: false,
                                     started_token: None,
+                                    ..*state
                                 };
                                 return false;
                             }
@@ -249,11 +268,12 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 if !(is_alnum || is_special) {
                     let number = self.source.slice(&*token_start..range.start);
                     out(Token::Number(number), &*token_start..range.start);
+                    self.source
+                        .range_event(RangeClassEvent::End(RangeClass::Number), range.start);
                     *state = TokenizerState {
-                        prev: state.prev,
-                        after_dot: Some(false),
                         dot_number_allowed: c != '.',
                         started_token: None,
+                        ..*state
                     };
                     return false;
                 }
@@ -261,24 +281,28 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
 
             StartedToken::String {
                 is_quoted_identifier,
-                is_double_quoted,
+                quote_char,
                 content_start,
                 escape_start,
                 value,
             } => {
                 if let Some(content_start) = content_start {
-                    let mut end_string = || {
+                    let mut end_string = |token_range: Range<&Src::Marker>| {
                         let final_value = if let Some(value) = value {
                             Cow::Owned(take(value))
                         } else {
                             self.source.slice(&*content_start..range.start)
                         };
-                        if *is_quoted_identifier {
+                        let token = if *is_quoted_identifier {
                             Token::Identifier(final_value, IdentifierType::Quoted)
-                        } else if *is_double_quoted {
-                            Token::DoubleQuotedString(final_value)
                         } else {
-                            Token::SingleQuotedString(final_value)
+                            Token::String(*quote_char, final_value)
+                        };
+                        let end = token_range.end;
+                        out(token, token_range);
+                        if !*is_quoted_identifier {
+                            self.source
+                                .range_event(RangeClassEvent::End(RangeClass::String), end);
                         }
                     };
 
@@ -288,13 +312,11 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                             Severity::Error,
                             format!("unterminated string"),
                         );
-                        let token = end_string();
-                        out(token, &*token_start..range.start);
+                        end_string(&*token_start..range.start);
                         *state = TokenizerState {
-                            prev: state.prev,
-                            after_dot: Some(false),
                             dot_number_allowed: false,
                             started_token: None,
+                            ..*state
                         };
                         return false;
                     }
@@ -385,15 +407,12 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         }
                     }
 
-                    let quote_char = if *is_double_quoted { '"' } else { '\'' };
-                    if c == quote_char {
-                        let token = end_string();
-                        out(token, &*token_start..range.end);
+                    if c == *quote_char {
+                        end_string(&*token_start..range.end);
                         *state = TokenizerState {
-                            prev: state.prev,
-                            after_dot: Some(false),
                             dot_number_allowed: false,
                             started_token: None,
+                            ..*state
                         };
                     } else if c == '\\' {
                         *escape_start = Some(range.start.clone());
@@ -409,9 +428,8 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 } else {
                     debug_assert!(*is_quoted_identifier);
                     if c == '\'' || c == '"' {
-                        if c == '"' {
-                            *is_double_quoted = true;
-                        } else {
+                        *quote_char = c;
+                        if c != '"' {
                             self.source.diagnostic(
                                 &*token_start..range.start,
                                 Severity::Error,
@@ -426,17 +444,16 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                             format!("'@' must be followed by a string"),
                         );
                         *state = TokenizerState {
-                            prev: state.prev,
-                            after_dot: Some(false),
                             dot_number_allowed: false,
                             started_token: None,
+                            ..*state
                         };
                         return false;
                     }
                 }
             }
 
-            StartedToken::UnquotedIdentifier { content } => {
+            StartedToken::UnquotedIdentifier { content, post_init } => {
                 let mut end = is_delimiter_char(c);
                 if !end {
                     if !is_prime_char(c) {
@@ -454,35 +471,49 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                 }
                 if end {
                     let identifier = self.source.slice(&*token_start..range.start);
-                    let token = if identifier.starts_with('%') {
+                    let is_keyword = identifier.starts_with('%');
+                    let token = if is_keyword {
                         Token::Keyword(identifier)
                     } else {
                         Token::Identifier(identifier, IdentifierType::Unquoted)
                     };
                     out(token, &*token_start..range.start);
+                    if is_keyword {
+                        self.source
+                            .range_event(RangeClassEvent::End(RangeClass::Keyword), range.start);
+                    }
                     *state = TokenizerState {
-                        prev: state.prev,
-                        after_dot: Some(false),
                         dot_number_allowed: *content == IdentifierContent::Symbol,
                         started_token: None,
+                        ..*state
                     };
                     return false;
-                } else if state.prev == '/' {
+                } else if !*post_init && state.prev == '/' {
                     if c == '/' {
                         *token = StartedToken::LineComment;
+                        self.source
+                            .range_event(RangeClassEvent::Start(RangeClass::Comment), token_start);
                     } else if c == '*' {
                         *token = StartedToken::BlockComment {
                             nesting_level: 0,
                             slash_seen: false,
                             asterisk_seen: false,
                         };
+                        self.source
+                            .range_event(RangeClassEvent::Start(RangeClass::Comment), token_start);
+                    } else {
+                        *post_init = true;
                     }
+                } else {
+                    *post_init = true;
                 }
             }
 
             StartedToken::ReservedChar { pre_isolation } => {
                 let ch = state.prev;
                 if ch == '.' && state.dot_number_allowed && c.is_ascii_digit() {
+                    self.source
+                        .range_event(RangeClassEvent::Start(RangeClass::Number), token_start);
                     *token = StartedToken::Number {
                         number_state: NumberState::AfterDot(Some(range.start.clone())),
                     };
@@ -499,18 +530,9 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         &*token_start..range.start,
                     );
                     *state = TokenizerState {
-                        prev: ch,
-                        after_dot: if ch == '.' {
-                            if state.after_dot == Some(false) {
-                                Some(true)
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(false)
-                        },
                         dot_number_allowed: ch == ',' || ch == ';' || is_opening_parenthesis(ch),
                         started_token: None,
+                        ..*state
                     };
                     return false;
                 }
@@ -536,7 +558,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
 #[derive(Clone, PartialEq)]
 pub struct TokenizerState<Marker: Clone + PartialEq> {
     prev: char,
-    after_dot: Option<bool>,
+    single_dot: bool,
     dot_number_allowed: bool,
     started_token: Option<StartedTokenState<Marker>>,
 }
@@ -560,13 +582,14 @@ enum StartedToken<Marker: Clone + PartialEq> {
     },
     String {
         is_quoted_identifier: bool,
-        is_double_quoted: bool,
+        quote_char: char,
         content_start: Option<Marker>,
         escape_start: Option<Marker>,
         value: Option<String>,
     },
     UnquotedIdentifier {
         content: IdentifierContent,
+        post_init: bool,
     },
     ReservedChar {
         pre_isolation: TokenIsolation,
@@ -594,18 +617,42 @@ enum IdentifierContent {
 
 #[cfg(test)]
 mod tests {
-    use slate_kernel_notation_generic::char_slice::{test_helpers::*, *};
+    use slate_kernel_notation_generic::{
+        char_slice::{test_helpers::*, *},
+        event::test_helpers::{IntoRangeClassEvents, RangeClassTree, RangeClassTreeNode},
+    };
 
     use super::*;
 
     #[test]
     fn whitespace() -> Result<(), Message> {
-        test_tokenization("", &[], &[])?;
-        test_tokenization(" ", &[], &[])?;
-        test_tokenization("\t", &[], &[])?;
-        test_tokenization(" \n\t\r\n ", &[], &[])?;
-        test_tokenization("/**/", &[], &[])?;
-        test_tokenization("/* */", &[], &[])?;
+        test_tokenization("", &[], &[], None)?;
+        test_tokenization(" ", &[], &[], None)?;
+        test_tokenization("\t", &[], &[], None)?;
+        test_tokenization(
+            " \n\t\r\n ",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Text(" \n\t\r\n ")]),
+        )?;
+        test_tokenization(
+            "/**/",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/**/")],
+            )]),
+        )?;
+        test_tokenization(
+            "/* */",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/* */")],
+            )]),
+        )?;
         test_tokenization(
             " /* abc \n def */ . /* ghi */ ",
             &[Token::ReservedChar(
@@ -614,15 +661,59 @@ mod tests {
                 TokenIsolation::Isolated,
             )],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("/* abc \n def */")],
+                ),
+                RangeClassTreeNode::Text(" . "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("/* ghi */")],
+                ),
+                RangeClassTreeNode::Text(" "),
+            ]),
         )?;
-        test_tokenization("/***/", &[], &[])?;
-        test_tokenization("/*/**/*/", &[], &[])?;
+        test_tokenization(
+            "/***/",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/***/")],
+            )]),
+        )?;
+        test_tokenization(
+            "/*/**/*/",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/*/**/*/")],
+            )]),
+        )?;
         test_tokenization(
             "/**/*/",
             &[Token::Identifier("*/".into(), IdentifierType::Unquoted)],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("/**/")],
+                ),
+                RangeClassTreeNode::Text("*/"),
+            ]),
         )?;
-        test_tokenization("/* // */", &[], &[])?;
+        test_tokenization(
+            "/* // */",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/* // */")],
+            )]),
+        )?;
         test_tokenization(
             "/*",
             &[],
@@ -631,6 +722,10 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated comment".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/*")],
+            )]),
         )?;
         test_tokenization(
             " /*/ ",
@@ -640,6 +735,13 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated comment".into(),
             }],
+            Some(vec![
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("/*/ ")],
+                ),
+            ]),
         )?;
         test_tokenization(
             "/*/**/",
@@ -649,6 +751,10 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated comment".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/*/**/")],
+            )]),
         )?;
         test_tokenization(
             "/*//*/",
@@ -658,10 +764,41 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated comment".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("/*//*/")],
+            )]),
         )?;
-        test_tokenization("//", &[], &[])?;
-        test_tokenization("///", &[], &[])?;
-        test_tokenization("//\n", &[], &[])?;
+        test_tokenization(
+            "//",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("//")],
+            )]),
+        )?;
+        test_tokenization(
+            "///",
+            &[],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Comment,
+                vec![RangeClassTreeNode::Text("///")],
+            )]),
+        )?;
+        test_tokenization(
+            "//\n",
+            &[],
+            &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("//")],
+                ),
+                RangeClassTreeNode::Text("\n"),
+            ]),
+        )?;
         test_tokenization(
             "//\n.",
             &[Token::ReservedChar(
@@ -670,6 +807,13 @@ mod tests {
                 TokenIsolation::Isolated,
             )],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("//")],
+                ),
+                RangeClassTreeNode::Text("\n."),
+            ]),
         )?;
         test_tokenization(
             " . // : \n .",
@@ -678,6 +822,14 @@ mod tests {
                 Token::ReservedChar('.', TokenIsolation::Isolated, TokenIsolation::Isolated),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text(" . "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Comment,
+                    vec![RangeClassTreeNode::Text("// : ")],
+                ),
+                RangeClassTreeNode::Text("\n ."),
+            ]),
         )?;
         Ok(())
     }
@@ -692,6 +844,7 @@ mod tests {
                 TokenIsolation::Isolated,
             )],
             &[],
+            None,
         )?;
         test_tokenization(
             " . ",
@@ -701,6 +854,7 @@ mod tests {
                 TokenIsolation::Isolated,
             )],
             &[],
+            None,
         )?;
         test_tokenization(
             ". .",
@@ -709,6 +863,7 @@ mod tests {
                 Token::ReservedChar('.', TokenIsolation::Isolated, TokenIsolation::Isolated),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             " . . ",
@@ -717,6 +872,7 @@ mod tests {
                 Token::ReservedChar('.', TokenIsolation::Isolated, TokenIsolation::Isolated),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "..",
@@ -733,6 +889,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "...",
@@ -754,6 +911,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             ".,;()[]{}|〈〉",
@@ -820,6 +978,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "||",
@@ -836,6 +995,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "_",
@@ -845,6 +1005,7 @@ mod tests {
                 TokenIsolation::Isolated,
             )],
             &[],
+            None,
         )?;
         test_tokenization(
             "(+).0",
@@ -868,18 +1029,71 @@ mod tests {
                 Token::Identifier("0".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         Ok(())
     }
 
     #[test]
     fn keywords() -> Result<(), Message> {
-        test_tokenization("%", &[Token::Keyword("%".into())], &[])?;
-        test_tokenization("%x", &[Token::Keyword("%x".into())], &[])?;
-        test_tokenization("%for", &[Token::Keyword("%for".into())], &[])?;
-        test_tokenization("%+", &[Token::Keyword("%+".into())], &[])?;
-        test_tokenization("%%", &[Token::Keyword("%%".into())], &[])?;
-        test_tokenization(" %for ", &[Token::Keyword("%for".into())], &[])?;
+        test_tokenization(
+            "%",
+            &[Token::Keyword("%".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Keyword,
+                vec![RangeClassTreeNode::Text("%")],
+            )]),
+        )?;
+        test_tokenization(
+            "%x",
+            &[Token::Keyword("%x".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Keyword,
+                vec![RangeClassTreeNode::Text("%x")],
+            )]),
+        )?;
+        test_tokenization(
+            "%for",
+            &[Token::Keyword("%for".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Keyword,
+                vec![RangeClassTreeNode::Text("%for")],
+            )]),
+        )?;
+        test_tokenization(
+            "%+",
+            &[Token::Keyword("%+".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Keyword,
+                vec![RangeClassTreeNode::Text("%+")],
+            )]),
+        )?;
+        test_tokenization(
+            "%%",
+            &[Token::Keyword("%%".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Keyword,
+                vec![RangeClassTreeNode::Text("%%")],
+            )]),
+        )?;
+        test_tokenization(
+            " %for ",
+            &[Token::Keyword("%for".into())],
+            &[],
+            Some(vec![
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%for")],
+                ),
+                RangeClassTreeNode::Text(" "),
+            ]),
+        )?;
         test_tokenization(
             "%for %each",
             &[
@@ -887,6 +1101,17 @@ mod tests {
                 Token::Keyword("%each".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%for")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%each")],
+                ),
+            ]),
         )?;
         test_tokenization(
             "%for each",
@@ -895,6 +1120,13 @@ mod tests {
                 Token::Identifier("each".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%for")],
+                ),
+                RangeClassTreeNode::Text(" each"),
+            ]),
         )?;
         test_tokenization(
             "%for_each",
@@ -908,6 +1140,13 @@ mod tests {
                 Token::Identifier("each".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%for")],
+                ),
+                RangeClassTreeNode::Text("_each"),
+            ]),
         )?;
         test_tokenization(
             "%for.each",
@@ -921,6 +1160,13 @@ mod tests {
                 Token::Identifier("each".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%for")],
+                ),
+                RangeClassTreeNode::Text(".each"),
+            ]),
         )?;
         test_tokenization(
             "%for'each",
@@ -929,6 +1175,13 @@ mod tests {
                 Token::Identifier("each".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%for'")],
+                ),
+                RangeClassTreeNode::Text("each"),
+            ]),
         )?;
         Ok(())
     }
@@ -939,41 +1192,55 @@ mod tests {
             "x",
             &[Token::Identifier("x".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "+",
             &[Token::Identifier("+".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "xyz",
             &[Token::Identifier("xyz".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "+-",
             &[Token::Identifier("+-".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "a1",
             &[Token::Identifier("a1".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "a'",
             &[Token::Identifier("a'".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "a\"",
             &[Token::Identifier("a\"".into(), IdentifierType::Unquoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "a''",
             &[Token::Identifier("a''".into(), IdentifierType::Unquoted)],
             &[],
+            None,
+        )?;
+        test_tokenization(
+            "+/*",
+            &[Token::Identifier("+/*".into(), IdentifierType::Unquoted)],
+            &[],
+            None,
         )?;
         test_tokenization(
             "x y z",
@@ -983,6 +1250,7 @@ mod tests {
                 Token::Identifier("z".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x + y",
@@ -992,6 +1260,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x+y",
@@ -1001,6 +1270,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "xy+=z",
@@ -1010,6 +1280,7 @@ mod tests {
                 Token::Identifier("z".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x' *' y\"",
@@ -1019,15 +1290,24 @@ mod tests {
                 Token::Identifier("y\"".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x '*' y\"",
             &[
                 Token::Identifier("x".into(), IdentifierType::Unquoted),
-                Token::SingleQuotedString("*".into()),
+                Token::String('\'', "*".into()),
                 Token::Identifier("y\"".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text("x "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("'*'")],
+                ),
+                RangeClassTreeNode::Text(" y\""),
+            ]),
         )?;
         test_tokenization(
             "a'b",
@@ -1036,6 +1316,7 @@ mod tests {
                 Token::Identifier("b".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a'+",
@@ -1044,6 +1325,7 @@ mod tests {
                 Token::Identifier("+".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a_b",
@@ -1057,6 +1339,7 @@ mod tests {
                 Token::Identifier("b".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a_+",
@@ -1070,6 +1353,7 @@ mod tests {
                 Token::Identifier("+".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "+_a",
@@ -1083,6 +1367,7 @@ mod tests {
                 Token::Identifier("a".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a_1",
@@ -1096,6 +1381,10 @@ mod tests {
                 Token::Number("1".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text("a_"),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+            ]),
         )?;
         test_tokenization(
             "a^2",
@@ -1109,6 +1398,10 @@ mod tests {
                 Token::Number("2".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text("a^"),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("2")]),
+            ]),
         )?;
         test_tokenization(
             "x.y",
@@ -1122,6 +1415,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x..y",
@@ -1140,6 +1434,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x...y",
@@ -1163,6 +1458,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "-.-",
@@ -1176,6 +1472,7 @@ mod tests {
                 Token::Identifier("-".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "ℕ.0",
@@ -1189,15 +1486,21 @@ mod tests {
                 Token::Identifier("0".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
-            "ℕ . 0",
+            "ℕ .0",
             &[
                 Token::Identifier("ℕ".into(), IdentifierType::Unquoted),
-                Token::ReservedChar('.', TokenIsolation::Isolated, TokenIsolation::Isolated),
+                Token::ReservedChar(
+                    '.',
+                    TokenIsolation::Isolated,
+                    TokenIsolation::StronglyConnected,
+                ),
                 Token::Identifier("0".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "f(x)",
@@ -1216,6 +1519,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "f(-)",
@@ -1234,6 +1538,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "f(xy,-)",
@@ -1258,6 +1563,7 @@ mod tests {
                 ),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x @\".\" y",
@@ -1267,6 +1573,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x@\".\"y",
@@ -1276,6 +1583,7 @@ mod tests {
                 Token::Identifier("y".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "x@y",
@@ -1288,6 +1596,7 @@ mod tests {
                 severity: Severity::Error,
                 msg: "'@' must be followed by a string".into(),
             }],
+            None,
         )?;
         test_tokenization(
             "x@'.'y",
@@ -1301,21 +1610,25 @@ mod tests {
                 severity: Severity::Error,
                 msg: "'@' must be followed by double quotes".into(),
             }],
+            None,
         )?;
         test_tokenization(
             "@\"x+y.z\"",
             &[Token::Identifier("x+y.z".into(), IdentifierType::Quoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "@\"\"",
             &[Token::Identifier("".into(), IdentifierType::Quoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "@\"\\n\"",
             &[Token::Identifier("\n".into(), IdentifierType::Quoted)],
             &[],
+            None,
         )?;
         test_tokenization(
             "abc @\"def",
@@ -1328,6 +1641,7 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated string".into(),
             }],
+            None,
         )?;
         Ok(())
     }
@@ -1341,6 +1655,7 @@ mod tests {
                 Token::Identifier("ₙ".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a'ₙ",
@@ -1349,6 +1664,7 @@ mod tests {
                 Token::Identifier("ₙ".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "+ₙ",
@@ -1357,6 +1673,7 @@ mod tests {
                 Token::Identifier("ₙ".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a²",
@@ -1365,6 +1682,7 @@ mod tests {
                 Token::Identifier("²".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a'²",
@@ -1373,6 +1691,7 @@ mod tests {
                 Token::Identifier("²".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "+²",
@@ -1381,6 +1700,7 @@ mod tests {
                 Token::Identifier("²".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "a⁻¹",
@@ -1389,6 +1709,7 @@ mod tests {
                 Token::Identifier("⁻¹".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "+⁻¹",
@@ -1397,6 +1718,7 @@ mod tests {
                 Token::Identifier("⁻¹".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         test_tokenization(
             "aₙ⁻¹",
@@ -1406,26 +1728,130 @@ mod tests {
                 Token::Identifier("⁻¹".into(), IdentifierType::Unquoted),
             ],
             &[],
+            None,
         )?;
         Ok(())
     }
 
     #[test]
     fn numbers() -> Result<(), Message> {
-        test_tokenization("0", &[Token::Number("0".into())], &[])?;
-        test_tokenization("123", &[Token::Number("123".into())], &[])?;
-        test_tokenization("12.345", &[Token::Number("12.345".into())], &[])?;
-        test_tokenization("12.", &[Token::Number("12.".into())], &[])?;
-        test_tokenization(".345", &[Token::Number(".345".into())], &[])?;
-        test_tokenization("1_234_567.89", &[Token::Number("1_234_567.89".into())], &[])?;
-        test_tokenization("12.34e5", &[Token::Number("12.34e5".into())], &[])?;
-        test_tokenization("12.34e+56", &[Token::Number("12.34e+56".into())], &[])?;
-        test_tokenization("12.3e-456", &[Token::Number("12.3e-456".into())], &[])?;
-        test_tokenization(".3e-456", &[Token::Number(".3e-456".into())], &[])?;
-        test_tokenization("0xf00", &[Token::Number("0xf00".into())], &[])?;
-        test_tokenization("0xf00.ba1", &[Token::Number("0xf00.ba1".into())], &[])?;
-        test_tokenization("1_foo.bar", &[Token::Number("1_foo.bar".into())], &[])?;
-        test_tokenization("12.345", &[Token::Number("12.345".into())], &[])?;
+        test_tokenization(
+            "0",
+            &[Token::Number("0".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("0")],
+            )]),
+        )?;
+        test_tokenization(
+            "123",
+            &[Token::Number("123".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("123")],
+            )]),
+        )?;
+        test_tokenization(
+            "12.345",
+            &[Token::Number("12.345".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("12.345")],
+            )]),
+        )?;
+        test_tokenization(
+            "12.",
+            &[Token::Number("12.".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("12.")],
+            )]),
+        )?;
+        test_tokenization(
+            ".345",
+            &[Token::Number(".345".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text(".345")],
+            )]),
+        )?;
+        test_tokenization(
+            "1_234_567.89",
+            &[Token::Number("1_234_567.89".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("1_234_567.89")],
+            )]),
+        )?;
+        test_tokenization(
+            "12.34e5",
+            &[Token::Number("12.34e5".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("12.34e5")],
+            )]),
+        )?;
+        test_tokenization(
+            "12.34e+56",
+            &[Token::Number("12.34e+56".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("12.34e+56")],
+            )]),
+        )?;
+        test_tokenization(
+            "12.3e-456",
+            &[Token::Number("12.3e-456".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("12.3e-456")],
+            )]),
+        )?;
+        test_tokenization(
+            ".3e-456",
+            &[Token::Number(".3e-456".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text(".3e-456")],
+            )]),
+        )?;
+        test_tokenization(
+            "0xf00",
+            &[Token::Number("0xf00".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("0xf00")],
+            )]),
+        )?;
+        test_tokenization(
+            "0xf00.ba1",
+            &[Token::Number("0xf00.ba1".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("0xf00.ba1")],
+            )]),
+        )?;
+        test_tokenization(
+            "1_foo.bar",
+            &[Token::Number("1_foo.bar".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::Number,
+                vec![RangeClassTreeNode::Text("1_foo.bar")],
+            )]),
+        )?;
         test_tokenization(
             " 0 1 .2 3. 4 ",
             &[
@@ -1436,6 +1862,19 @@ mod tests {
                 Token::Number("4".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("0")]),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text(".2")]),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("3.")]),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("4")]),
+                RangeClassTreeNode::Text(" "),
+            ]),
         )?;
         test_tokenization(
             " 0 1 . 2 3.4 ",
@@ -1443,10 +1882,24 @@ mod tests {
                 Token::Number("0".into()),
                 Token::Number("1".into()),
                 Token::ReservedChar('.', TokenIsolation::Isolated, TokenIsolation::Isolated),
-                Token::Identifier("2".into(), IdentifierType::Unquoted),
+                Token::Number("2".into()),
                 Token::Number("3.4".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("0")]),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+                RangeClassTreeNode::Text(" . "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("2")]),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Number,
+                    vec![RangeClassTreeNode::Text("3.4")],
+                ),
+                RangeClassTreeNode::Text(" "),
+            ]),
         )?;
         test_tokenization(
             "0.1.2",
@@ -1460,6 +1913,13 @@ mod tests {
                 Token::Identifier("2".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Number,
+                    vec![RangeClassTreeNode::Text("0.1")],
+                ),
+                RangeClassTreeNode::Text(".2"),
+            ]),
         )?;
         test_tokenization(
             "0..1",
@@ -1478,6 +1938,11 @@ mod tests {
                 Token::Number("1".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("0")]),
+                RangeClassTreeNode::Text(".."),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+            ]),
         )?;
         test_tokenization(
             "0 .. 1",
@@ -1496,6 +1961,11 @@ mod tests {
                 Token::Number("1".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("0")]),
+                RangeClassTreeNode::Text(" .. "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+            ]),
         )?;
         test_tokenization(
             "0...1....n",
@@ -1540,6 +2010,12 @@ mod tests {
                 Token::Identifier("n".into(), IdentifierType::Unquoted),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("0")]),
+                RangeClassTreeNode::Text("..."),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+                RangeClassTreeNode::Text("....n"),
+            ]),
         )?;
         test_tokenization(
             "1+2.3e4-5",
@@ -1551,6 +2027,16 @@ mod tests {
                 Token::Number("5".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("1")]),
+                RangeClassTreeNode::Text("+"),
+                RangeClassTreeNode::Range(
+                    RangeClass::Number,
+                    vec![RangeClassTreeNode::Text("2.3e4")],
+                ),
+                RangeClassTreeNode::Text("-"),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("5")]),
+            ]),
         )?;
         test_tokenization(
             ".1+.2",
@@ -1560,6 +2046,11 @@ mod tests {
                 Token::Number(".2".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text(".1")]),
+                RangeClassTreeNode::Text("+"),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text(".2")]),
+            ]),
         )?;
         test_tokenization(
             "(.1 .2)",
@@ -1578,192 +2069,426 @@ mod tests {
                 ),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text("("),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text(".1")]),
+                RangeClassTreeNode::Text("+"),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text(".2")]),
+                RangeClassTreeNode::Text(")"),
+            ]),
         )?;
         Ok(())
     }
 
     #[test]
     fn strings() -> Result<(), Message> {
-        test_tokenization("''", &[Token::SingleQuotedString("".into())], &[])?;
-        test_tokenization("'abc'", &[Token::SingleQuotedString("abc".into())], &[])?;
-        test_tokenization("'\"'", &[Token::SingleQuotedString("\"".into())], &[])?;
-        test_tokenization("'/*'", &[Token::SingleQuotedString("/*".into())], &[])?;
-        test_tokenization("\"\"", &[Token::DoubleQuotedString("".into())], &[])?;
-        test_tokenization("\"abc\"", &[Token::DoubleQuotedString("abc".into())], &[])?;
-        test_tokenization("\"'\"", &[Token::DoubleQuotedString("'".into())], &[])?;
-        test_tokenization("\"/*\"", &[Token::DoubleQuotedString("/*".into())], &[])?;
+        test_tokenization(
+            "''",
+            &[Token::String('\'', "".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("''")],
+            )]),
+        )?;
+        test_tokenization(
+            "'abc'",
+            &[Token::String('\'', "abc".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("'abc'")],
+            )]),
+        )?;
+        test_tokenization(
+            "'\"'",
+            &[Token::String('\'', "\"".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("'\"'")],
+            )]),
+        )?;
+        test_tokenization(
+            "'/*'",
+            &[Token::String('\'', "/*".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("'/*'")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"\"",
+            &[Token::String('"', "".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\"")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"abc\"",
+            &[Token::String('"', "abc".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc\"")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"'\"",
+            &[Token::String('"', "'".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"'\"")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"/*\"",
+            &[Token::String('"', "/*".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"/*\"")],
+            )]),
+        )?;
         test_tokenization(
             "'abc'\"abc\"",
             &[
-                Token::SingleQuotedString("abc".into()),
-                Token::DoubleQuotedString("abc".into()),
+                Token::String('\'', "abc".into()),
+                Token::String('"', "abc".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("'abc'")],
+                ),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"abc\"")],
+                ),
+            ]),
         )?;
         test_tokenization(
             "\"abc\"\"abc\"",
             &[
-                Token::DoubleQuotedString("abc".into()),
-                Token::DoubleQuotedString("abc".into()),
+                Token::String('"', "abc".into()),
+                Token::String('"', "abc".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"abc\"")],
+                ),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"abc\"")],
+                ),
+            ]),
         )?;
         test_tokenization(
             " 'abc' \"abc\" ",
             &[
-                Token::SingleQuotedString("abc".into()),
-                Token::DoubleQuotedString("abc".into()),
+                Token::String('\'', "abc".into()),
+                Token::String('"', "abc".into()),
             ],
             &[],
+            Some(vec![
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("'abc'")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"abc\"")],
+                ),
+                RangeClassTreeNode::Text(" "),
+            ]),
         )?;
         test_tokenization(
             "\"abc /*def*/ ghi\"",
-            &[Token::DoubleQuotedString("abc /*def*/ ghi".into())],
+            &[Token::String('"', "abc /*def*/ ghi".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc /*def*/ ghi\"")],
+            )]),
         )?;
-        test_tokenization("'\\n'", &[Token::SingleQuotedString("\n".into())], &[])?;
-        test_tokenization("'\\\''", &[Token::SingleQuotedString("'".into())], &[])?;
-        test_tokenization("'\\\\'", &[Token::SingleQuotedString("\\".into())], &[])?;
-        test_tokenization("\"\\n\"", &[Token::DoubleQuotedString("\n".into())], &[])?;
-        test_tokenization("\"\\\"\"", &[Token::DoubleQuotedString("\"".into())], &[])?;
-        test_tokenization("\"\\\\\"", &[Token::DoubleQuotedString("\\".into())], &[])?;
+        test_tokenization(
+            "'\\n'",
+            &[Token::String('\'', "\n".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("'\\n'")],
+            )]),
+        )?;
+        test_tokenization(
+            "'\\\''",
+            &[Token::String('\'', "'".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("'\\\''")],
+            )]),
+        )?;
+        test_tokenization(
+            "'\\\\'",
+            &[Token::String('\'', "\\".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("'\\\\'")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"\\n\"",
+            &[Token::String('"', "\n".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\n\"")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"\\\"\"",
+            &[Token::String('"', "\"".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\\"\"")],
+            )]),
+        )?;
+        test_tokenization(
+            "\"\\\\\"",
+            &[Token::String('"', "\\".into())],
+            &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\\\\"")],
+            )]),
+        )?;
         test_tokenization(
             "\"abc\\ndef\"",
-            &[Token::DoubleQuotedString("abc\ndef".into())],
+            &[Token::String('"', "abc\ndef".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc\\ndef\"")],
+            )]),
         )?;
         test_tokenization(
             "\"abc\\r\\n\\tdef\\0\"",
-            &[Token::DoubleQuotedString("abc\r\n\tdef\0".into())],
+            &[Token::String('"', "abc\r\n\tdef\0".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc\\r\\n\\tdef\\0\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\x17\"",
-            &[Token::DoubleQuotedString("\x17".into())],
+            &[Token::String('"', "\x17".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\x17\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\x0c\"",
-            &[Token::DoubleQuotedString("\x0c".into())],
+            &[Token::String('"', "\x0c".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\x0c\"")],
+            )]),
         )?;
         test_tokenization(
             "\"abc\\x17def\"",
-            &[Token::DoubleQuotedString("abc\x17def".into())],
+            &[Token::String('"', "abc\x17def".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc\\x17def\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u{17}\"",
-            &[Token::DoubleQuotedString("\u{17}".into())],
+            &[Token::String('"', "\u{17}".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u{17}\"")],
+            )]),
         )?;
         test_tokenization(
             "\"abc\\u{17}def\"",
-            &[Token::DoubleQuotedString("abc\u{17}def".into())],
+            &[Token::String('"', "abc\u{17}def".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc\\u{17}def\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u42\"",
-            &[Token::DoubleQuotedString("42".into())],
+            &[Token::String('"', "42".into())],
             &[TestDiagnosticMessage {
                 range_text: "\\u".into(),
                 severity: Severity::Error,
                 msg: "'\\u' must be followed by a hexadecimal number in braces".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u42\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u{}\"",
-            &[Token::DoubleQuotedString("".into())],
+            &[Token::String('"', "".into())],
             &[TestDiagnosticMessage {
                 range_text: "\\u{}".into(),
                 severity: Severity::Error,
                 msg: "'' is not a valid Unicode character code".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u{}\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u{e3a}\"",
-            &[Token::DoubleQuotedString("\u{e3a}".into())],
+            &[Token::String('"', "\u{e3a}".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u{e3a}\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u{e3g}\"",
-            &[Token::DoubleQuotedString("g}".into())],
+            &[Token::String('"', "g}".into())],
             &[TestDiagnosticMessage {
                 range_text: "\\u{e3".into(),
                 severity: Severity::Error,
                 msg: "'\\u' must be followed by a hexadecimal number in braces".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u{e3g}\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u{d800}\"",
-            &[Token::DoubleQuotedString("".into())],
+            &[Token::String('"', "".into())],
             &[TestDiagnosticMessage {
                 range_text: "\\u{d800}".into(),
                 severity: Severity::Error,
                 msg: "'d800' is not a valid Unicode character code".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u{d800}\"")],
+            )]),
         )?;
         test_tokenization(
             "\"\\u{10000}\"",
-            &[Token::DoubleQuotedString("\u{10000}".into())],
+            &[Token::String('"', "\u{10000}".into())],
             &[],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"\\u{10000}\"")],
+            )]),
         )?;
         test_tokenization(
             "\"abc\\u{10000000}def\"",
-            &[Token::DoubleQuotedString("abcdef".into())],
+            &[Token::String('"', "abcdef".into())],
             &[TestDiagnosticMessage {
                 range_text: "\\u{10000000}".into(),
                 severity: Severity::Error,
                 msg: "'10000000' is not a valid Unicode character code".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"abc\\u{10000000}def\"")],
+            )]),
         )?;
         test_tokenization(
             "\"a\\bc\"",
-            &[Token::DoubleQuotedString("abc".into())],
+            &[Token::String('"', "abc".into())],
             &[TestDiagnosticMessage {
                 range_text: "\\b".into(),
                 severity: Severity::Error,
                 msg: "invalid escape sequence".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"a\\bc\"")],
+            )]),
         )?;
         test_tokenization(
             "\"",
-            &[Token::DoubleQuotedString("".into())],
+            &[Token::String('"', "".into())],
             &[TestDiagnosticMessage {
                 range_text: "\"".into(),
                 severity: Severity::Error,
                 msg: "unterminated string".into(),
             }],
+            Some(vec![RangeClassTreeNode::Range(
+                RangeClass::String,
+                vec![RangeClassTreeNode::Text("\"")],
+            )]),
         )?;
         test_tokenization(
             " abc \" def ",
             &[
                 Token::Identifier("abc".into(), IdentifierType::Unquoted),
-                Token::DoubleQuotedString(" def ".into()),
+                Token::String('"', " def ".into()),
             ],
             &[TestDiagnosticMessage {
                 range_text: "\" def ".into(),
                 severity: Severity::Error,
                 msg: "unterminated string".into(),
             }],
+            Some(vec![
+                RangeClassTreeNode::Text(" abc "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\" def ")],
+                ),
+            ]),
         )?;
         test_tokenization(
             " abc \" def \\",
             &[
                 Token::Identifier("abc".into(), IdentifierType::Unquoted),
-                Token::DoubleQuotedString(" def ".into()),
+                Token::String('"', " def ".into()),
             ],
             &[TestDiagnosticMessage {
                 range_text: "\" def \\".into(),
                 severity: Severity::Error,
                 msg: "unterminated string".into(),
             }],
+            Some(vec![
+                RangeClassTreeNode::Text(" abc "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\" def \\")],
+                ),
+            ]),
         )?;
         test_tokenization(
             "abc \"def\nghi",
             &[
                 Token::Identifier("abc".into(), IdentifierType::Unquoted),
-                Token::DoubleQuotedString("def".into()),
+                Token::String('"', "def".into()),
                 Token::Identifier("ghi".into(), IdentifierType::Unquoted),
             ],
             &[TestDiagnosticMessage {
@@ -1771,12 +2496,20 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated string".into(),
             }],
+            Some(vec![
+                RangeClassTreeNode::Text("abc "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"def")],
+                ),
+                RangeClassTreeNode::Text("\nghi"),
+            ]),
         )?;
         test_tokenization(
             "abc \"def\\\nghi",
             &[
                 Token::Identifier("abc".into(), IdentifierType::Unquoted),
-                Token::DoubleQuotedString("def".into()),
+                Token::String('"', "def".into()),
                 Token::Identifier("ghi".into(), IdentifierType::Unquoted),
             ],
             &[TestDiagnosticMessage {
@@ -1784,6 +2517,14 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unterminated string".into(),
             }],
+            Some(vec![
+                RangeClassTreeNode::Text("abc "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"def\\")],
+                ),
+                RangeClassTreeNode::Text("\nghi"),
+            ]),
         )?;
         Ok(())
     }
@@ -1792,6 +2533,7 @@ mod tests {
         input: &str,
         expected_tokens: &[Token],
         expected_diagnostics: &[TestDiagnosticMessage],
+        expected_ranges: Option<RangeClassTree>,
     ) -> Result<(), Message> {
         let mut tokens = Vec::new();
         let char_sink = TranslatorInst::new(Tokenizer, &mut tokens);
@@ -1799,7 +2541,13 @@ mod tests {
         let source = CharSliceEventSource::new(input, &diag_sink)?;
         source.run(char_sink);
         assert_eq!(tokens, expected_tokens);
-        assert_eq!(diag_sink.diagnostics(), expected_diagnostics);
+        let (diagnostics, range_events) = diag_sink.results();
+        assert_eq!(diagnostics, expected_diagnostics);
+        if let Some(expected_ranges) = expected_ranges {
+            assert_eq!((range_events, input.len()), expected_ranges.into_events());
+        } else {
+            assert_eq!(range_events, []);
+        }
         Ok(())
     }
 }

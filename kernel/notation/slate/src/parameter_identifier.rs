@@ -40,14 +40,6 @@ pub enum NotationExpression<'a> {
 }
 
 impl<'a> NotationExpression<'a> {
-    fn sequence(mut items: Vec<Self>) -> Self {
-        if items.len() == 1 {
-            items.pop().unwrap()
-        } else {
-            NotationExpression::Sequence(items)
-        }
-    }
-
     fn contains_param(&self) -> bool {
         match self {
             NotationExpression::Param(_, _) => true,
@@ -71,16 +63,17 @@ impl<'a> NotationExpression<'a> {
         None
     }
 
-    fn identify(self, parameterizations: &[&Parameterization<'a>]) -> Self {
+    fn identify(&mut self, parameterizations: &[&Parameterization<'a>]) -> bool {
         // Note: If the expression already references a parameter, then looking for it within
         // `parameterizations` is incorrect here, as the parameters that are referenced _within_
         // `parameterizations` come from a different scope.
         if !self.contains_param() {
             if let Some((param_idx, _)) = self.find_in(parameterizations) {
-                return NotationExpression::Param(param_idx, None);
+                *self = NotationExpression::Param(param_idx, None);
+                return true;
             }
         }
-        self
+        false
     }
 }
 
@@ -184,7 +177,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             }
 
             ParameterIdentifierState::AfterKeyword => {
-                if let Some(TokenEvent::Token(Token::DoubleQuotedString(name))) = event {
+                if let Some(TokenEvent::Token(Token::String('"', name))) = event {
                     *state = ParameterIdentifierState::AfterName {
                         name,
                         name_range: range.start.clone()..range.end.clone(),
@@ -245,6 +238,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     metamodel.top_level_section_kind(),
+                    ParamScopeClass::Global,
                     None,
                     &[],
                     &mut None,
@@ -264,6 +258,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         section_kind: &'a dyn SectionKind,
+        scope_class: ParamScopeClass,
         separator: Option<char>,
         outer_parameterizations: &[&Parameterization<'a>],
         result_params: &mut Option<Vec<Parameterization<'a>>>,
@@ -297,6 +292,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         range,
                         out,
                         section_kind,
+                        scope_class,
                         separator,
                         outer_parameterizations,
                         result_params,
@@ -315,6 +311,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     section_kind,
+                    scope_class,
                     separator,
                     outer_parameterizations,
                     result_params,
@@ -337,6 +334,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             range,
                             out,
                             section_kind,
+                            scope_class,
                             separator,
                             outer_parameterizations,
                             result_params,
@@ -357,6 +355,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         section_kind: &'a dyn SectionKind,
+        scope_class: ParamScopeClass,
         separator: Option<char>,
         outer_parameterizations: &[&Parameterization<'a>],
         result_params: &mut Option<Vec<Parameterization<'a>>>,
@@ -435,6 +434,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     section_kind,
+                    scope_class,
                     separator,
                     outer_parameterizations,
                     result_params,
@@ -451,6 +451,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     *parameterization_kind,
+                    ParamScopeClass::Local,
                     None,
                     &[],
                     parameterizations,
@@ -472,6 +473,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     section_kind.param_kind(),
+                    scope_class,
                     separator,
                     None,
                     outer_parameterizations,
@@ -514,6 +516,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     *subsection_kind,
+                    scope_class,
                     None,
                     &Parameterization::concat(
                         outer_parameterizations,
@@ -545,6 +548,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         param_kind: &'a dyn ParamKind,
+        scope_class: ParamScopeClass,
         separator: Option<char>,
         additional_separator: Option<char>,
         outer_parameterizations: &[&Parameterization<'a>],
@@ -559,6 +563,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     param_kind.notation_kind(),
+                    scope_class,
                     separator,
                     outer_parameterizations,
                     inner_parameterizations,
@@ -584,6 +589,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         range,
                         out,
                         param_kind,
+                        scope_class,
                         separator,
                         additional_separator,
                         outer_parameterizations,
@@ -614,12 +620,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         range: Range<&'b Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         notation_kind: Option<&'a dyn NotationKind>,
+        scope_class: ParamScopeClass,
         separator: Option<char>,
         outer_parameterizations: &[&Parameterization<'a>],
         inner_parameterizations: Option<&[Parameterization<'a>]>,
         result_params: &mut Option<Vec<Parameterization<'a>>>,
     ) -> Option<(Option<TokenEvent<'a>>, Range<&'b Src::Marker>)> {
-        let result = self.param_notation_analysis_event(
+        if let Some((event, range, data_mapping_kind)) = self.param_notation_analysis_event(
             &mut state.recorded_tokens,
             &mut state.notation_len,
             &mut state.mapping_state,
@@ -627,26 +634,33 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             range,
             notation_kind,
             separator,
-        );
+        ) {
+            if state.notation_len > 0 {
+                RecordedTokenSlice::new(&mut state.recorded_tokens).with_subslice(
+                    state.notation_len,
+                    |notation_tokens| {
+                        self.output_notation(
+                            notation_tokens,
+                            out,
+                            notation_kind.unwrap(),
+                            scope_class,
+                            data_mapping_kind,
+                            &Parameterization::concat(
+                                outer_parameterizations,
+                                inner_parameterizations,
+                            ),
+                            result_params,
+                        );
+                        assert!(notation_tokens.is_empty());
+                    },
+                );
+                state.notation_len = 0;
+            }
 
-        if result.is_some() && state.notation_len > 0 {
-            RecordedTokenSlice::new(&mut state.recorded_tokens).with_subslice(
-                state.notation_len,
-                |notation_tokens| {
-                    self.output_notation(
-                        notation_tokens,
-                        out,
-                        notation_kind.unwrap(),
-                        &Parameterization::concat(outer_parameterizations, inner_parameterizations),
-                        result_params,
-                    );
-                    assert!(notation_tokens.is_empty());
-                },
-            );
-            state.notation_len = 0;
+            Some((event, range))
+        } else {
+            None
         }
-
-        result
     }
 
     fn param_notation_analysis_event<'b>(
@@ -658,9 +672,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         range: Range<&'b Src::Marker>,
         notation_kind: Option<&'a dyn NotationKind>,
         separator: Option<char>,
-    ) -> Option<(Option<TokenEvent<'a>>, Range<&'b Src::Marker>)> {
-        let Some(notation_kind) = notation_kind else { return Some((event, range)); };
-        let Some(event) = event else { return Some((event, range)); };
+    ) -> Option<(
+        Option<TokenEvent<'a>>,
+        Range<&'b Src::Marker>,
+        Option<&'a dyn MappingKind<dyn ParamKind>>,
+    )> {
+        let Some(notation_kind) = notation_kind else { return Some((event, range, None)); };
+        let Some(event) = event else { return Some((event, range, None)); };
 
         match mapping_state {
             ParamNotationMappingAnalysisState::TopLevel { paren_depth } => {
@@ -676,14 +694,16 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                 format!("superfluous comma"),
                             );
                         }
-                        return Some((Some(event), range));
+                        return Some((Some(event), range, None));
                     }
-                    TokenEvent::Token(Token::Keyword(_)) => {
-                        return Some((Some(event), range));
+                    TokenEvent::Token(Token::Keyword(_))
+                    | TokenEvent::Token(Token::Number(_))
+                    | TokenEvent::Token(Token::String(_, _)) => {
+                        return Some((Some(event), range, None));
                     }
                     TokenEvent::Token(Token::Identifier(identifier, IdentifierType::Unquoted)) => {
                         if notation_kind.identifier_is_notation_delimiter(&identifier) {
-                            return Some((Some(event), range));
+                            return Some((Some(event), range, None));
                         } else if *paren_depth == 0 {
                             if let Some(mapping_kind) = notation_kind.mapping_kind(&identifier) {
                                 match mapping_kind.notation() {
@@ -703,7 +723,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                         return None;
                                     }
                                     MappingNotation::Infix { binder_paren: _ } => {
-                                        return Some((Some(event), range));
+                                        return Some((Some(event), range, Some(mapping_kind)));
                                     }
                                 }
                             }
@@ -711,7 +731,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     }
                     TokenEvent::Paren(GroupEvent::Start(start_paren)) => {
                         if notation_kind.paren_is_notation_delimiter(*start_paren) {
-                            return Some((Some(event), range));
+                            return Some((Some(event), range, None));
                         } else {
                             *paren_depth += 1;
                         }
@@ -720,7 +740,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         if *paren_depth > 0 {
                             *paren_depth -= 1;
                         } else {
-                            return Some((Some(event), range));
+                            return Some((Some(event), range, None));
                         }
                     }
                     _ => {}
@@ -738,7 +758,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 prefix_mapping_state,
             ) => match prefix_mapping_state {
                 ParamNotationMappingState::Source(source_state) => {
-                    if let Some((event, range)) = self.param_notation_analysis_event(
+                    if let Some((event, range, _)) = self.param_notation_analysis_event(
                         recorded_tokens,
                         notation_len,
                         source_state,
@@ -766,7 +786,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                 *notation_len = recorded_tokens.len();
                                 None
                             }
-                            _ => Some((event, range)),
+                            _ => Some((event, range, None)),
                         }
                     } else {
                         None
@@ -791,12 +811,27 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         notation_kind: &'a dyn NotationKind,
+        scope_class: ParamScopeClass,
+        data_mapping_kind: Option<&'a dyn MappingKind<dyn ParamKind>>,
         parameterizations: &[&Parameterization<'a>],
         result_params: &mut Option<Vec<Parameterization<'a>>>,
     ) -> bool {
-        if let Some((notation, range)) =
-            self.create_notation_expression(tokens, notation_kind, parameterizations)
-        {
+        if let Some((notation, range)) = self.create_notation_expression(
+            tokens,
+            notation_kind,
+            Some(scope_class),
+            data_mapping_kind,
+            parameterizations,
+            false,
+        ) {
+            if matches!(notation, NotationExpression::Param(_, None)) {
+                self.source.diagnostic(
+                    &range.start..&range.end,
+                    Severity::Error,
+                    format!("notation cannot consist entirely of a parameter"),
+                );
+            }
+
             if let Some(result_params) = result_params {
                 result_params.push(Parameterization {
                     notation: notation.clone(),
@@ -806,10 +841,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         .collect(),
                 });
             }
+
             out(
                 ParameterEvent::ParamNotation(notation),
                 &range.start..&range.end,
             );
+
             true
         } else {
             false
@@ -820,13 +857,23 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         &self,
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         notation_kind: &'a dyn NotationKind,
+        scope_class: Option<ParamScopeClass>,
+        data_mapping_kind: Option<&'a dyn MappingKind<dyn ParamKind>>,
         parameterizations: &[&Parameterization<'a>],
+        is_in_mapping_target: bool,
     ) -> Option<(NotationExpression<'a>, Range<Src::Marker>)> {
         self.handle_notation_with_mapping_support(
             tokens,
             notation_kind,
+            scope_class,
+            data_mapping_kind,
             |tokens| {
-                self.create_plain_notation_expression(tokens, notation_kind, parameterizations)
+                self.create_plain_notation_expression(
+                    tokens,
+                    notation_kind,
+                    parameterizations,
+                    is_in_mapping_target,
+                )
             },
             |tokens, mapping_kind, params, mapping_start| {
                 self.create_mapping_target_expression(
@@ -835,6 +882,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     parameterizations,
                     params,
                     mapping_start,
+                    is_in_mapping_target,
                 )
             },
         )
@@ -844,14 +892,51 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         &self,
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         notation_kind: &'a dyn NotationKind,
-        handle_plain_notation: impl FnOnce(&mut RecordedTokenSlice<'a, '_, Src::Marker>) -> R,
+        scope_class: Option<ParamScopeClass>,
+        data_mapping_kind: Option<&'a dyn MappingKind<dyn ParamKind>>,
+        handle_plain_notation: impl FnOnce(
+            &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        ) -> Option<(R, Range<Src::Marker>)>,
         handle_mapping_target: impl FnOnce(
             &mut RecordedTokenSlice<'a, '_, Src::Marker>,
             &'a dyn MappingKind<dyn ParamKind>,
             Vec<MappingSourceParam<'a>>,
             &Src::Marker,
-        ) -> R,
-    ) -> R {
+        ) -> Option<(R, Range<Src::Marker>)>,
+    ) -> Option<(R, Range<Src::Marker>)> {
+        let (notation, range) = self.handle_notation_with_mapping_support_impl(
+            tokens,
+            notation_kind,
+            handle_plain_notation,
+            handle_mapping_target,
+        )?;
+
+        if let Some(scope_class) = scope_class {
+            let range_class = if data_mapping_kind.is_some() {
+                RangeClass::ParamRef(scope_class)
+            } else {
+                RangeClass::ParamNotation(scope_class)
+            };
+            self.source.range(range_class, &range.start..&range.end);
+        }
+
+        Some((notation, range))
+    }
+
+    fn handle_notation_with_mapping_support_impl<R>(
+        &self,
+        tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        notation_kind: &'a dyn NotationKind,
+        handle_plain_notation: impl FnOnce(
+            &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+        ) -> Option<(R, Range<Src::Marker>)>,
+        handle_mapping_target: impl FnOnce(
+            &mut RecordedTokenSlice<'a, '_, Src::Marker>,
+            &'a dyn MappingKind<dyn ParamKind>,
+            Vec<MappingSourceParam<'a>>,
+            &Src::Marker,
+        ) -> Option<(R, Range<Src::Marker>)>,
+    ) -> Option<(R, Range<Src::Marker>)> {
         let mut segment_len = 0;
         let mut paren_depth = 0;
         let mut surrounding_paren = None;
@@ -896,12 +981,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                             format!("'.' expected"),
                                         );
                                     }
-                                    return handle_mapping_target(
+                                    let (result, range) = handle_mapping_target(
                                         tokens,
                                         mapping_kind,
                                         params,
                                         &symbol_range.start,
-                                    );
+                                    )?;
+                                    return Some((result, start.unwrap()..range.end));
                                 } else {
                                     self.source.diagnostic(
                                         &range.start..&range.end,
@@ -932,12 +1018,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                         });
                                     };
                                     tokens.pop_front();
-                                    return handle_mapping_target(
+                                    let (result, range) = handle_mapping_target(
                                         tokens,
                                         mapping_kind,
                                         params,
                                         start.as_ref().unwrap(),
-                                    );
+                                    )?;
+                                    return Some((result, start.unwrap()..range.end));
                                 }
                             }
                         }
@@ -975,6 +1062,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         notation_kind: &'a dyn NotationKind,
         parameterizations: &[&Parameterization<'a>],
+        is_in_mapping_target: bool,
     ) -> Option<(NotationExpression<'a>, Range<Src::Marker>)> {
         let mut current_sequence = Vec::new();
         let mut start = None;
@@ -990,9 +1078,9 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     current_sequence.push(NotationExpression::ReservedChar(c));
                 }
                 TokenEvent::Token(Token::Identifier(identifier, _)) => {
-                    current_sequence.push(
-                        NotationExpression::Identifier(identifier).identify(parameterizations),
-                    );
+                    let mut notation = NotationExpression::Identifier(identifier);
+                    self.identify_notation(&mut notation, &range, parameterizations);
+                    current_sequence.push(notation);
                 }
                 TokenEvent::Paren(GroupEvent::Start(start_paren)) => {
                     let mut items = Vec::new();
@@ -1001,7 +1089,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         if let Some((item, _)) = self.create_notation_expression(
                             tokens,
                             notation_kind,
+                            None,
+                            None,
                             parameterizations,
+                            is_in_mapping_target,
                         ) {
                             items.push(item);
                         }
@@ -1048,10 +1139,28 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         if current_sequence.is_empty() {
             None
         } else {
-            Some((
-                NotationExpression::sequence(current_sequence).identify(parameterizations),
-                start.unwrap()..end.unwrap(),
-            ))
+            let range = start.unwrap()..end.unwrap();
+            if current_sequence.len() == 1 {
+                Some((current_sequence.pop().unwrap(), range))
+            } else {
+                let mut notation = NotationExpression::Sequence(current_sequence);
+                self.identify_notation(&mut notation, &range, parameterizations);
+                Some((notation, range))
+            }
+        }
+    }
+
+    fn identify_notation(
+        &self,
+        notation: &mut NotationExpression<'a>,
+        range: &Range<Src::Marker>,
+        parameterizations: &[&Parameterization<'a>],
+    ) {
+        if notation.identify(parameterizations) {
+            self.source.range(
+                RangeClass::ParamRef(ParamScopeClass::Local),
+                &range.start..&range.end,
+            );
         }
     }
 
@@ -1065,9 +1174,11 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         self.handle_notation_with_mapping_support(
             tokens,
             notation_kind,
+            Some(ParamScopeClass::Local),
+            None,
             |tokens| {
                 if let Some((notation, range)) =
-                    self.create_plain_notation_expression(tokens, notation_kind, &[])
+                    self.create_plain_notation_expression(tokens, notation_kind, &[], false)
                 {
                     Some((
                         MappingSourceParam {
@@ -1196,7 +1307,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         self.create_notation_expression(
             tokens,
             target_notation_kind,
+            None,
+            None,
             &MappingSourceParam::to_parameterization_refs(params),
+            true,
         )
     }
 
@@ -1207,6 +1321,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         parameterizations: &[&Parameterization<'a>],
         params: Vec<MappingSourceParam<'a>>,
         mapping_start: &Src::Marker,
+        is_nested_mapping_target: bool,
     ) -> Option<(NotationExpression<'a>, Range<Src::Marker>)> {
         let (notation, range) =
             self.create_mapping_target_notation_expression(tokens, mapping_kind, &params)?;
@@ -1236,6 +1351,15 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             };
             let identified_notation =
                 NotationExpression::Param(param_idx, Some(notation_parameterization));
+            let ref_start = if is_nested_mapping_target {
+                mapping_start
+            } else {
+                &range.start
+            };
+            self.source.range(
+                RangeClass::ParamRef(ParamScopeClass::Local),
+                ref_start..&range.end,
+            );
             Some((identified_notation, range))
         } else {
             self.source.diagnostic(
@@ -1836,6 +1960,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             range,
                             out,
                             mapping_kind.target_kind(),
+                            ParamScopeClass::Local,
                             separator,
                             additional_separator,
                             &[],
@@ -1874,7 +1999,14 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             &start..&start,
         );
         let end = self
-            .output_single_param(tokens, out, param_kind, &[], result_params)
+            .output_single_param(
+                tokens,
+                out,
+                param_kind,
+                ParamScopeClass::Local,
+                &[],
+                result_params,
+            )
             .unwrap_or(start);
         out(ParameterEvent::MappingParam(GroupEvent::End), &end..&end);
     }
@@ -1884,6 +2016,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         tokens: &mut RecordedTokens<'a, Src::Marker>,
         out: &mut impl FnMut(ParameterEvent<'a>, Range<&Src::Marker>),
         param_kind: &'a dyn ParamKind,
+        scope_class: ParamScopeClass,
         parameterizations: &[&Parameterization<'a>],
         result_params: &mut Option<Vec<Parameterization<'a>>>,
     ) -> Option<Src::Marker> {
@@ -1901,6 +2034,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 &range.start..&range.end,
                 out,
                 param_kind,
+                scope_class,
                 None,
                 None,
                 parameterizations,
@@ -1922,6 +2056,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             end_ref..end_ref,
             out,
             param_kind,
+            scope_class,
             None,
             None,
             parameterizations,
@@ -2067,6 +2202,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                 &mut state.recorded_notation_tokens,
                                 out,
                                 object_kind.param_kind(),
+                                ParamScopeClass::Object,
                                 &[],
                                 &mut None,
                             ) {
@@ -2098,6 +2234,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             &mut state.recorded_notation_tokens,
                             out,
                             object_kind.param_kind(),
+                            ParamScopeClass::Object,
                             &[],
                             &mut None,
                         ) {
@@ -2122,6 +2259,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     range,
                     out,
                     parameterization_kind,
+                    ParamScopeClass::Local,
                     Some(separator),
                     &[],
                     params,
@@ -2135,6 +2273,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         &mut state.recorded_notation_tokens,
                         out,
                         object_kind.param_kind(),
+                        ParamScopeClass::Object,
                         &Parameterization::to_ref_slice(params.as_deref()),
                         &mut None,
                     );
@@ -2186,6 +2325,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                         range,
                         out,
                         section_kind,
+                        ParamScopeClass::Extra,
                         Some(separator),
                         &[],
                         &mut None,
@@ -2556,7 +2696,24 @@ mod tests {
     #[test]
     fn globals() -> Result<(), Message> {
         let metamodel = TestMetaModel::new();
-        test_parameter_identification("%slate \"test\";", &metamodel, Vec::new(), &[])?;
+        test_parameter_identification(
+            "%slate \"test\";",
+            &metamodel,
+            Vec::new(),
+            &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
+        )?;
         test_parameter_identification(
             "%slate \"test\"; x;",
             &metamodel,
@@ -2570,6 +2727,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x : T;",
@@ -2587,6 +2761,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(" : T;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x : T := y;",
@@ -2606,6 +2797,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(" : T := y;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x. T;",
@@ -2627,6 +2835,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(". T;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x ⎿T⏌ := y;",
@@ -2651,6 +2876,25 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("⎿T⏌")]),
+                RangeClassTreeNode::Text(" := y;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; (x) : T := y;",
@@ -2673,6 +2917,26 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Range(
+                        RangeClass::Paren,
+                        vec![RangeClassTreeNode::Text("(x)")],
+                    )],
+                ),
+                RangeClassTreeNode::Text(" : T := y;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x ↦ y;",
@@ -2690,6 +2954,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamRef(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(" ↦ y;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; (x : T) := y;",
@@ -2722,6 +3003,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("(x : T)")],
+                ),
+                RangeClassTreeNode::Text(" := y;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x : T; y : U;",
@@ -2765,6 +3063,28 @@ mod tests {
                 },
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(" : T; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("y")],
+                ),
+                RangeClassTreeNode::Text(" : U;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x y;",
@@ -2782,6 +3102,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x y")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x^y_z;",
@@ -2802,6 +3139,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x^y_z")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x y %z(a;b);",
@@ -2839,6 +3193,32 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x y")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%z")],
+                ),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("(a;b)")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x();",
@@ -2856,6 +3236,29 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("()")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(,);",
@@ -2877,6 +3280,29 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(,)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(y,z);",
@@ -2900,6 +3326,29 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(y,z)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(y,z,);",
@@ -2923,6 +3372,29 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(y,z,)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(,y,z,);",
@@ -2950,6 +3422,29 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(,y,z,)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(y,,z,);",
@@ -2977,6 +3472,29 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(y,,z,)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(y,z,,);",
@@ -3004,6 +3522,29 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(y,z,,)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(y;z);",
@@ -3031,6 +3572,29 @@ mod tests {
                 severity: Severity::Error,
                 msg: "expected comma instead of semicolon".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("x"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(y;z)")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x(42);",
@@ -3039,19 +3603,43 @@ mod tests {
                 parameterizations: Vec::new(),
                 body: SectionItemBody::ParamGroup(
                     vec![Parameter {
-                        notation: NotationExpression::Sequence(vec![
-                            NotationExpression::Identifier("x".into()),
-                            NotationExpression::Paren('(', Vec::new()),
-                        ]),
+                        notation: NotationExpression::Identifier("x".into()),
                     }],
-                    Vec::new(),
+                    vec![DataToken::Paren(
+                        '(',
+                        vec![DataToken::Token(Token::Number("42".into()))],
+                    )],
                 ),
             }],
-            &[TestDiagnosticMessage {
-                range_text: "42".into(),
-                severity: Severity::Error,
-                msg: "token not allowed in notation".into(),
-            }],
+            &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Number,
+                            vec![RangeClassTreeNode::Text("42")],
+                        ),
+                        RangeClassTreeNode::Text(")"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x,y;",
@@ -3071,6 +3659,28 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(","),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("y")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x,y : T;",
@@ -3093,6 +3703,28 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(","),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("y")],
+                ),
+                RangeClassTreeNode::Text(" : T;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x,,y : T;",
@@ -3119,19 +3751,54 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(",,"),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("y")],
+                ),
+                RangeClassTreeNode::Text(" : T;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; 42;",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
-                body: SectionItemBody::ParamGroup(Vec::new(), Vec::new()),
+                body: SectionItemBody::ParamGroup(
+                    Vec::new(),
+                    vec![DataToken::Token(Token::Number("42".into()))],
+                ),
             }],
-            &[TestDiagnosticMessage {
-                range_text: "42".into(),
-                severity: Severity::Error,
-                msg: "token not allowed in notation".into(),
-            }],
+            &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(RangeClass::Number, vec![RangeClassTreeNode::Text("42")]),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         Ok(())
     }
@@ -3175,6 +3842,35 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [b : B] a(b) : A;",
@@ -3218,6 +3914,226 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; [b c : B] a(b c) : A;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: Vec::new(),
+                        body: SectionItemBody::ParamGroup(
+                            vec![Parameter {
+                                notation: NotationExpression::Sequence(vec![
+                                    NotationExpression::Identifier("b".into()),
+                                    NotationExpression::Identifier("c".into()),
+                                ]),
+                            }],
+                            vec![
+                                DataToken::Token(Token::Identifier(
+                                    ":".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                DataToken::Token(Token::Identifier(
+                                    "B".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                            ],
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Sequence(vec![
+                            NotationExpression::Identifier("a".into()),
+                            NotationExpression::Paren(
+                                '(',
+                                vec![NotationExpression::Param(0, None)],
+                            ),
+                        ]),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+            }],
+            &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b c")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b c")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; [b,c : B] b + c : A;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: Vec::new(),
+                        body: SectionItemBody::ParamGroup(
+                            vec![
+                                Parameter {
+                                    notation: NotationExpression::Identifier("b".into()),
+                                },
+                                Parameter {
+                                    notation: NotationExpression::Identifier("c".into()),
+                                },
+                            ],
+                            vec![
+                                DataToken::Token(Token::Identifier(
+                                    ":".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                DataToken::Token(Token::Identifier(
+                                    "B".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                            ],
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Sequence(vec![
+                            NotationExpression::Param(0, None),
+                            NotationExpression::Identifier("+".into()),
+                            NotationExpression::Param(1, None),
+                        ]),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+            }],
+            &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(","),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" + "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[d : D] b,c : B] a : A;",
@@ -3280,6 +4196,52 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(","),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[d : D] b; c : C] a : A;",
@@ -3348,6 +4310,52 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text("; "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[d : D] b : B, c : C] a : A;",
@@ -3429,7 +4437,120 @@ mod tests {
                 severity: Severity::Error,
                 msg: "expected semicolon instead of comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" : B, "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                        RangeClassTreeNode::Text(" : C]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
+        test_parameter_identification(
+            "%slate \"test\"; [a] a;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: Vec::new(),
+                        body: SectionItemBody::ParamGroup(
+                            vec![Parameter {
+                                notation: NotationExpression::Identifier("a".into()),
+                            }],
+                            Vec::new(),
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Param(0, None),
+                    }],
+                    Vec::new(),
+                ),
+            }],
+            &[TestDiagnosticMessage {
+                range_text: "a".into(),
+                severity: Severity::Error,
+                msg: "notation cannot consist entirely of a parameter".into(),
+            }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text("]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Range(
+                        RangeClass::ParamRef(ParamScopeClass::Local),
+                        vec![RangeClassTreeNode::Text("a")],
+                    )],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn higher_order_parameterizations() -> Result<(), Message> {
+        let metamodel = TestMetaModel::new();
         test_parameter_identification(
             "%slate \"test\"; [b : B] λ. b : A;",
             &metamodel,
@@ -3472,6 +4593,41 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("λ. "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [b : B] a(() ↦ b) : A;",
@@ -3525,6 +4681,53 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![RangeClassTreeNode::Text("()")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C] b(c) : B] λ c. b(c) : A;",
@@ -3594,6 +4797,84 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                        RangeClassTreeNode::Text(". "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C; d : D] b(c,d) : B] λ c,d. b(c,d) : A;",
@@ -3686,6 +4967,104 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C; "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("c")],
+                        ),
+                        RangeClassTreeNode::Text(","),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("d")],
+                        ),
+                        RangeClassTreeNode::Text(". "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C] b(c) : B] a(c ↦ b(c)) : A;",
@@ -3765,6 +5144,91 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("c")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C; d : D] b(c,d) : B] a((c,d) ↦ b(c,d)) : A;",
@@ -3867,6 +5331,118 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C; "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("c")],
+                                                ),
+                                                RangeClassTreeNode::Text(","),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("d")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[d : D] b(d),c(d) : B] a(d ↦ b(d), d ↦ c(d)) : A;",
@@ -3970,6 +5546,132 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(","),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("c"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("d")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(", "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("c"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("d")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C] b(c) : B] a(c ↦ b(x)) : A;",
@@ -4040,6 +5742,78 @@ mod tests {
                 severity: Severity::Error,
                 msg: "mapping target must match notation of a parameter".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![RangeClassTreeNode::Text("(x)")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C] b(c) : B] a((c,d) ↦ b(c)) : A;",
@@ -4123,6 +5897,103 @@ mod tests {
                 severity: Severity::Error,
                 msg: "mapping target is parameterized by 1 parameter(s), but mapping source contains 2 parameter(s)".into(),
             }],
+                    vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("c")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C] b(c) : B] a((c,d) ↦ b(d)) : A;",
@@ -4193,6 +6064,97 @@ mod tests {
                 severity: Severity::Error,
                 msg: "mapping target must match notation of a parameter".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[c : C] b(c) : B] a(d ↦ b(d)) : A;",
@@ -4276,6 +6238,91 @@ mod tests {
                 severity: Severity::Warning,
                 msg: "mapping source notation does not match original parameterization".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("d")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; [[[e : E] d(e) : D] b(e ↦ d(e)),c(λ e. d(e)) : B] \
@@ -4430,6 +6477,290 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("["),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("e")],
+                                        ),
+                                        RangeClassTreeNode::Text(" : E]"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("d"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("e")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" : D]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("e")],
+                                        ),
+                                        RangeClassTreeNode::Text(" ↦ "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![
+                                                RangeClassTreeNode::Text("d"),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::Paren,
+                                                    vec![
+                                                        RangeClassTreeNode::Text("("),
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::ParamRef(
+                                                                ParamScopeClass::Local,
+                                                            ),
+                                                            vec![RangeClassTreeNode::Text("e")],
+                                                        ),
+                                                        RangeClassTreeNode::Text(")"),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(","),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("c"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("(λ "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("e")],
+                                        ),
+                                        RangeClassTreeNode::Text(". "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![
+                                                RangeClassTreeNode::Text("d"),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::Paren,
+                                                    vec![
+                                                        RangeClassTreeNode::Text("("),
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::ParamRef(
+                                                                ParamScopeClass::Local,
+                                                            ),
+                                                            vec![RangeClassTreeNode::Text("e")],
+                                                        ),
+                                                        RangeClassTreeNode::Text(")"),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamNotation(
+                                                        ParamScopeClass::Local,
+                                                    ),
+                                                    vec![RangeClassTreeNode::Text("e")],
+                                                ),
+                                                RangeClassTreeNode::Text(" ↦ d"),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::Paren,
+                                                    vec![
+                                                        RangeClassTreeNode::Text("("),
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::ParamRef(
+                                                                ParamScopeClass::Local,
+                                                            ),
+                                                            vec![RangeClassTreeNode::Text("e")],
+                                                        ),
+                                                        RangeClassTreeNode::Text(")"),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::ParamNotation(
+                                                                ParamScopeClass::Local,
+                                                            ),
+                                                            vec![RangeClassTreeNode::Text("e")],
+                                                        ),
+                                                        RangeClassTreeNode::Text(" ↦ d"),
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::Paren,
+                                                            vec![
+                                                                RangeClassTreeNode::Text("("),
+                                                                RangeClassTreeNode::Range(
+                                                                    RangeClass::ParamRef(
+                                                                        ParamScopeClass::Local,
+                                                                    ),
+                                                                    vec![RangeClassTreeNode::Text(
+                                                                        "e",
+                                                                    )],
+                                                                ),
+                                                                RangeClassTreeNode::Text(")"),
+                                                            ],
+                                                        ),
+                                                    ],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(", λ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("λ "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("e")],
+                                        ),
+                                        RangeClassTreeNode::Text(". d"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("e")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(". "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("c"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![
+                                                        RangeClassTreeNode::Text("λ "),
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::ParamNotation(
+                                                                ParamScopeClass::Local,
+                                                            ),
+                                                            vec![RangeClassTreeNode::Text("e")],
+                                                        ),
+                                                        RangeClassTreeNode::Text(". d"),
+                                                        RangeClassTreeNode::Range(
+                                                            RangeClass::Paren,
+                                                            vec![
+                                                                RangeClassTreeNode::Text("("),
+                                                                RangeClassTreeNode::Range(
+                                                                    RangeClass::ParamRef(
+                                                                        ParamScopeClass::Local,
+                                                                    ),
+                                                                    vec![RangeClassTreeNode::Text(
+                                                                        "e",
+                                                                    )],
+                                                                ),
+                                                                RangeClassTreeNode::Text(")"),
+                                                            ],
+                                                        ),
+                                                    ],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
         )?;
         Ok(())
     }
@@ -4445,6 +6776,19 @@ mod tests {
                 body: SectionItemBody::Section(&metamodel, Vec::new()),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("{}")]),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; {};",
@@ -4454,6 +6798,20 @@ mod tests {
                 body: SectionItemBody::Section(&metamodel, Vec::new()),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("{}")]),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; { x : T }",
@@ -4483,6 +6841,29 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text(" : T }"),
+                    ],
+                ),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; { x : T; }",
@@ -4512,6 +6893,29 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text(" : T; }"),
+                    ],
+                ),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; { x : T; y : U; }",
@@ -4561,9 +6965,37 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text(" : T; "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text(" : U; }"),
+                    ],
+                ),
+            ],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; [a,b] { x_a; [c] y_(a,b,c); } z_a",
+            "%slate \"test\"; [a,b] { x_a; [c] y_a_b_c; } z_a;",
             &metamodel,
             vec![
                 SectionItem {
@@ -4620,14 +7052,11 @@ mod tests {
                                         notation: NotationExpression::Sequence(vec![
                                             NotationExpression::Identifier("y".into()),
                                             NotationExpression::ReservedChar('_'),
-                                            NotationExpression::Paren(
-                                                '(',
-                                                vec![
-                                                    NotationExpression::Param(0, None),
-                                                    NotationExpression::Param(1, None),
-                                                    NotationExpression::Param(2, None),
-                                                ],
-                                            ),
+                                            NotationExpression::Param(0, None),
+                                            NotationExpression::ReservedChar('_'),
+                                            NotationExpression::Param(1, None),
+                                            NotationExpression::ReservedChar('_'),
+                                            NotationExpression::Param(2, None),
                                         ]),
                                     }],
                                     Vec::new(),
@@ -4651,6 +7080,243 @@ mod tests {
                 },
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(","),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text("]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![
+                                RangeClassTreeNode::Text("x_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text("; "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text("]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![
+                                RangeClassTreeNode::Text("y_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text("_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text("_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text("; }"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("z_a")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; [[a] { b_a; }] { c(a ↦ b_a); }",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: vec![Parameterization(
+                            &metamodel,
+                            vec![SectionItem {
+                                parameterizations: Vec::new(),
+                                body: SectionItemBody::ParamGroup(
+                                    vec![Parameter {
+                                        notation: NotationExpression::Identifier("a".into()),
+                                    }],
+                                    Vec::new(),
+                                ),
+                            }],
+                        )],
+                        body: SectionItemBody::Section(
+                            &metamodel,
+                            vec![SectionItem {
+                                parameterizations: Vec::new(),
+                                body: SectionItemBody::ParamGroup(
+                                    vec![Parameter {
+                                        notation: NotationExpression::Sequence(vec![
+                                            NotationExpression::Identifier("b".into()),
+                                            NotationExpression::ReservedChar('_'),
+                                            NotationExpression::Param(0, None),
+                                        ]),
+                                    }],
+                                    Vec::new(),
+                                ),
+                            }],
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::Section(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: Vec::new(),
+                        body: SectionItemBody::ParamGroup(
+                            vec![Parameter {
+                                notation: NotationExpression::Sequence(vec![
+                                    NotationExpression::Identifier("c".into()),
+                                    NotationExpression::Paren(
+                                        '(',
+                                        vec![NotationExpression::Param(
+                                            0,
+                                            Some(NotationParameterization {
+                                                mapping_kind: metamodel
+                                                    .opposite_mapping
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .as_ref(),
+                                                source_params: vec![None],
+                                            }),
+                                        )],
+                                    ),
+                                ]),
+                            }],
+                            Vec::new(),
+                        ),
+                    }],
+                ),
+            }],
+            &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text("]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("{ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b_"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("a")],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text("; }"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text("]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Global),
+                            vec![
+                                RangeClassTreeNode::Text("c"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("a")],
+                                        ),
+                                        RangeClassTreeNode::Text(" ↦ "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![
+                                                RangeClassTreeNode::Text("b_"),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("a")],
+                                                ),
+                                            ],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text("; }"),
+                    ],
+                ),
+            ],
         )?;
         Ok(())
     }
@@ -4674,6 +7340,25 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("{}")]),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x};",
@@ -4701,6 +7386,35 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x || y};",
@@ -4738,6 +7452,40 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text(" || "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x | | y};",
@@ -4775,6 +7523,40 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text(" | | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x ||| y};",
@@ -4816,6 +7598,40 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous separator".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("x")],
+                        ),
+                        RangeClassTreeNode::Text(" ||| "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x(y) | y | z};",
@@ -4870,6 +7686,58 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![
+                                RangeClassTreeNode::Text("x"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("y")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Extra),
+                            vec![RangeClassTreeNode::Text("z")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x(y) | y || z};",
@@ -4926,6 +7794,58 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![
+                                RangeClassTreeNode::Text("x"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("y")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text(" || "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("z")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; T := {x(y) | y | z := λ a};",
@@ -5002,15 +7922,72 @@ mod tests {
                 severity: Severity::Error,
                 msg: "'.' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("T")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![
+                                RangeClassTreeNode::Text("x"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("y")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("y")],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Extra),
+                            vec![RangeClassTreeNode::Text("z")],
+                        ),
+                        RangeClassTreeNode::Text(" := λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
-            "%slate \"test\"; T := {x_i ↦ i | i : I || y_j_k ↦ j k | j : J; k : K | a | b} | {z};",
+            "%slate \"test\"; c := {x_i ↦ i | i : I || y_j_k ↦ j k | j : J; k : K | a | b} | {z};",
             &metamodel,
             vec![SectionItem {
                 parameterizations: Vec::new(),
                 body: SectionItemBody::ParamGroup(
                     vec![Parameter {
-                        notation: NotationExpression::Identifier("T".into()),
+                        notation: NotationExpression::Identifier("c".into()),
                     }],
                     vec![
                         DataToken::Token(Token::Identifier(":=".into(), IdentifierType::Unquoted)),
@@ -5176,6 +8153,94 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("c")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Object),
+                            vec![
+                                RangeClassTreeNode::Text("x_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("i")],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ i | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("i")],
+                        ),
+                        RangeClassTreeNode::Text(" : I || "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Object),
+                            vec![
+                                RangeClassTreeNode::Text("y_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("j")],
+                                ),
+                                RangeClassTreeNode::Text("_"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("k")],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ j k | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("j")],
+                        ),
+                        RangeClassTreeNode::Text(" : J; "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("k")],
+                        ),
+                        RangeClassTreeNode::Text(" : K | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Extra),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Extra),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" | "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("z")],
+                        ),
+                        RangeClassTreeNode::Text("}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; ℕ := {@\"0\" || S(n) | n : ℕ};",
@@ -5241,6 +8306,58 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("ℕ")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("{"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![RangeClassTreeNode::Text("@\"0\"")],
+                        ),
+                        RangeClassTreeNode::Text(" || "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Object),
+                            vec![
+                                RangeClassTreeNode::Text("S"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("n")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" | "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("n")],
+                        ),
+                        RangeClassTreeNode::Text(" : ℕ}"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         Ok(())
     }
@@ -5271,6 +8388,23 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ. x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a. x;",
@@ -5301,6 +8435,28 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(". x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a : A. x;",
@@ -5340,6 +8496,28 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A. x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (λ a. x, λ b. y);",
@@ -5394,6 +8572,40 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(". x, λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(". y)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a,b. x;",
@@ -5433,6 +8645,33 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(","),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("b")],
+                ),
+                RangeClassTreeNode::Text(". x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a,b,. x;",
@@ -5472,6 +8711,33 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(","),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("b")],
+                ),
+                RangeClassTreeNode::Text(",. x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a,,b. x;",
@@ -5515,6 +8781,33 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(",,"),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("b")],
+                ),
+                RangeClassTreeNode::Text(". x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a : A, b : B. x;",
@@ -5572,6 +8865,33 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A, "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("b")],
+                ),
+                RangeClassTreeNode::Text(" : B. x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a;",
@@ -5603,6 +8923,28 @@ mod tests {
                 severity: Severity::Error,
                 msg: "'.' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (λ a);",
@@ -5637,6 +8979,35 @@ mod tests {
                 severity: Severity::Error,
                 msg: "'.' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(")"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a : A, λ b : B. c_b : C, d : D. x;",
@@ -5734,6 +9105,49 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A, λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("b")],
+                ),
+                RangeClassTreeNode::Text(" : B. "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![
+                        RangeClassTreeNode::Text("c_"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : C, "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("d")],
+                ),
+                RangeClassTreeNode::Text(" : D. x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := λ a : A, b : B ↦ c_b : C, d : D. x;",
@@ -5831,6 +9245,49 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := λ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" : A, "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("b")],
+                ),
+                RangeClassTreeNode::Text(" : B ↦ "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![
+                        RangeClassTreeNode::Text("c_"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : C, "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                    vec![RangeClassTreeNode::Text("d")],
+                ),
+                RangeClassTreeNode::Text(" : D. x;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; a := f[λ b : B. b, λ λ d : D, e : E, f : E. c[d,f] : C. c[0,1]];",
@@ -5985,6 +9442,90 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" := f"),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("[λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" : B. b, λ λ "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("d")],
+                        ),
+                        RangeClassTreeNode::Text(" : D, "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("e")],
+                        ),
+                        RangeClassTreeNode::Text(" : E, "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("f")],
+                        ),
+                        RangeClassTreeNode::Text(" : E. "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("c"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("["),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(","),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("f")],
+                                        ),
+                                        RangeClassTreeNode::Text("]"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : C. c"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Number,
+                                    vec![RangeClassTreeNode::Text("0")],
+                                ),
+                                RangeClassTreeNode::Text(","),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Number,
+                                    vec![RangeClassTreeNode::Text("1")],
+                                ),
+                                RangeClassTreeNode::Text("]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text("]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         Ok(())
     }
@@ -6018,6 +9559,35 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("()")],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (a ↦ x);",
@@ -6051,6 +9621,35 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (a : A ↦ x);",
@@ -6093,6 +9692,35 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(" : A ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a) ↦ x);",
@@ -6126,6 +9754,42 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a : A) ↦ x);",
@@ -6168,6 +9832,42 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(" : A)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (a(b) ↦ x);",
@@ -6207,6 +9907,41 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("a"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![RangeClassTreeNode::Text("(b)")],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (a, b ↦ x);",
@@ -6251,6 +9986,35 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(a, "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := (a ↦ x, b ↦ y);",
@@ -6305,6 +10069,40 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x, "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("b")],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ y)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a,b) ↦ x);",
@@ -6347,6 +10145,47 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(","),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a,b,) ↦ x);",
@@ -6389,6 +10228,47 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(","),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(",)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a,,b) ↦ x);",
@@ -6435,6 +10315,47 @@ mod tests {
                 severity: Severity::Error,
                 msg: "superfluous comma".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(",,"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a : A, b : B) ↦ x);",
@@ -6495,6 +10416,47 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(" : A, "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(" : B)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a : A, b : B ↦ c_b : C, d : D) ↦ x);",
@@ -6595,6 +10557,63 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(" : A, "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(" : B ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("c_"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("b")],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" : C, "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; f := ((a : A, λ b : B. c_b : C, d : D) ↦ x);",
@@ -6702,6 +10721,63 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("f")],
+                ),
+                RangeClassTreeNode::Text(" := "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("("),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(" : A, λ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(" : B. "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("c_"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("b")],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" : C, "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" : D)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ x)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; a := f[(b : B) ↦ b, ((d : D, e : E, f : E) ↦ c[d,f] : C) ↦ c[0,1]];",
@@ -6856,6 +10932,111 @@ mod tests {
                 ),
             }],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("a")],
+                ),
+                RangeClassTreeNode::Text(" := f"),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("b")],
+                                ),
+                                RangeClassTreeNode::Text(" : B)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ b, "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("d")],
+                                        ),
+                                        RangeClassTreeNode::Text(" : D, "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("e")],
+                                        ),
+                                        RangeClassTreeNode::Text(" : E, "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("f")],
+                                        ),
+                                        RangeClassTreeNode::Text(" : E)"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("c"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("["),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("d")],
+                                                ),
+                                                RangeClassTreeNode::Text(","),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("f")],
+                                                ),
+                                                RangeClassTreeNode::Text("]"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(" : C)"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" ↦ c"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Number,
+                                    vec![RangeClassTreeNode::Text("0")],
+                                ),
+                                RangeClassTreeNode::Text(","),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Number,
+                                    vec![RangeClassTreeNode::Text("1")],
+                                ),
+                                RangeClassTreeNode::Text("]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text("]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
         )?;
         Ok(())
     }
@@ -6875,6 +11056,7 @@ mod tests {
                 severity: Severity::Error,
                 msg: "metamodel reference expected".into(),
             }],
+            Vec::new(),
         )?;
         test_parameter_identification_with_document(
             "%slate \"unknown\";",
@@ -6888,6 +11070,43 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unknown metamodel \"unknown\"".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"unknown\"")],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
+        )?;
+        test_parameter_identification_with_document(
+            "%slate \"unknown\"; x;",
+            &metamodel,
+            Document {
+                metamodel: None,
+                definitions: Vec::new(),
+            },
+            &[TestDiagnosticMessage {
+                range_text: "\"unknown\"".into(),
+                severity: Severity::Error,
+                msg: "unknown metamodel \"unknown\"".into(),
+            }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"unknown\"")],
+                ),
+                RangeClassTreeNode::Text("; x;"),
+            ],
         )?;
         test_parameter_identification_with_document(
             "%slate \"test\" x",
@@ -6901,6 +11120,18 @@ mod tests {
                 severity: Severity::Error,
                 msg: "';' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text(" x"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\";; x",
@@ -6919,6 +11150,22 @@ mod tests {
                 severity: Severity::Warning,
                 msg: "superfluous semicolon".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text(";; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; x : T;;",
@@ -6940,6 +11187,23 @@ mod tests {
                 severity: Severity::Warning,
                 msg: "superfluous semicolon".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![RangeClassTreeNode::Text("x")],
+                ),
+                RangeClassTreeNode::Text(" : T;;"),
+            ],
         )?;
         test_parameter_identification(
             "%slate \"test\"; {};;",
@@ -6953,6 +11217,20 @@ mod tests {
                 severity: Severity::Warning,
                 msg: "superfluous semicolon".into(),
             }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("{}")]),
+                RangeClassTreeNode::Text(";;"),
+            ],
         )?;
         Ok(())
     }
@@ -7171,6 +11449,7 @@ mod tests {
         metamodel: &TestMetaModel,
         expected_definitions: Vec<SectionItem>,
         expected_diagnostics: &[TestDiagnosticMessage],
+        expected_ranges: RangeClassTree,
     ) -> Result<(), Message> {
         let expected_document = Document {
             metamodel: Some(metamodel),
@@ -7181,6 +11460,7 @@ mod tests {
             metamodel,
             expected_document,
             expected_diagnostics,
+            expected_ranges,
         )
     }
 
@@ -7189,6 +11469,7 @@ mod tests {
         metamodel: &TestMetaModel,
         expected_document: Document,
         expected_diagnostics: &[TestDiagnosticMessage],
+        expected_ranges: RangeClassTree,
     ) -> Result<(), Message> {
         let mut param_events = Vec::new();
         let param_sink =
@@ -7199,7 +11480,9 @@ mod tests {
         let source = CharSliceEventSource::new(input, &diag_sink)?;
         source.run(char_sink);
         assert_eq!(param_events, expected_document.into_events());
-        assert_eq!(diag_sink.diagnostics(), expected_diagnostics);
+        let (diagnostics, range_events) = diag_sink.results();
+        assert_eq!(diagnostics, expected_diagnostics);
+        assert_eq!((range_events, input.len()), expected_ranges.into_events());
         Ok(())
     }
 }

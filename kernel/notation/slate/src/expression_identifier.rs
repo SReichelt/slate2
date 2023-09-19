@@ -228,7 +228,8 @@ mod tests {
         let source = CharSliceEventSource::new(input, &diag_sink)?;
         source.run(char_sink);
         assert_eq!(expression_events, expected_document.into_events());
-        assert_eq!(diag_sink.diagnostics(), expected_diagnostics);
+        let (diagnostics, range_events) = diag_sink.results();
+        assert_eq!(diagnostics, expected_diagnostics);
         Ok(())
     }
 }

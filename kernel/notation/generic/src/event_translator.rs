@@ -63,12 +63,9 @@ impl<'a, T: EventTranslator<'a>, Sink: EventSink<'a, Ev = T::Out>> EventSink<'a>
         self,
         source: EventSourceWithOps<'a, Self::Ev, Src>,
     ) -> Self::Pass<Src> {
-        let translator_source = EventTranslatorSource {
-            diag_source: Some(source.0.clone()),
-        };
         let translator_pass = self
             .translator
-            .start(EventSourceWithOps(translator_source, source.1.clone()));
+            .start(EventSourceWithOps(Some(source.0.clone()), source.1.clone()));
         let sink_pass = self
             .sink
             .start(EventSourceWithOps(source.0, translator_pass.special_ops()));
@@ -194,7 +191,7 @@ pub struct TranslatorPassInst<
 > {
     pub translator: T,
     pub special_ops: <T::In as Event>::SpecialOps<'a, Src::Marker>,
-    pub translator_pass: T::Pass<EventTranslatorSource<Src>>,
+    pub translator_pass: T::Pass<Option<Src>>,
     pub sink_pass: SP,
 }
 
@@ -207,7 +204,7 @@ impl<
 {
     type Ev = T::In;
     type Marker = Src::Marker;
-    type State = TranslatorStateInst<T::Pass<EventTranslatorSource<Src>>, SP>;
+    type State = TranslatorStateInst<T::Pass<Option<Src>>, SP>;
     type NextPass = Self;
 
     fn new_state(&self) -> Self::State {
@@ -242,11 +239,9 @@ impl<
             self.translator_pass = next_translator_pass;
         } else {
             self.sink_pass = self.sink_pass.next_pass(state.sink_state, end_marker)?;
-            let translator_source = EventTranslatorSource { diag_source: None };
-            self.translator_pass = self.translator.start(EventSourceWithOps(
-                translator_source,
-                self.special_ops.clone(),
-            ));
+            self.translator_pass = self
+                .translator
+                .start(EventSourceWithOps(None, self.special_ops.clone()));
         }
         Some(self)
     }
@@ -287,20 +282,5 @@ pub trait SpecialOpsGetter<SpecialOps> {
 impl<T> SpecialOpsGetter<()> for T {
     fn special_ops(&self) -> () {
         ()
-    }
-}
-
-#[derive(Clone)]
-pub struct EventTranslatorSource<Src: EventSource> {
-    diag_source: Option<Src>,
-}
-
-impl<Src: EventSource> EventSource for EventTranslatorSource<Src> {
-    type Marker = Src::Marker;
-
-    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
-        if let Some(diag_source) = &self.diag_source {
-            diag_source.diagnostic(range, severity, msg);
-        }
     }
 }

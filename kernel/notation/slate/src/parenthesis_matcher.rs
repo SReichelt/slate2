@@ -62,7 +62,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
                         group_start: range.start.clone(),
                         expected_closing_parenthesis,
                     });
-                    out(TokenEvent::Paren(GroupEvent::Start(c)), range);
+                    self.output_paren_start(c, range, &mut out);
                     return;
                 }
             }
@@ -83,7 +83,7 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
                         closed_group_index + 1,
                     );
                     state.pop();
-                    out(TokenEvent::Paren(GroupEvent::End), range);
+                    self.output_paren_end(range, &mut out);
                 } else {
                     self.source.diagnostic(
                         range,
@@ -110,6 +110,28 @@ impl<'a, Src: EventSource + 'a> EventTranslatorPass for ParenthesisMatcherPass<'
 }
 
 impl<'a, Src: EventSource + 'a> ParenthesisMatcherPass<'a, Src> {
+    fn output_paren_start(
+        &self,
+        c: char,
+        range: Range<&Src::Marker>,
+        out: &mut impl FnMut(TokenEvent<'a>, Range<&Src::Marker>),
+    ) {
+        self.source
+            .range_event(RangeClassEvent::Start(RangeClass::Paren), range.start);
+        out(TokenEvent::Paren(GroupEvent::Start(c)), range);
+    }
+
+    fn output_paren_end(
+        &self,
+        range: Range<&Src::Marker>,
+        out: &mut impl FnMut(TokenEvent<'a>, Range<&Src::Marker>),
+    ) {
+        let end = range.end;
+        out(TokenEvent::Paren(GroupEvent::End), range);
+        self.source
+            .range_event(RangeClassEvent::End(RangeClass::Paren), end);
+    }
+
     fn close_unmatched_groups(
         &self,
         state: &mut ParenthesisMatcherState<Src::Marker>,
@@ -125,7 +147,7 @@ impl<'a, Src: EventSource + 'a> ParenthesisMatcherPass<'a, Src> {
                 Severity::Error,
                 format!("unmatched parenthesis: '{expected}' expected"),
             );
-            out(TokenEvent::Paren(GroupEvent::End), end_marker..end_marker);
+            self.output_paren_end(end_marker..end_marker, out);
         }
     }
 }
@@ -151,7 +173,7 @@ mod tests {
 
     #[test]
     fn matched_parentheses() -> Result<(), Message> {
-        test_parenthesis_matching("", Vec::new(), &[])?;
+        test_parenthesis_matching("", Vec::new(), &[], Vec::new())?;
         test_parenthesis_matching(
             "abc",
             vec![ParenToken::Token(Token::Identifier(
@@ -159,8 +181,17 @@ mod tests {
                 IdentifierType::Unquoted,
             ))],
             &[],
+            vec![RangeClassTreeNode::Text("abc")],
         )?;
-        test_parenthesis_matching("()", vec![ParenToken::Paren('(', Vec::new())], &[])?;
+        test_parenthesis_matching(
+            "()",
+            vec![ParenToken::Paren('(', Vec::new())],
+            &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![RangeClassTreeNode::Text("()")],
+            )],
+        )?;
         test_parenthesis_matching(
             "(abc)",
             vec![ParenToken::Paren(
@@ -171,6 +202,10 @@ mod tests {
                 ))],
             )],
             &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![RangeClassTreeNode::Text("(abc)")],
+            )],
         )?;
         test_parenthesis_matching(
             "|abc|",
@@ -182,6 +217,10 @@ mod tests {
                 ))],
             )],
             &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![RangeClassTreeNode::Text("|abc|")],
+            )],
         )?;
         test_parenthesis_matching(
             "(|abc|)",
@@ -196,6 +235,17 @@ mod tests {
                 )],
             )],
             &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![
+                    RangeClassTreeNode::Text("("),
+                    RangeClassTreeNode::Range(
+                        RangeClass::Paren,
+                        vec![RangeClassTreeNode::Text("|abc|")],
+                    ),
+                    RangeClassTreeNode::Text(")"),
+                ],
+            )],
         )?;
         test_parenthesis_matching(
             "|(abc)|",
@@ -210,6 +260,17 @@ mod tests {
                 )],
             )],
             &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![
+                    RangeClassTreeNode::Text("|"),
+                    RangeClassTreeNode::Range(
+                        RangeClass::Paren,
+                        vec![RangeClassTreeNode::Text("(abc)")],
+                    ),
+                    RangeClassTreeNode::Text("|"),
+                ],
+            )],
         )?;
         test_parenthesis_matching(
             "(|(abc)|)",
@@ -227,6 +288,43 @@ mod tests {
                 )],
             )],
             &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![
+                    RangeClassTreeNode::Text("("),
+                    RangeClassTreeNode::Range(
+                        RangeClass::Paren,
+                        vec![
+                            RangeClassTreeNode::Text("|"),
+                            RangeClassTreeNode::Range(
+                                RangeClass::Paren,
+                                vec![RangeClassTreeNode::Text("(abc)")],
+                            ),
+                            RangeClassTreeNode::Text("|"),
+                        ],
+                    ),
+                    RangeClassTreeNode::Text(")"),
+                ],
+            )],
+        )?;
+        test_parenthesis_matching(
+            "(%abc)",
+            vec![ParenToken::Paren(
+                '(',
+                vec![ParenToken::Token(Token::Keyword("%abc".into()))],
+            )],
+            &[],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![
+                    RangeClassTreeNode::Text("("),
+                    RangeClassTreeNode::Range(
+                        RangeClass::Keyword,
+                        vec![RangeClassTreeNode::Text("%abc")],
+                    ),
+                    RangeClassTreeNode::Text(")"),
+                ],
+            )],
         )?;
         test_parenthesis_matching(
             "|a|^b",
@@ -246,6 +344,10 @@ mod tests {
                 ParenToken::Token(Token::Identifier("b".into(), IdentifierType::Unquoted)),
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("|a|")]),
+                RangeClassTreeNode::Text("^b"),
+            ],
         )?;
         test_parenthesis_matching(
             "|a|⁻¹",
@@ -260,6 +362,10 @@ mod tests {
                 ParenToken::Token(Token::Identifier("⁻¹".into(), IdentifierType::Unquoted)),
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("|a|")]),
+                RangeClassTreeNode::Text("⁻¹"),
+            ],
         )?;
         test_parenthesis_matching(
             "|a²|⁻¹",
@@ -274,6 +380,13 @@ mod tests {
                 ParenToken::Token(Token::Identifier("⁻¹".into(), IdentifierType::Unquoted)),
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("|a²|")],
+                ),
+                RangeClassTreeNode::Text("⁻¹"),
+            ],
         )?;
         test_parenthesis_matching(
             "|a+(b-c)|⁻¹",
@@ -305,6 +418,20 @@ mod tests {
                 ParenToken::Token(Token::Identifier("⁻¹".into(), IdentifierType::Unquoted)),
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("|a+"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("(b-c)")],
+                        ),
+                        RangeClassTreeNode::Text("|"),
+                    ],
+                ),
+                RangeClassTreeNode::Text("⁻¹"),
+            ],
         )?;
         test_parenthesis_matching(
             "||",
@@ -321,6 +448,7 @@ mod tests {
                 )),
             ],
             &[],
+            vec![RangeClassTreeNode::Text("||")],
         )?;
         test_parenthesis_matching(
             "|||",
@@ -342,6 +470,7 @@ mod tests {
                 )),
             ],
             &[],
+            vec![RangeClassTreeNode::Text("|||")],
         )?;
         test_parenthesis_matching(
             "a (b c [d|e]) f ⟦g ‖ h⟧ ‖i‖.|j|",
@@ -406,6 +535,29 @@ mod tests {
                 ),
             ],
             &[],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(b c "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("[d|e]")],
+                        ),
+                        RangeClassTreeNode::Text(")"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" f "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("⟦g ‖ h⟧")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("‖i‖")]),
+                RangeClassTreeNode::Text("."),
+                RangeClassTreeNode::Range(RangeClass::Paren, vec![RangeClassTreeNode::Text("|j|")]),
+            ],
         )?;
         Ok(())
     }
@@ -420,6 +572,10 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: ')' expected".into(),
             }],
+            vec![RangeClassTreeNode::Range(
+                RangeClass::Paren,
+                vec![RangeClassTreeNode::Text("(")],
+            )],
         )?;
         test_parenthesis_matching(
             ")",
@@ -429,6 +585,7 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis".into(),
             }],
+            vec![RangeClassTreeNode::Text(")")],
         )?;
         test_parenthesis_matching(
             "a (b c",
@@ -447,6 +604,13 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: ')' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("(b c")],
+                ),
+            ],
         )?;
         test_parenthesis_matching(
             "a b) c",
@@ -460,6 +624,7 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis".into(),
             }],
+            vec![RangeClassTreeNode::Text("a b) c")],
         )?;
         test_parenthesis_matching(
             "a (b [c) d",
@@ -485,6 +650,21 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: ']' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(b "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("[c")],
+                        ),
+                        RangeClassTreeNode::Text(")"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" d"),
+            ],
         )?;
         test_parenthesis_matching(
             "a (b |c) d",
@@ -510,6 +690,21 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: '|' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(b "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![RangeClassTreeNode::Text("|c")],
+                        ),
+                        RangeClassTreeNode::Text(")"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" d"),
+            ],
         )?;
         test_parenthesis_matching(
             "a (b] c) d",
@@ -529,6 +724,14 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis".into(),
             }],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("(b] c)")],
+                ),
+                RangeClassTreeNode::Text(" d"),
+            ],
         )?;
         test_parenthesis_matching(
             "a (b| c) d",
@@ -548,6 +751,14 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis".into(),
             }],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![RangeClassTreeNode::Text("(b| c)")],
+                ),
+                RangeClassTreeNode::Text(" d"),
+            ],
         )?;
         test_parenthesis_matching(
             "a (b (c [d [e] f) g) h",
@@ -596,6 +807,35 @@ mod tests {
                 severity: Severity::Error,
                 msg: "unmatched parenthesis: ']' expected".into(),
             }],
+            vec![
+                RangeClassTreeNode::Text("a "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("(b "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("(c "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("[d "),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![RangeClassTreeNode::Text("[e]")],
+                                        ),
+                                        RangeClassTreeNode::Text(" f"),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" g)"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" h"),
+            ],
         )?;
         Ok(())
     }
@@ -625,6 +865,7 @@ mod tests {
         input: &str,
         expected_token_groups: Vec<ParenToken>,
         expected_diagnostics: &[TestDiagnosticMessage],
+        expected_ranges: RangeClassTree,
     ) -> Result<(), Message> {
         let mut token_events = Vec::new();
         let token_sink = TranslatorInst::new(ParenthesisMatcher, &mut token_events);
@@ -633,7 +874,9 @@ mod tests {
         let source = CharSliceEventSource::new(input, &diag_sink)?;
         source.run(char_sink);
         assert_eq!(token_events, expected_token_groups.into_events());
-        assert_eq!(diag_sink.diagnostics(), expected_diagnostics);
+        let (diagnostics, range_events) = diag_sink.results();
+        assert_eq!(diagnostics, expected_diagnostics);
+        assert_eq!((range_events, input.len()), expected_ranges.into_events());
         Ok(())
     }
 }

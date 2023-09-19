@@ -37,13 +37,13 @@ tokens is as follows.
 * Numbers, which can either start with an ASCII numeral or with a dot. A number starting with an
   ASCII numeral can contain ASCII alphanumeric characters or underscores, followed by an optional
   dot which can be followed by more ASCII alphanumeric characters as well as `+` or `-` if preceded
-  by `e` or `E`. A number starting with a dot must be followed by an ASCII numeral and can only
-  follow a non-dot punctuation character, an opening parenthesis, a number (but not immediately, and
-  not if the number ends with a dot), or an unquoted identifier consisting of symbol characters (see
-  below), possibly separated by whitespace. Afterwards, the same rules apply as for the part of a
-  number following a dot.
-  A number cannot follow a single dot, even when separated by whitespace. (It becomes an identifier
-  then.)
+  by `e` or `E`. A number starting with a dot must have an ASCII numeral as its second character,
+  and can only follow a non-dot punctuation character, an opening parenthesis, a number (but not
+  immediately, and not if the number ends with a dot), or an unquoted identifier consisting of
+  symbol characters (see below), possibly separated by whitespace. Afterwards, the same rules apply
+  as for the part of a number following a dot.
+  A number cannot immediately follow a single dot; either the dot is part of the number, or the
+  token after the dot is regarded as an identifier.
 * String literals surrounded by single or double quotes. These literals may contain the same escape
   sequences as Rust, and any character except ASCII control characters (which includes line breaks).
   (The backtick character is reserved for future use.)
@@ -57,8 +57,8 @@ tokens is as follows.
   An unquoted identifier cannot start with `%` or `@` or the sequence `//` or `/*`, or contain any
   of the parenthesis, punctuation, or subscript/superscript separator characters mentioned above,
   nor whitespace, ASCII control characters, or backticks.
-  An unquoted identifier cannot start with a numeral, except when the identifier follows a dot
-  (possibly with whitespace between).
+  An unquoted identifier cannot start with a numeral, except when the identifier immediately follows
+  a dot.
   An unquoted identifier can optionally end with any number of apostrophes and quotation marks.
   Quoted and unquoted identifiers are treated equivalently if they consist of the same characters,
   except when explicitly specified otherwise.
@@ -189,16 +189,18 @@ A _notation expression_ is recursively any of the following.
   or a sequence cannot appear within a sequence.
 
 A _notation expression_ may optionally be followed by _data_ separated by
-* a dot,
 * a keyword,
+* a number,
+* a string,
 * an unquoted identifier that is reserved for this purpose by the metamodel,
 * an opening parenthesis reserved by the metamodel, or
 * an infix mapping symbol.
 
 If the notation expression is part of a group, the data ends the group and applies to the entire
 group.
-A dot, keyword, reserved identifier, or reserved parenthesis is considered a data separator even if
-it occurs within parentheses. The data then begins at the previous top-level opening parenthesis.
+A keyword, number, string, reserved identifier, or reserved parenthesis is considered a data
+separator even if it occurs within parentheses. The data then begins at the previous top-level
+opening parenthesis.
 A parameter group may consist only of data. The metamodel may also specify that _all_ parameter
 groups in a section are to be interpreted as data, without requiring a separator.
 
@@ -240,7 +242,7 @@ _operator precedence_ and _associativity_ determine which match to use. Both are
 metamodel at the token level; they cannot be overridden by custom notations. If multiple matches are
 still possible after taking precedence into account, an error is reported.
 
-Parameters within objects are often referenced at locations where they are not directly in scope.
+Object items are often referenced at locations where they are not directly in scope.
 There are two possibilities.
 * A reference can be prefixed by an expression followed by a dot. The metamodel defines how to
   evaluate that expression in order to determine the object in which to look for the item (or that

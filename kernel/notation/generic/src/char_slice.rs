@@ -78,10 +78,16 @@ impl<'a, DiagSink: CharSliceDiagnosticSink> EventSource for CharSliceEventSource
         self.diag_sink
             .diagnostic(unpack_marker_range(range), severity, msg)
     }
+
+    fn range_event(&self, event: RangeClassEvent, marker: &Self::Marker) {
+        self.diag_sink.range_event(event, unpack_marker(marker))
+    }
 }
 
 pub trait CharSliceDiagnosticSink {
     fn diagnostic(&self, range: Range<usize>, severity: Severity, msg: Message);
+
+    fn range_event(&self, event: RangeClassEvent, marker: usize);
 }
 
 pub mod test_helpers {
@@ -99,6 +105,7 @@ pub mod test_helpers {
     pub struct DiagnosticsRecorder<'a> {
         input: &'a str,
         diagnostics: RefCell<Vec<TestDiagnosticMessage>>,
+        range_events: RefCell<Vec<(RangeClassEvent, usize)>>,
     }
 
     impl<'a> DiagnosticsRecorder<'a> {
@@ -106,11 +113,37 @@ pub mod test_helpers {
             DiagnosticsRecorder {
                 input,
                 diagnostics: RefCell::new(Vec::new()),
+                range_events: RefCell::new(Vec::new()),
             }
         }
 
-        pub fn diagnostics(self) -> Vec<TestDiagnosticMessage> {
-            self.diagnostics.into_inner()
+        pub fn results(self) -> (Vec<TestDiagnosticMessage>, Vec<(RangeClassEvent, usize)>) {
+            let diagnostics = self.diagnostics.into_inner();
+
+            let mut range_events = self.range_events.into_inner();
+            let mut cur_ranges = Vec::new();
+            for idx in 0..range_events.len() {
+                let (event, _) = &mut range_events[idx];
+                match event {
+                    RangeClassEvent::Start(class) => cur_ranges.push(*class),
+                    RangeClassEvent::End(class) => {
+                        if let Some(expected_class) = cur_ranges.pop() {
+                            if expected_class != *class {
+                                for search_idx in (idx + 1)..range_events.len() {
+                                    let (search_event, _) = range_events[search_idx];
+                                    if search_event == RangeClassEvent::End(expected_class) {
+                                        for swap_idx in (idx..search_idx).rev() {
+                                            range_events.swap(swap_idx, swap_idx + 1);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            (diagnostics, range_events)
         }
     }
 
@@ -121,6 +154,21 @@ pub mod test_helpers {
                 severity,
                 msg,
             })
+        }
+
+        fn range_event(&self, event: RangeClassEvent, marker: usize) {
+            let mut range_events = self.range_events.borrow_mut();
+            let mut insert_idx = range_events.len();
+            while insert_idx > 0 {
+                let (prev_event, prev_marker) = &range_events[insert_idx - 1];
+                if *prev_marker < marker
+                    || (*prev_marker == marker && !event.shift_before(prev_event))
+                {
+                    break;
+                }
+                insert_idx -= 1;
+            }
+            range_events.insert(insert_idx, (event, marker));
         }
     }
 }
@@ -170,5 +218,7 @@ mod tests {
         fn diagnostic(&self, _range: Range<usize>, _severity: Severity, msg: Message) {
             panic!("unexpected diagnostic: {msg}")
         }
+
+        fn range_event(&self, _event: RangeClassEvent, _marker: usize) {}
     }
 }
