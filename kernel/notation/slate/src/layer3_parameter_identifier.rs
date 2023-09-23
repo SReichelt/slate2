@@ -62,19 +62,6 @@ impl<'a> NotationExpression<'a> {
         }
         None
     }
-
-    fn identify(&mut self, parameterizations: &[&Parameterization<'a>]) -> bool {
-        // Note: If the expression already references a parameter, then looking for it within
-        // `parameterizations` is incorrect here, as the parameters that are referenced _within_
-        // `parameterizations` come from a different scope.
-        if !self.contains_param() {
-            if let Some((param_idx, _)) = self.find_in(parameterizations) {
-                *self = NotationExpression::Param(param_idx, None);
-                return true;
-            }
-        }
-        false
-    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -822,6 +809,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             Some(scope_class),
             data_mapping_kind,
             parameterizations,
+            &mut vec![false; parameterizations.len()],
             false,
         ) {
             if matches!(notation, NotationExpression::Param(_, None)) {
@@ -831,7 +819,6 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     format!("notation cannot consist entirely of a parameter"),
                 );
             }
-            // TODO: Also check that no parameter is referenced more than once.
 
             if let Some(result_params) = result_params {
                 result_params.push(Parameterization {
@@ -861,6 +848,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         scope_class: Option<ParamScopeClass>,
         data_mapping_kind: Option<&'a dyn MappingKind<dyn ParamKind>>,
         parameterizations: &[&Parameterization<'a>],
+        referenced_parameterizations: &mut [bool],
         is_in_mapping_target: bool,
     ) -> Option<(NotationExpression<'a>, Range<Src::Marker>)> {
         self.handle_notation_with_mapping_support(
@@ -868,23 +856,26 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             notation_kind,
             scope_class,
             data_mapping_kind,
-            |tokens| {
-                self.create_plain_notation_expression(
-                    tokens,
-                    notation_kind,
-                    parameterizations,
-                    is_in_mapping_target,
-                )
-            },
-            |tokens, mapping_kind, params, mapping_start| {
-                self.create_mapping_target_expression(
-                    tokens,
-                    mapping_kind,
-                    parameterizations,
-                    params,
-                    mapping_start,
-                    is_in_mapping_target,
-                )
+            |tokens, mapping| {
+                if let Some((mapping_kind, params, mapping_start)) = mapping {
+                    self.create_mapping_target_expression(
+                        tokens,
+                        mapping_kind,
+                        parameterizations,
+                        referenced_parameterizations,
+                        params,
+                        mapping_start,
+                        is_in_mapping_target,
+                    )
+                } else {
+                    self.create_plain_notation_expression(
+                        tokens,
+                        notation_kind,
+                        parameterizations,
+                        referenced_parameterizations,
+                        is_in_mapping_target,
+                    )
+                }
             },
         )
     }
@@ -895,22 +886,17 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         notation_kind: &'a dyn NotationKind,
         scope_class: Option<ParamScopeClass>,
         data_mapping_kind: Option<&'a dyn MappingKind<dyn ParamKind>>,
-        handle_plain_notation: impl FnOnce(
+        f: impl FnOnce(
             &mut RecordedTokenSlice<'a, '_, Src::Marker>,
-        ) -> Option<(R, Range<Src::Marker>)>,
-        handle_mapping_target: impl FnOnce(
-            &mut RecordedTokenSlice<'a, '_, Src::Marker>,
-            &'a dyn MappingKind<dyn ParamKind>,
-            Vec<MappingSourceParam<'a>>,
-            &Src::Marker,
+            Option<(
+                &'a dyn MappingKind<dyn ParamKind>,
+                Vec<MappingSourceParam<'a>>,
+                &Src::Marker,
+            )>,
         ) -> Option<(R, Range<Src::Marker>)>,
     ) -> Option<(R, Range<Src::Marker>)> {
-        let (notation, range) = self.handle_notation_with_mapping_support_impl(
-            tokens,
-            notation_kind,
-            handle_plain_notation,
-            handle_mapping_target,
-        )?;
+        let (notation, range) =
+            self.handle_notation_with_mapping_support_impl(tokens, notation_kind, f)?;
 
         if let Some(scope_class) = scope_class {
             let range_class = if data_mapping_kind.is_some() {
@@ -928,14 +914,13 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         &self,
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         notation_kind: &'a dyn NotationKind,
-        handle_plain_notation: impl FnOnce(
+        f: impl FnOnce(
             &mut RecordedTokenSlice<'a, '_, Src::Marker>,
-        ) -> Option<(R, Range<Src::Marker>)>,
-        handle_mapping_target: impl FnOnce(
-            &mut RecordedTokenSlice<'a, '_, Src::Marker>,
-            &'a dyn MappingKind<dyn ParamKind>,
-            Vec<MappingSourceParam<'a>>,
-            &Src::Marker,
+            Option<(
+                &'a dyn MappingKind<dyn ParamKind>,
+                Vec<MappingSourceParam<'a>>,
+                &Src::Marker,
+            )>,
         ) -> Option<(R, Range<Src::Marker>)>,
     ) -> Option<(R, Range<Src::Marker>)> {
         let mut segment_len = 0;
@@ -982,11 +967,9 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                             format!("'.' expected"),
                                         );
                                     }
-                                    let (result, range) = handle_mapping_target(
+                                    let (result, range) = f(
                                         tokens,
-                                        mapping_kind,
-                                        params,
-                                        &symbol_range.start,
+                                        Some((mapping_kind, params, &symbol_range.start)),
                                     )?;
                                     return Some((result, start.unwrap()..range.end));
                                 } else {
@@ -1019,11 +1002,9 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                                         });
                                     };
                                     tokens.pop_front();
-                                    let (result, range) = handle_mapping_target(
+                                    let (result, range) = f(
                                         tokens,
-                                        mapping_kind,
-                                        params,
-                                        start.as_ref().unwrap(),
+                                        Some((mapping_kind, params, start.as_ref().unwrap())),
                                     )?;
                                     return Some((result, start.unwrap()..range.end));
                                 }
@@ -1053,9 +1034,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             segment_len = idx + 1;
         }
 
-        tokens.with_subslice(segment_len, |segment_tokens| {
-            handle_plain_notation(segment_tokens)
-        })
+        tokens.with_subslice(segment_len, |segment_tokens| f(segment_tokens, None))
     }
 
     fn create_plain_notation_expression(
@@ -1063,6 +1042,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         notation_kind: &'a dyn NotationKind,
         parameterizations: &[&Parameterization<'a>],
+        referenced_parameterizations: &mut [bool],
         is_in_mapping_target: bool,
     ) -> Option<(NotationExpression<'a>, Range<Src::Marker>)> {
         let mut current_sequence = Vec::new();
@@ -1080,7 +1060,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 }
                 TokenEvent::Token(Token::Identifier(identifier, _)) => {
                     let mut notation = NotationExpression::Identifier(identifier);
-                    self.identify_notation(&mut notation, &range, parameterizations);
+                    self.identify_notation(
+                        &mut notation,
+                        &range,
+                        parameterizations,
+                        referenced_parameterizations,
+                    );
                     current_sequence.push(notation);
                 }
                 TokenEvent::Paren(GroupEvent::Start(start_paren)) => {
@@ -1093,6 +1078,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                             None,
                             None,
                             parameterizations,
+                            referenced_parameterizations,
                             is_in_mapping_target,
                         ) {
                             items.push(item);
@@ -1145,7 +1131,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                 Some((current_sequence.pop().unwrap(), range))
             } else {
                 let mut notation = NotationExpression::Sequence(current_sequence);
-                self.identify_notation(&mut notation, &range, parameterizations);
+                self.identify_notation(
+                    &mut notation,
+                    &range,
+                    parameterizations,
+                    referenced_parameterizations,
+                );
                 Some((notation, range))
             }
         }
@@ -1156,13 +1147,40 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         notation: &mut NotationExpression<'a>,
         range: &Range<Src::Marker>,
         parameterizations: &[&Parameterization<'a>],
+        referenced_parameterizations: &mut [bool],
     ) {
-        if notation.identify(parameterizations) {
-            self.source.range(
-                RangeClass::ParamRef(ParamScopeClass::Local),
-                &range.start..&range.end,
-            );
+        // Note: If the expression already references a parameter, then looking for it within
+        // `parameterizations` is incorrect here, as the parameters that are referenced _within_
+        // `parameterizations` come from a different scope.
+        if !notation.contains_param() {
+            if let Some((param_idx, _)) = notation.find_in(parameterizations) {
+                self.report_param_ref(
+                    param_idx,
+                    &range.start..&range.end,
+                    referenced_parameterizations,
+                );
+                *notation = NotationExpression::Param(param_idx, None);
+            }
         }
+    }
+
+    fn report_param_ref(
+        &self,
+        param_idx: u32,
+        range: Range<&Src::Marker>,
+        referenced_parameterizations: &mut [bool],
+    ) {
+        if referenced_parameterizations[param_idx as usize] {
+            self.source.diagnostic(
+                range.clone(),
+                Severity::Error,
+                format!("parameter referenced multiple times in notation"),
+            );
+        } else {
+            referenced_parameterizations[param_idx as usize] = true;
+        }
+        self.source
+            .range(RangeClass::ParamRef(ParamScopeClass::Local), range);
     }
 
     fn create_mapping_source_param(
@@ -1177,47 +1195,54 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             notation_kind,
             Some(ParamScopeClass::Local),
             None,
-            |tokens| {
-                if let Some((notation, range)) =
-                    self.create_plain_notation_expression(tokens, notation_kind, &[], false)
-                {
-                    Some((
-                        MappingSourceParam {
-                            mapping: None,
-                            param: Parameterization {
-                                notation,
-                                source_notations: Vec::new(),
+            |tokens, mapping| {
+                if let Some((mapping_kind, params, _)) = mapping {
+                    if let Some((notation, range)) = self.create_mapping_target_notation_expression(
+                        tokens,
+                        mapping_kind,
+                        &params,
+                    ) {
+                        let source_notations = params
+                            .iter()
+                            .map(|param| param.param.notation.clone())
+                            .collect();
+                        Some((
+                            MappingSourceParam {
+                                mapping: Some(MappingSourceParameterization {
+                                    mapping_kind,
+                                    source_params: params,
+                                }),
+                                param: Parameterization {
+                                    notation,
+                                    source_notations,
+                                },
                             },
-                        },
-                        range,
-                    ))
+                            range,
+                        ))
+                    } else {
+                        None
+                    }
                 } else {
-                    None
-                }
-            },
-            |tokens, mapping_kind, params, _| {
-                if let Some((notation, range)) =
-                    self.create_mapping_target_notation_expression(tokens, mapping_kind, &params)
-                {
-                    let source_notations = params
-                        .iter()
-                        .map(|param| param.param.notation.clone())
-                        .collect();
-                    Some((
-                        MappingSourceParam {
-                            mapping: Some(MappingSourceParameterization {
-                                mapping_kind,
-                                source_params: params,
-                            }),
-                            param: Parameterization {
-                                notation,
-                                source_notations,
+                    if let Some((notation, range)) = self.create_plain_notation_expression(
+                        tokens,
+                        notation_kind,
+                        &[],
+                        &mut [],
+                        false,
+                    ) {
+                        Some((
+                            MappingSourceParam {
+                                mapping: None,
+                                param: Parameterization {
+                                    notation,
+                                    source_notations: Vec::new(),
+                                },
                             },
-                        },
-                        range,
-                    ))
-                } else {
-                    None
+                            range,
+                        ))
+                    } else {
+                        None
+                    }
                 }
             },
         )
@@ -1311,6 +1336,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             None,
             None,
             &MappingSourceParam::to_parameterization_refs(params),
+            &mut vec![false; params.len()],
             true,
         )
     }
@@ -1320,6 +1346,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         tokens: &mut RecordedTokenSlice<'a, '_, Src::Marker>,
         mapping_kind: &'a dyn MappingKind<dyn ParamKind>,
         parameterizations: &[&Parameterization<'a>],
+        referenced_parameterizations: &mut [bool],
         params: Vec<MappingSourceParam<'a>>,
         mapping_start: &Src::Marker,
         is_nested_mapping_target: bool,
@@ -1357,9 +1384,10 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
             } else {
                 &range.start
             };
-            self.source.range(
-                RangeClass::ParamRef(ParamScopeClass::Local),
+            self.report_param_ref(
+                param_idx,
                 ref_start..&range.end,
+                referenced_parameterizations,
             );
             Some((identified_notation, range))
         } else {
@@ -4546,6 +4574,87 @@ mod tests {
                 RangeClassTreeNode::Text(";"),
             ],
         )?;
+        test_parameter_identification(
+            "%slate \"test\"; [a] (a) a;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: Vec::new(),
+                        body: SectionItemBody::ParamGroup(
+                            vec![Parameter {
+                                notation: NotationExpression::Identifier("a".into()),
+                            }],
+                            Vec::new(),
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Sequence(vec![
+                            NotationExpression::Paren(
+                                '(',
+                                vec![NotationExpression::Param(0, None)],
+                            ),
+                            NotationExpression::Param(0, None),
+                        ]),
+                    }],
+                    Vec::new(),
+                ),
+            }],
+            &[TestDiagnosticMessage {
+                range_text: "a".into(),
+                severity: Severity::Error,
+                msg: "parameter referenced multiple times in notation".into(),
+            }],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                        RangeClassTreeNode::Text("]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("a")],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamRef(ParamScopeClass::Local),
+                            vec![RangeClassTreeNode::Text("a")],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(";"),
+            ],
+        )?;
         Ok(())
     }
 
@@ -6295,6 +6404,217 @@ mod tests {
                             RangeClass::Paren,
                             vec![
                                 RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("d")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("d")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(")"),
+                            ],
+                        ),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" : A;"),
+            ],
+        )?;
+        test_parameter_identification(
+            "%slate \"test\"; [[c : C] b(c) : B] a(c ↦ b(c), d ↦ b(d)) : A;",
+            &metamodel,
+            vec![SectionItem {
+                parameterizations: vec![Parameterization(
+                    &metamodel,
+                    vec![SectionItem {
+                        parameterizations: vec![Parameterization(
+                            &metamodel,
+                            vec![SectionItem {
+                                parameterizations: Vec::new(),
+                                body: SectionItemBody::ParamGroup(
+                                    vec![Parameter {
+                                        notation: NotationExpression::Identifier("c".into()),
+                                    }],
+                                    vec![
+                                        DataToken::Token(Token::Identifier(
+                                            ":".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                        DataToken::Token(Token::Identifier(
+                                            "C".into(),
+                                            IdentifierType::Unquoted,
+                                        )),
+                                    ],
+                                ),
+                            }],
+                        )],
+                        body: SectionItemBody::ParamGroup(
+                            vec![Parameter {
+                                notation: NotationExpression::Sequence(vec![
+                                    NotationExpression::Identifier("b".into()),
+                                    NotationExpression::Paren(
+                                        '(',
+                                        vec![NotationExpression::Param(0, None)],
+                                    ),
+                                ]),
+                            }],
+                            vec![
+                                DataToken::Token(Token::Identifier(
+                                    ":".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                                DataToken::Token(Token::Identifier(
+                                    "B".into(),
+                                    IdentifierType::Unquoted,
+                                )),
+                            ],
+                        ),
+                    }],
+                )],
+                body: SectionItemBody::ParamGroup(
+                    vec![Parameter {
+                        notation: NotationExpression::Sequence(vec![
+                            NotationExpression::Identifier("a".into()),
+                            NotationExpression::Paren(
+                                '(',
+                                vec![
+                                    NotationExpression::Param(
+                                        0,
+                                        Some(NotationParameterization {
+                                            mapping_kind: metamodel
+                                                .opposite_mapping
+                                                .as_ref()
+                                                .unwrap()
+                                                .as_ref(),
+                                            source_params: vec![None],
+                                        }),
+                                    ),
+                                    NotationExpression::Param(
+                                        0,
+                                        Some(NotationParameterization {
+                                            mapping_kind: metamodel
+                                                .opposite_mapping
+                                                .as_ref()
+                                                .unwrap()
+                                                .as_ref(),
+                                            source_params: vec![None],
+                                        }),
+                                    ),
+                                ],
+                            ),
+                        ]),
+                    }],
+                    vec![
+                        DataToken::Token(Token::Identifier(":".into(), IdentifierType::Unquoted)),
+                        DataToken::Token(Token::Identifier("A".into(), IdentifierType::Unquoted)),
+                    ],
+                ),
+            }],
+            &[
+                TestDiagnosticMessage {
+                    range_text: "d ↦ b(d)".into(),
+                    severity: Severity::Warning,
+                    msg: "mapping source notation does not match original parameterization".into(),
+                },
+                TestDiagnosticMessage {
+                    range_text: "b(d)".into(),
+                    severity: Severity::Error,
+                    msg: "parameter referenced multiple times in notation".into(),
+                },
+            ],
+            vec![
+                RangeClassTreeNode::Range(
+                    RangeClass::Keyword,
+                    vec![RangeClassTreeNode::Text("%slate")],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::String,
+                    vec![RangeClassTreeNode::Text("\"test\"")],
+                ),
+                RangeClassTreeNode::Text("; "),
+                RangeClassTreeNode::Range(
+                    RangeClass::Paren,
+                    vec![
+                        RangeClassTreeNode::Text("["),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("["),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" : C]"),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" "),
+                        RangeClassTreeNode::Range(
+                            RangeClass::ParamNotation(ParamScopeClass::Local),
+                            vec![
+                                RangeClassTreeNode::Text("b"),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::Paren,
+                                    vec![
+                                        RangeClassTreeNode::Text("("),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::ParamRef(ParamScopeClass::Local),
+                                            vec![RangeClassTreeNode::Text("c")],
+                                        ),
+                                        RangeClassTreeNode::Text(")"),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        RangeClassTreeNode::Text(" : B]"),
+                    ],
+                ),
+                RangeClassTreeNode::Text(" "),
+                RangeClassTreeNode::Range(
+                    RangeClass::ParamNotation(ParamScopeClass::Global),
+                    vec![
+                        RangeClassTreeNode::Text("a"),
+                        RangeClassTreeNode::Range(
+                            RangeClass::Paren,
+                            vec![
+                                RangeClassTreeNode::Text("("),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamNotation(ParamScopeClass::Local),
+                                    vec![RangeClassTreeNode::Text("c")],
+                                ),
+                                RangeClassTreeNode::Text(" ↦ "),
+                                RangeClassTreeNode::Range(
+                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                    vec![
+                                        RangeClassTreeNode::Text("b"),
+                                        RangeClassTreeNode::Range(
+                                            RangeClass::Paren,
+                                            vec![
+                                                RangeClassTreeNode::Text("("),
+                                                RangeClassTreeNode::Range(
+                                                    RangeClass::ParamRef(ParamScopeClass::Local),
+                                                    vec![RangeClassTreeNode::Text("c")],
+                                                ),
+                                                RangeClassTreeNode::Text(")"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                RangeClassTreeNode::Text(", "),
                                 RangeClassTreeNode::Range(
                                     RangeClass::ParamNotation(ParamScopeClass::Local),
                                     vec![RangeClassTreeNode::Text("d")],
