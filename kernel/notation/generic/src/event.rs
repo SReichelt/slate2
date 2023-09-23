@@ -11,8 +11,8 @@
 // Note: Code in this package is weirdly sensitive to the distinction between type parameters and
 // associated types. Even though both are interchangeable in many cases, Rust currently has two
 // constraints that dictate where to use which:
-// * If we want to provide a "blanket implementation" for a trait with parameters (see
-//   `EventSinkState`), then the parameters cannot be associated types.
+// * If we want to provide a "blanket implementation" for a trait with parameters, then the
+//   parameters cannot be associated types.
 // * If we want to use a trait in a struct parameter, then usually (but not always) it cannot have
 //   parameters, as that leads to "unused type parameter" errors if we want to parameterize over it
 //   in the struct as well. (Sometimes we can work around this using `PhantomData`.)
@@ -253,45 +253,6 @@ pub mod test_helpers {
         fn fill_events(self, result: &mut Vec<T>) {
             for group in self {
                 group.fill_events(result);
-            }
-        }
-    }
-
-    pub trait IntoRangeClassEvents: Sized {
-        fn fill_events(self, result: &mut Vec<(RangeClassEvent, usize)>, cur_len: &mut usize);
-
-        fn into_events(self) -> (Vec<(RangeClassEvent, usize)>, usize) {
-            let mut result = Vec::new();
-            let mut len = 0;
-            self.fill_events(&mut result, &mut len);
-            (result, len)
-        }
-    }
-
-    pub type RangeClassTree<'a> = Vec<RangeClassTreeNode<'a>>;
-
-    impl IntoRangeClassEvents for RangeClassTree<'_> {
-        fn fill_events(self, result: &mut Vec<(RangeClassEvent, usize)>, cur_len: &mut usize) {
-            for item in self {
-                item.fill_events(result, cur_len);
-            }
-        }
-    }
-
-    pub enum RangeClassTreeNode<'a> {
-        Text(&'a str),
-        Range(RangeClass, RangeClassTree<'a>),
-    }
-
-    impl IntoRangeClassEvents for RangeClassTreeNode<'_> {
-        fn fill_events(self, result: &mut Vec<(RangeClassEvent, usize)>, cur_len: &mut usize) {
-            match self {
-                RangeClassTreeNode::Text(s) => *cur_len += s.len(),
-                RangeClassTreeNode::Range(class, items) => {
-                    result.push((RangeClassEvent::Start(class), *cur_len));
-                    items.fill_events(result, cur_len);
-                    result.push((RangeClassEvent::End(class), *cur_len));
-                }
             }
         }
     }

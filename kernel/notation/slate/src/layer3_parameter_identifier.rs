@@ -2716,6 +2716,7 @@ mod tests {
     use slate_kernel_notation_generic::{
         char_slice::{test_helpers::*, *},
         event::test_helpers::*,
+        event_source::test_helpers::*,
     };
 
     use crate::{layer1_tokenizer::*, metamodel::test_helpers::*};
