@@ -1,6 +1,6 @@
 use std::{borrow::Cow, mem::take, ops::Range};
 
-use slate_kernel_notation_generic::{char::*, event::*, event_translator::*};
+use slate_kernel_notation_generic::{char::*, event::*, event_source::*, event_translator::*};
 
 use crate::chars::*;
 

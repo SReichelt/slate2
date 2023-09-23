@@ -1,9 +1,9 @@
 use std::{borrow::Cow, collections::VecDeque, ops::Range};
 
-use slate_kernel_notation_generic::{event::*, event_translator::*};
+use slate_kernel_notation_generic::{event::*, event_source::*, event_translator::*};
 use slate_kernel_util::queue_slice::*;
 
-use crate::{chars::*, metamodel::*, parenthesis_matcher::*, tokenizer::*};
+use crate::{chars::*, layer1_tokenizer::*, layer2_parenthesis_matcher::*, metamodel::*};
 
 // `ParameterEvent` serializes `ParamToken` (defined in tests below) into events.
 #[derive(Clone, PartialEq, Debug)]
@@ -831,6 +831,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     format!("notation cannot consist entirely of a parameter"),
                 );
             }
+            // TODO: Also check that no parameter is referenced more than once.
 
             if let Some(result_params) = result_params {
                 result_params.push(Parameterization {
@@ -2689,7 +2690,7 @@ mod tests {
         event::test_helpers::*,
     };
 
-    use crate::{metamodel::test_helpers::*, tokenizer::*};
+    use crate::{layer1_tokenizer::*, metamodel::test_helpers::*};
 
     use super::*;
 

@@ -1,8 +1,8 @@
 use std::ops::Range;
 
-use slate_kernel_notation_generic::{event::*, event_translator::*};
+use slate_kernel_notation_generic::{event::*, event_source::*, event_translator::*};
 
-use crate::parameter_identifier::*;
+use crate::layer3_parameter_identifier::*;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ExpressionEvent<'a> {
@@ -171,7 +171,7 @@ mod tests {
         event::test_helpers::*,
     };
 
-    use crate::{metamodel::test_helpers::*, parenthesis_matcher::*, tokenizer::*};
+    use crate::{layer1_tokenizer::*, layer2_parenthesis_matcher::*, metamodel::test_helpers::*};
 
     use super::*;
 

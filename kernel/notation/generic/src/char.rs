@@ -1,6 +1,6 @@
 use std::{borrow::Cow, ops::Range};
 
-use crate::event::*;
+use crate::{event::*, event_source::*};
 
 impl Event for char {
     type SpecialOps<'a, Marker: 'a> = &'a dyn CharEventOps<'a, Marker>;

@@ -1,8 +1,8 @@
 use std::ops::Range;
 
-use slate_kernel_notation_generic::{event::*, event_translator::*};
+use slate_kernel_notation_generic::{event::*, event_source::*, event_translator::*};
 
-use crate::{chars::*, tokenizer::*};
+use crate::{chars::*, layer1_tokenizer::*};
 
 // `TokenEvent` serializes `ParenToken` (defined in tests below) into events.
 #[derive(Clone, PartialEq, Debug)]

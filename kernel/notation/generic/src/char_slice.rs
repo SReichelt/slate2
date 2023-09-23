@@ -2,7 +2,7 @@ use std::{borrow::Cow, ops::Range};
 
 use nonminmax::NonMaxU32;
 
-use crate::{char::*, event::*};
+use crate::{char::*, event::*, event_source::*};
 
 type Marker = NonMaxU32;
 

@@ -1,6 +1,6 @@
 pub mod chars;
-pub mod expression_identifier;
+pub mod layer1_tokenizer;
+pub mod layer2_parenthesis_matcher;
+pub mod layer3_parameter_identifier;
+pub mod layer4_expression_identifier;
 pub mod metamodel;
-pub mod parameter_identifier;
-pub mod parenthesis_matcher;
-pub mod tokenizer;

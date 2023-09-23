@@ -14,7 +14,7 @@
 
 use std::{marker::PhantomData, ops::Range};
 
-use crate::event::*;
+use crate::{event::*, event_source::*};
 
 pub trait EventTranslator<'a> {
     type In: Event;

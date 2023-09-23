@@ -186,7 +186,7 @@ A _notation expression_ is recursively any of the following.
 
   This alternative takes precedence over all others. However, the entire notation expression is not
   allowed to consist purely of a parameter. Moreover, a notation expression which is parameterized
-  or a sequence cannot appear within a sequence.
+  or a sequence cannot appear within a sequence. Each parameter can be referenced at most once.
 
 A _notation expression_ may optionally be followed by _data_ separated by
 * a keyword,
@@ -223,47 +223,45 @@ lists of parameters.
 
 ## Expression Identification
 
-The metamodel specifies where in a document _expressions_ may occur. The defining characteristic of
-an expression is that it may be a _variable_, which means that it references a specific parameter
-that is in scope at that location.
+In the expression identification layer, all previously unidentified data is interpreted as specified
+by the metamodel. For a given sequence of tokens, there are a few possibilities:
+* The metamodel can directly interpret the sequence, possibly yielding subsequences that must be
+  interpreted further.
+* It can specify that the sequence is an _expression_ that may reference a local or global
+  parameter that is in scope.
+* Alternatively or in addition, it can specify that the sequence may reference an object item of a
+  specific object.
+* Alternatively, it can specify that the sequence may reference a parameter of a specific object
+  item.
+* Finally, if an expression did not match any parameter, the metamodel can choose to interpret it
+  directly again. (Two common examples are parentheses around the entire expression, and expressions
+  containing dots, where the left-hand and right-hand sides of a dot must be interpreted
+  individually.)
 
-Whether an expression references a particular parameter is determined by syntactically matching the
-expression against the notation expression of the parameter. If the parameter is additionally
-parameterized, _arguments_ for (some of) these additional parameters are obtained from the match
-result. While the exact format of each argument is specified by the metamodel, the argument of a
-parameterized parameter should generally be parameterized equivalently, taking substitutions of
-earlier arguments into account.
+Whether a sequence of tokens references a particular parameter or object item is determined by
+matching its tokens against the notation expression of the parameter/item. If the parameter/item is
+additionally parameterized, parameter references within the notation can be matched with almost
+arbitrary sequences of tokens, except that
+* such sequences cannot contain top-level commas or semicolons, and
+* if multiple parameter references directly follow each other in the notation expression, all
+  parameters except the first must be matched with exactly one token (which may be a group of tokens
+  surrounded by parentheses).
 
-Arguments for parameters that do not appear in the notation expression are never specified
-explicitly.
+If there are multiple ways to match the tokens against one or more notation expressions, possible
+matches are first reduced according to two rules.
+* If the explicitly matched tokens of one match are a strict superset of the explicitly matched
+  tokens of another match (where "tokens" refers to the specific items within the sequence), then
+  the first match is always preferred over the second.
+* In cases where the explicitly matched tokens of two or more matches are the same, local parameters
+  are always preferred over global parameters, and inner scopes are preferred over outer scopes.
 
-When there are multiple ways to match an expression against the notation expression of a parameter,
-_operator precedence_ and _associativity_ determine which match to use. Both are specified by the
-metamodel at the token level; they cannot be overridden by custom notations. If multiple matches are
-still possible after taking precedence into account, an error is reported.
+The metamodel then chooses a match among those that remain, or none, e.g. according to operator
+precedence and associativity rules.
 
-Object items are often referenced at locations where they are not directly in scope.
-There are two possibilities.
-* A reference can be prefixed by an expression followed by a dot. The metamodel defines how to
-  evaluate that expression in order to determine the object in which to look for the item (or that
-  the tokens following the dot are not a reference to an item). The evaluation may require parsing
-  additional files, due to imports.
-* At certain locations, the metamodel can determine via a simplified type inference algorithm that
-  the expected type is an object. In these cases, items of the object may be referenced without
-  qualification.
-
-To enable object lookup, the expression identification layer must be evaluated in two passes. In the
-first pass, expressions are matched against global and local parameters as described above, as well
-as against special expression notations defined by the metamodel, but an expression that cannot be
-matched (for example because it contains a dot) is not an error. The metamodel specifies how object
-lookup is performed on the resulting syntax tree, in a second pass. All expressions must be
-identified as such in one of the two passes.
-
-As a consequence, the dot symbol can be regarded as binding more strongly than any other symbol, but
-only in cases where a notation expression with that symbol actually exists and is in scope.
-Parentheses on either side of the dot may be required to counteract this in certain cases.
-(Undesired matches may be reduced by taking into account that an expression cannot start or end with
-a dot.)
+If the sequence of tokens is interpreted directly by the metamodel, but a subsequence is found to
+reference a parameter, then the interpretation of another subsequence may depend on the
+interpretation of the data of that parameter, including recursively (as long as the recursion does
+not involve the parameter being interpreted).
 
 ## AST Building
 
