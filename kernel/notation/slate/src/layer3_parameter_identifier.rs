@@ -2714,9 +2714,7 @@ mod tests {
     use anyhow::Result;
 
     use slate_kernel_notation_generic::{
-        char_slice::{test_helpers::*, *},
-        event::test_helpers::*,
-        event_source::test_helpers::*,
+        char_slice::test_helpers::*, event::test_helpers::*, event_source::test_helpers::*,
     };
 
     use crate::{layer1_tokenizer::*, metamodel::test_helpers::*};
@@ -11798,11 +11796,10 @@ mod tests {
             TranslatorInst::new(ParameterIdentifier::new(metamodel), &mut param_events);
         let token_sink = TranslatorInst::new(ParenthesisMatcher, param_sink);
         let char_sink = TranslatorInst::new(Tokenizer, token_sink);
-        let diag_sink = DiagnosticsRecorder::new(input);
-        let source = CharSliceEventSource::new(input, &diag_sink)?;
+        let source = TestCharSource::new(input)?;
         source.run(char_sink);
         assert_eq!(param_events, expected_document.into_events());
-        let (diagnostics, range_events) = diag_sink.results();
+        let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);
         assert_eq!((range_events, input.len()), expected_ranges.into_events());
         Ok(())

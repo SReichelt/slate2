@@ -1,6 +1,6 @@
 use std::{borrow::Cow, mem::take, ops::Range};
 
-use slate_kernel_notation_generic::{char::*, event::*, event_source::*, event_translator::*};
+use slate_kernel_notation_generic::{event::*, event_source::*, event_translator::*};
 
 use crate::chars::*;
 
@@ -233,7 +233,8 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     NumberState::AfterDot(marker) => {
                         if c == '.' {
                             if let Some(marker) = marker {
-                                let number = self.source.slice(&*token_start..&*marker);
+                                let number =
+                                    self.source.special_ops().slice(&*token_start..&*marker);
                                 out(Token::Number(number), &*token_start..&*marker);
                                 self.source
                                     .range_event(RangeClassEvent::End(RangeClass::Number), marker);
@@ -266,7 +267,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     NumberState::InExponent => false,
                 };
                 if !(is_alnum || is_special) {
-                    let number = self.source.slice(&*token_start..range.start);
+                    let number = self.source.special_ops().slice(&*token_start..range.start);
                     out(Token::Number(number), &*token_start..range.start);
                     self.source
                         .range_event(RangeClassEvent::End(RangeClass::Number), range.start);
@@ -291,7 +292,9 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                         let final_value = if let Some(value) = value {
                             Cow::Owned(take(value))
                         } else {
-                            self.source.slice(&*content_start..range.start)
+                            self.source
+                                .special_ops()
+                                .slice(&*content_start..range.start)
                         };
                         let token = if *is_quoted_identifier {
                             Token::Identifier(final_value, IdentifierType::Quoted)
@@ -322,7 +325,10 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     }
 
                     if let Some(some_escape_start) = escape_start {
-                        let escape_prefix = self.source.slice(&*some_escape_start..range.start);
+                        let escape_prefix = self
+                            .source
+                            .special_ops()
+                            .slice(&*some_escape_start..range.start);
                         if escape_prefix == "\\" {
                             if let Some(c) = match c {
                                 'x' | 'u' => None,
@@ -417,8 +423,12 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     } else if c == '\\' {
                         *escape_start = Some(range.start.clone());
                         if value.is_none() {
-                            *value =
-                                Some(self.source.slice(&*content_start..range.start).into_owned());
+                            *value = Some(
+                                self.source
+                                    .special_ops()
+                                    .slice(&*content_start..range.start)
+                                    .into_owned(),
+                            );
                         }
                     } else {
                         if let Some(value) = value {
@@ -470,7 +480,7 @@ impl<'a, Src: EventSource + 'a> TokenizerPass<'a, Src> {
                     }
                 }
                 if end {
-                    let identifier = self.source.slice(&*token_start..range.start);
+                    let identifier = self.source.special_ops().slice(&*token_start..range.start);
                     let is_keyword = identifier.starts_with('%');
                     let token = if is_keyword {
                         Token::Keyword(identifier)
@@ -618,9 +628,7 @@ enum IdentifierContent {
 #[cfg(test)]
 mod tests {
     use slate_kernel_notation_generic::{
-        char_slice::{test_helpers::*, *},
-        event::test_helpers::*,
-        event_source::test_helpers::*,
+        char_slice::test_helpers::*, event_source::test_helpers::*,
     };
 
     use super::*;
@@ -2538,11 +2546,10 @@ mod tests {
     ) -> Result<(), Message> {
         let mut tokens = Vec::new();
         let char_sink = TranslatorInst::new(Tokenizer, &mut tokens);
-        let diag_sink = DiagnosticsRecorder::new(input);
-        let source = CharSliceEventSource::new(input, &diag_sink)?;
+        let source = TestCharSource::new(input)?;
         source.run(char_sink);
         assert_eq!(tokens, expected_tokens);
-        let (diagnostics, range_events) = diag_sink.results();
+        let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);
         if let Some(expected_ranges) = expected_ranges {
             assert_eq!((range_events, input.len()), expected_ranges.into_events());

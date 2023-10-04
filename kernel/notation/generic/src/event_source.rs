@@ -38,11 +38,20 @@ impl<Src: EventSource> EventSource for Option<Src> {
 }
 
 pub struct EventSourceWithOps<'a, Ev: Event, Src: EventSource>(
-    pub Src,
-    pub Ev::SpecialOps<'a, Src::Marker>,
+    pub(crate) Src,
+    pub(crate) Ev::SpecialOps<'a, Src::Marker>,
 )
 where
     Src::Marker: 'a;
+
+impl<'a, Ev: Event, Src: EventSource> EventSourceWithOps<'a, Ev, Src>
+where
+    Src::Marker: 'a,
+{
+    pub fn special_ops(&self) -> &Ev::SpecialOps<'a, Src::Marker> {
+        &self.1
+    }
+}
 
 impl<'a, Ev: Event, Src: EventSource> Clone for EventSourceWithOps<'a, Ev, Src>
 where

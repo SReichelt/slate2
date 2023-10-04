@@ -8,7 +8,7 @@
 //! The event sink specifies how many passes are required. The same events must be sent in each
 //! pass.
 
-// Note: Code in this package is weirdly sensitive to the distinction between type parameters and
+// Note: Code in this crate is weirdly sensitive to the distinction between type parameters and
 // associated types. Even though both are interchangeable in many cases, Rust currently has two
 // constraints that dictate where to use which:
 // * If we want to provide a "blanket implementation" for a trait with parameters, then the

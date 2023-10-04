@@ -7,13 +7,7 @@ impl Event for char {
 }
 
 pub trait CharEventOps<'a, Marker> {
-    fn slice(&self, range: Range<&Marker>) -> Cow<'a, str>;
-}
-
-impl<'a, Src: EventSource> CharEventOps<'a, Src::Marker> for EventSourceWithOps<'a, char, Src> {
-    fn slice(&self, range: Range<&Src::Marker>) -> Cow<'a, str> {
-        self.1.slice(range)
-    }
+    fn slice(&'a self, range: Range<&Marker>) -> Cow<'a, str>;
 }
 
 pub mod test_helpers {

@@ -2,85 +2,70 @@ use std::{borrow::Cow, ops::Range};
 
 use nonminmax::NonMaxU32;
 
-use crate::{char::*, event::*, event_source::*};
+use crate::{char::*, event::*, event_sequence::*, event_source::*};
 
-type Marker = NonMaxU32;
+pub(crate) type Marker = NonMaxU32;
+pub(crate) const MAX_LEN: usize = (u32::MAX - 1) as usize;
 
-fn pack_marker(idx: usize) -> Marker {
+pub(crate) fn pack_marker(idx: usize) -> Marker {
     Marker::new(idx as u32).unwrap()
 }
 
-fn unpack_marker(marker: &Marker) -> usize {
+pub(crate) fn unpack_marker(marker: &Marker) -> usize {
     marker.get() as usize
 }
 
-fn unpack_marker_range(range: Range<&Marker>) -> Range<usize> {
+pub(crate) fn unpack_marker_range(range: Range<&Marker>) -> Range<usize> {
     let start = unpack_marker(range.start);
     let end = unpack_marker(range.end);
     start..end
 }
 
-impl<'a> CharEventOps<'a, Marker> for &'a str {
-    fn slice(&self, range: Range<&Marker>) -> Cow<'a, str> {
-        Cow::Borrowed(&self[unpack_marker_range(range)])
-    }
-}
-
-pub struct CharSliceEventSource<'a, DiagSink: CharSliceDiagnosticSink> {
+#[derive(Clone, Copy)]
+pub struct CharSlice<'a> {
     input: &'a str,
-    diag_sink: &'a DiagSink,
 }
 
-impl<'a, DiagSink: CharSliceDiagnosticSink> CharSliceEventSource<'a, DiagSink> {
-    pub fn new(input: &'a str, diag_sink: &'a DiagSink) -> Result<Self, Message> {
-        let max = u32::MAX as usize;
-        if input.len() > max {
-            Err(format!("input larger than {max} bytes not supported"))
+impl<'a> CharSlice<'a> {
+    pub fn new(input: &'a str) -> Result<Self, Message> {
+        if input.len() > MAX_LEN {
+            Err(format!("input larger than {MAX_LEN} bytes not supported"))
         } else {
-            Ok(CharSliceEventSource { input, diag_sink })
+            Ok(CharSlice { input })
         }
     }
 
-    pub fn run<Sink: EventSink<'a, Ev = char>>(&'a self, sink: Sink) {
-        let special_ops: &'a dyn CharEventOps<'a, Marker> = &self.input;
-        let pass = sink.start(EventSourceWithOps(self.clone(), special_ops));
-        self.run_pass(pass)
+    pub fn input(&self) -> &'a str {
+        self.input
     }
+}
 
-    fn run_pass<Pass: EventSinkPass<Ev = char, Marker = Marker>>(&'a self, pass: Pass) {
-        let mut state = pass.new_state();
+impl<'a> EventSequence<'a> for CharSlice<'a> {
+    type Ev = char;
+    type Marker = Marker;
+
+    fn for_each(&self, mut f: impl FnMut(Self::Ev, Range<&Self::Marker>)) -> Self::Marker {
         let mut chars = self.input.char_indices();
         while let Some((idx, c)) = chars.next() {
             let start_marker = pack_marker(idx);
             let end_marker = pack_marker(chars.offset());
-            pass.event(&mut state, c, &start_marker..&end_marker);
+            f(c, &start_marker..&end_marker);
         }
-        let end_marker = pack_marker(chars.offset());
-        if let Some(next_pass) = pass.next_pass(state, &end_marker) {
-            self.run_pass(next_pass)
-        }
+        pack_marker(chars.offset())
+    }
+
+    fn special_ops(&'a self) -> <Self::Ev as Event>::SpecialOps<'a, Self::Marker> {
+        self
+    }
+
+    fn start_marker() -> Self::Marker {
+        Marker::new(0).unwrap()
     }
 }
 
-impl<'a, DiagSink: CharSliceDiagnosticSink> Clone for CharSliceEventSource<'a, DiagSink> {
-    fn clone(&self) -> Self {
-        Self {
-            input: self.input,
-            diag_sink: self.diag_sink,
-        }
-    }
-}
-
-impl<'a, DiagSink: CharSliceDiagnosticSink> EventSource for CharSliceEventSource<'a, DiagSink> {
-    type Marker = Marker;
-
-    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
-        self.diag_sink
-            .diagnostic(unpack_marker_range(range), severity, msg)
-    }
-
-    fn range_event(&self, event: RangeClassEvent, marker: &Self::Marker) {
-        self.diag_sink.range_event(event, unpack_marker(marker))
+impl<'a> CharEventOps<'a, Marker> for CharSlice<'a> {
+    fn slice(&'a self, range: Range<&Marker>) -> Cow<'a, str> {
+        Cow::Borrowed(&self.input[unpack_marker_range(range)])
     }
 }
 
@@ -88,6 +73,18 @@ pub trait CharSliceDiagnosticSink {
     fn diagnostic(&self, range: Range<usize>, severity: Severity, msg: Message);
 
     fn range_event(&self, event: RangeClassEvent, marker: usize);
+}
+
+impl<DiagSink: CharSliceDiagnosticSink> EventSource for &DiagSink {
+    type Marker = Marker;
+
+    fn diagnostic(&self, range: Range<&Self::Marker>, severity: Severity, msg: Message) {
+        CharSliceDiagnosticSink::diagnostic(*self, unpack_marker_range(range), severity, msg)
+    }
+
+    fn range_event(&self, event: RangeClassEvent, marker: &Self::Marker) {
+        CharSliceDiagnosticSink::range_event(*self, event, unpack_marker(marker))
+    }
 }
 
 pub mod test_helpers {
@@ -102,19 +99,23 @@ pub mod test_helpers {
         pub msg: Message,
     }
 
-    pub struct DiagnosticsRecorder<'a> {
-        input: &'a str,
+    pub struct TestCharSource<'a> {
+        sequence: CharSlice<'a>,
         diagnostics: RefCell<Vec<TestDiagnosticMessage>>,
         range_events: RefCell<Vec<(RangeClassEvent, usize)>>,
     }
 
-    impl<'a> DiagnosticsRecorder<'a> {
-        pub fn new(input: &'a str) -> Self {
-            DiagnosticsRecorder {
-                input,
+    impl<'a> TestCharSource<'a> {
+        pub fn new(input: &'a str) -> Result<Self, Message> {
+            Ok(TestCharSource {
+                sequence: CharSlice::new(input)?,
                 diagnostics: RefCell::new(Vec::new()),
                 range_events: RefCell::new(Vec::new()),
-            }
+            })
+        }
+
+        pub fn run<Sink: EventSink<'a, Ev = char>>(&'a self, sink: Sink) {
+            self.sequence.run(self, sink)
         }
 
         pub fn results(self) -> (Vec<TestDiagnosticMessage>, Vec<(RangeClassEvent, usize)>) {
@@ -147,10 +148,10 @@ pub mod test_helpers {
         }
     }
 
-    impl CharSliceDiagnosticSink for DiagnosticsRecorder<'_> {
+    impl CharSliceDiagnosticSink for TestCharSource<'_> {
         fn diagnostic(&self, range: Range<usize>, severity: Severity, msg: Message) {
             self.diagnostics.borrow_mut().push(TestDiagnosticMessage {
-                range_text: self.input[range].into(),
+                range_text: self.sequence.input()[range].into(),
                 severity,
                 msg,
             })
@@ -190,24 +191,30 @@ mod tests {
     }
 
     fn test_char_recording(input: &str, mut passes: u32) -> Result<(), Message> {
-        let source = CharSliceEventSource::new(input, &DummyDiagnosticsSink)?;
-        source.run(CharRecordingSink {
-            input,
-            passes: &mut passes,
-        });
+        let sequence = CharSlice::new(input)?;
+        sequence.run(
+            &DummyDiagnosticsSink,
+            CharRecordingSink {
+                input,
+                passes: &mut passes,
+            },
+        );
         assert_eq!(passes, 0);
         Ok(())
     }
 
     #[test]
     fn slicing() -> Result<(), Message> {
-        let source = CharSliceEventSource::new("abc<def>ghi", &DummyDiagnosticsSink)?;
+        let sequence = CharSlice::new("abc<def>ghi")?;
         let mut result = String::new();
-        source.run(SlicingSink {
-            start_char: '<',
-            end_char: '>',
-            result: &mut result,
-        });
+        sequence.run(
+            &DummyDiagnosticsSink,
+            SlicingSink {
+                start_char: '<',
+                end_char: '>',
+                result: &mut result,
+            },
+        );
         assert_eq!(result, "<def>");
         Ok(())
     }

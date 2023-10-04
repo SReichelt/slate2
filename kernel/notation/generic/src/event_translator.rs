@@ -275,6 +275,8 @@ impl<TP: EventTranslatorPass, SP: EventSinkPass<Ev = TP::Out, Marker = TP::Marke
     }
 }
 
+// Currently, characters are the only events with special operations, and no event translator
+// outputs characters. We need this anyway for its blanket impl.
 pub trait SpecialOpsGetter<SpecialOps> {
     fn special_ops(&self) -> SpecialOps;
 }

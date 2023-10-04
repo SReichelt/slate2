@@ -165,9 +165,7 @@ mod tests {
     use std::vec;
 
     use slate_kernel_notation_generic::{
-        char_slice::{test_helpers::*, *},
-        event::test_helpers::*,
-        event_source::test_helpers::*,
+        char_slice::test_helpers::*, event::test_helpers::*, event_source::test_helpers::*,
     };
 
     use super::*;
@@ -871,11 +869,10 @@ mod tests {
         let mut token_events = Vec::new();
         let token_sink = TranslatorInst::new(ParenthesisMatcher, &mut token_events);
         let char_sink = TranslatorInst::new(Tokenizer, token_sink);
-        let diag_sink = DiagnosticsRecorder::new(input);
-        let source = CharSliceEventSource::new(input, &diag_sink)?;
+        let source = TestCharSource::new(input)?;
         source.run(char_sink);
         assert_eq!(token_events, expected_token_groups.into_events());
-        let (diagnostics, range_events) = diag_sink.results();
+        let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);
         assert_eq!((range_events, input.len()), expected_ranges.into_events());
         Ok(())
