@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 nonminmax = "0.1.1"
+smallvec = { version = "1.10", features = ["union", "const_generics"] }

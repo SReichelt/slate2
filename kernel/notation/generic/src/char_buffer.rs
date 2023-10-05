@@ -16,6 +16,8 @@
 
 use std::{borrow::Cow, marker::PhantomData, mem::take, ops::Range};
 
+use smallvec::SmallVec;
+
 use crate::{char::*, char_slice::*, event::*, event_sequence::*, event_source::*};
 
 pub trait CharEventBuffer<'a>: Default + EventSequence<'a, Ev = char> {
@@ -174,16 +176,17 @@ limited_index!(u16);
 limited_index!(u32);
 limited_index!(usize);
 
+type ChunkVec<T> = SmallVec<[T; 1]>;
+
 pub struct ChunkedEventBuffer<ChunkIdx, Chunk> {
-    // TODO: Optimize single-chunk case via SmallVec.
-    chunks: Vec<Chunk>,
+    chunks: ChunkVec<Chunk>,
     _phantom_idx: PhantomData<ChunkIdx>,
 }
 
 impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> ChunkedEventBuffer<ChunkIdx, Chunk> {
     fn new() -> Self {
         ChunkedEventBuffer {
-            chunks: Vec::new(),
+            chunks: ChunkVec::new(),
             _phantom_idx: PhantomData,
         }
     }
@@ -231,7 +234,7 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> ChunkedEventBuffer<
         }
     }
 
-    fn replace_chunks(&mut self, start_idx: usize, count: usize, chunks: Vec<Chunk>) {
+    fn replace_chunks(&mut self, start_idx: usize, count: usize, chunks: ChunkVec<Chunk>) {
         let mut idx = start_idx;
         let mut remaining_count = count;
         for chunk in chunks {
@@ -314,14 +317,14 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>>
 impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
     for ChunkedEventBuffer<ChunkIdx, Chunk>
 {
-    type Input<'b> = Vec<Chunk::Input<'b>>;
+    type Input<'b> = ChunkVec<Chunk::Input<'b>>;
 
     fn to_input(&self, range: Range<Option<&Self::Marker>>) -> Self::Input<'_> {
         if self.chunks.is_empty() {
             Self::empty_input()
         } else {
             let range = self.get_range(range);
-            let mut result = Vec::with_capacity(range.end.0 - range.start.0 + 1);
+            let mut result = ChunkVec::with_capacity(range.end.0 - range.start.0 + 1);
             let mut cur_start_col = range.start.1;
             for cur_row in range.start.0..range.end.0 {
                 result.push(self.chunks[cur_row].to_input(cur_start_col..None));
@@ -350,7 +353,7 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
 
         if self.chunks.is_empty() {
             result_range = Self::start_marker()..Self::start_marker();
-            let mut chunks = Vec::with_capacity(input.len());
+            let mut chunks = ChunkVec::with_capacity(input.len());
             for chunk_input in input {
                 let (chunk, chunk_range) = Chunk::from_input_with_range(chunk_input)?;
                 result_range.end = (ChunkIdx::from_usize(chunks.len()), chunk_range.end);
@@ -384,7 +387,7 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
         } else {
             let last_chunk_input = input.pop().unwrap();
             debug_assert_eq!(input.len(), inserted_chunks);
-            let mut chunks_to_insert = Vec::with_capacity(inserted_chunks);
+            let mut chunks_to_insert = ChunkVec::with_capacity(inserted_chunks);
             for chunk_input in input {
                 chunks_to_insert.push(Chunk::from_input(chunk_input)?);
             }
@@ -416,7 +419,7 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
     }
 
     fn empty_input<'b>() -> Self::Input<'b> {
-        Vec::new()
+        ChunkVec::new()
     }
 
     fn append_input_to_string(input: Self::Input<'_>, s: &mut String) {
@@ -428,11 +431,13 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
+
     use super::*;
 
     #[test]
     fn from_empty_input() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(Vec::new())?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(SmallVec::new())?;
         assert_contents(&buffer, "");
         let pos = buffer.delete(None..None);
         assert_eq!(pos, (0, pack_marker(0)));
@@ -442,7 +447,7 @@ mod tests {
 
     #[test]
     fn from_single_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["abc"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["abc"])?;
         assert_contents(&buffer, "abc");
         let pos = buffer.delete(None..None);
         assert_eq!(pos, (0, pack_marker(0)));
@@ -452,7 +457,8 @@ mod tests {
 
     #[test]
     fn from_multiple_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "b", "c"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "b", "c"])?;
         assert_contents(&buffer, "abc");
         let pos = buffer.delete(None..None);
         assert_eq!(pos, (0, pack_marker(0)));
@@ -462,7 +468,8 @@ mod tests {
 
     #[test]
     fn delete_nothing() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "d"])?;
         let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(1))));
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abcd");
@@ -471,7 +478,8 @@ mod tests {
 
     #[test]
     fn delete_within_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bcd", "e"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bcd", "e"])?;
         let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))));
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abde");
@@ -481,7 +489,7 @@ mod tests {
     #[test]
     fn delete_across_two_chunks() -> Result<(), Message> {
         let mut buffer =
-            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "de", "f"])?;
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "de", "f"])?;
         let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(2, pack_marker(1))));
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abef");
@@ -491,7 +499,7 @@ mod tests {
     #[test]
     fn delete_across_three_chunks() -> Result<(), Message> {
         let mut buffer =
-            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["ab", "c", "de", "f"])?;
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["ab", "c", "de", "f"])?;
         let pos = buffer.delete(Some(&(0, pack_marker(1)))..Some(&(2, pack_marker(1))));
         assert_eq!(pos, (0, pack_marker(1)));
         assert_contents(&buffer, "aef");
@@ -500,8 +508,9 @@ mod tests {
 
     #[test]
     fn insert_empty_input() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d"])?;
-        let range = buffer.insert(&(1, pack_marker(1)), Vec::new())?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "d"])?;
+        let range = buffer.insert(&(1, pack_marker(1)), SmallVec::new())?;
         assert_eq!(range, (1, pack_marker(1))..(1, pack_marker(1)));
         assert_contents(&buffer, "abcd");
         Ok(())
@@ -509,8 +518,9 @@ mod tests {
 
     #[test]
     fn insert_single_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "be", "f"])?;
-        let range = buffer.insert(&(1, pack_marker(1)), vec!["cd"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "be", "f"])?;
+        let range = buffer.insert(&(1, pack_marker(1)), smallvec!["cd"])?;
         assert_eq!(range, (1, pack_marker(1))..(1, pack_marker(3)));
         assert_contents(&buffer, "abcdef");
         Ok(())
@@ -518,8 +528,9 @@ mod tests {
 
     #[test]
     fn insert_multiple_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bg", "h"])?;
-        let range = buffer.insert(&(1, pack_marker(1)), vec!["c", "d", "ef"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bg", "h"])?;
+        let range = buffer.insert(&(1, pack_marker(1)), smallvec!["c", "d", "ef"])?;
         assert_eq!(range, (1, pack_marker(1))..(3, pack_marker(2)));
         assert_contents(&buffer, "abcdefgh");
         Ok(())
@@ -527,10 +538,11 @@ mod tests {
 
     #[test]
     fn replace_within_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bcd", "e"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bcd", "e"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))),
-            vec!["xyz"],
+            smallvec!["xyz"],
         )?;
         assert_eq!(range, (1, pack_marker(1))..(1, pack_marker(4)));
         assert_contents(&buffer, "abxyzde");
@@ -539,10 +551,11 @@ mod tests {
 
     #[test]
     fn replace_additional_chunks_within_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bcd", "e"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bcd", "e"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))),
-            vec!["x", "y", "z"],
+            smallvec!["x", "y", "z"],
         )?;
         assert_eq!(range, (1, pack_marker(1))..(3, pack_marker(1)));
         assert_contents(&buffer, "abxyzde");
@@ -552,10 +565,10 @@ mod tests {
     #[test]
     fn replace_with_single_chunk() -> Result<(), Message> {
         let mut buffer =
-            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d", "ef", "g"])?;
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "d", "ef", "g"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(3, pack_marker(1))),
-            vec!["xx"],
+            smallvec!["xx"],
         )?;
         assert_eq!(range, (1, pack_marker(1))..(1, pack_marker(3)));
         assert_contents(&buffer, "abxxfg");
@@ -565,10 +578,10 @@ mod tests {
     #[test]
     fn replace_with_fewer_chunks() -> Result<(), Message> {
         let mut buffer =
-            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d", "ef", "g"])?;
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "d", "ef", "g"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(3, pack_marker(1))),
-            vec!["xx", "yy"],
+            smallvec!["xx", "yy"],
         )?;
         assert_eq!(range, (1, pack_marker(1))..(2, pack_marker(2)));
         assert_contents(&buffer, "abxxyyfg");
@@ -578,10 +591,10 @@ mod tests {
     #[test]
     fn replace_with_equal_chunks() -> Result<(), Message> {
         let mut buffer =
-            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d", "ef", "g"])?;
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "d", "ef", "g"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(3, pack_marker(1))),
-            vec!["xx", "yy", "zz"],
+            smallvec!["xx", "yy", "zz"],
         )?;
         assert_eq!(range, (1, pack_marker(1))..(3, pack_marker(2)));
         assert_contents(&buffer, "abxxyyzzfg");
@@ -591,10 +604,10 @@ mod tests {
     #[test]
     fn replace_with_more_chunks() -> Result<(), Message> {
         let mut buffer =
-            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "de", "f"])?;
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "de", "f"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(2, pack_marker(1))),
-            vec!["xx", "yy", "zz"],
+            smallvec!["xx", "yy", "zz"],
         )?;
         assert_eq!(range, (1, pack_marker(1))..(3, pack_marker(2)));
         assert_contents(&buffer, "abxxyyzzef");
