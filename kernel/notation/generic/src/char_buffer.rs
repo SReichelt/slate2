@@ -614,6 +614,23 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn replace_in_nested_chunks() -> Result<(), Message> {
+        let mut buffer =
+            ChunkedEventBuffer::<u8, ChunkedEventBuffer<u8, CharBuffer>>::from_input(smallvec![
+                smallvec!["a", "bc"],
+                smallvec!["d"],
+                smallvec!["ef", "g"]
+            ])?;
+        let range = buffer.replace(
+            Some(&(0, (1, pack_marker(1))))..Some(&(2, (0, pack_marker(1)))),
+            smallvec![smallvec!["xx", "yy"], smallvec!["zz"]],
+        )?;
+        assert_eq!(range, (0, (1, pack_marker(1)))..(1, (0, pack_marker(2))));
+        assert_contents(&buffer, "abxxyyzzfg");
+        Ok(())
+    }
+
     fn assert_contents<'a>(buffer: &impl CharEventBuffer<'a>, contents: &str) {
         let mut iter = contents.chars();
         buffer.for_each(|c, _| assert_eq!(Some(c), iter.next()));
