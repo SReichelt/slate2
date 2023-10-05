@@ -1,14 +1,20 @@
 //! The buffers implemented in this file form a flexible custom implementation of text ropes, with
 //! two distinguishing features:
+//!
 //! * There is no concept of lines and columns; clients can freely decide how to split strings. In
 //!   particular, this facilitates adhering to the line ending rules of the language server protocol
 //!   (LSP) without having to encode these rules in the text rope implementation.
 //!   (In contrast, it seems that existing text rope crates are currently not LSP-compatible.)
+//!
 //! * Chunks can be nested, so a client can decide to add further chunking to lines and/or columns,
 //!   resulting in markers with more than two fields. This can help keep markers stable when lines
 //!   are inserted or removed.
+//!
+//! We currently don't optimize for extreme performance. In fact, operations that insert or remove
+//! chunks have a linear runtime (unless operations are guaranteed to happen at or near the end).
+//! Clients are expected to mitigate this using nested chunks.
 
-use std::{borrow::Cow, mem::take, ops::Range};
+use std::{borrow::Cow, marker::PhantomData, mem::take, ops::Range};
 
 use crate::{char::*, char_slice::*, event::*, event_sequence::*, event_source::*};
 
@@ -138,18 +144,48 @@ impl<'a> CharEventBuffer<'a> for CharBuffer {
     }
 }
 
-// TODO: Make ChunkedEventBuffer generic over the index.
-type ChunkIdx = u16;
-const MAX_CHUNKS: usize = ChunkIdx::MAX as usize;
+pub trait LimitedIndex: Clone + PartialEq {
+    fn max() -> usize;
 
-pub struct ChunkedEventBuffer<Chunk> {
-    // TODO: Optimize single-chunk case via SmallVec.
-    chunks: Vec<Chunk>,
+    fn from_usize(idx: usize) -> Self;
+    fn to_usize(&self) -> usize;
 }
 
-impl<'a, Chunk: CharEventBuffer<'a>> ChunkedEventBuffer<Chunk> {
+macro_rules! limited_index {
+    ($ty: tt) => {
+        impl LimitedIndex for $ty {
+            fn max() -> usize {
+                $ty::MAX as usize
+            }
+
+            fn from_usize(idx: usize) -> Self {
+                idx as $ty
+            }
+
+            fn to_usize(&self) -> usize {
+                *self as usize
+            }
+        }
+    };
+}
+
+limited_index!(u8);
+limited_index!(u16);
+limited_index!(u32);
+limited_index!(usize);
+
+pub struct ChunkedEventBuffer<ChunkIdx, Chunk> {
+    // TODO: Optimize single-chunk case via SmallVec.
+    chunks: Vec<Chunk>,
+    _phantom_idx: PhantomData<ChunkIdx>,
+}
+
+impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> ChunkedEventBuffer<ChunkIdx, Chunk> {
     fn new() -> Self {
-        ChunkedEventBuffer { chunks: Vec::new() }
+        ChunkedEventBuffer {
+            chunks: Vec::new(),
+            _phantom_idx: PhantomData,
+        }
     }
 
     fn max_chunk_idx(&self) -> usize {
@@ -173,12 +209,12 @@ impl<'a, Chunk: CharEventBuffer<'a>> ChunkedEventBuffer<Chunk> {
         range: Range<Option<&'b (ChunkIdx, Chunk::Marker)>>,
     ) -> Range<(usize, Option<&'b Chunk::Marker>)> {
         let start = if let Some(start) = range.start {
-            (start.0 as usize, Some(&start.1))
+            (start.0.to_usize(), Some(&start.1))
         } else {
             (0, None)
         };
         let end = if let Some(end) = range.end {
-            (end.0 as usize, Some(&end.1))
+            (end.0.to_usize(), Some(&end.1))
         } else {
             (self.max_chunk_idx(), None)
         };
@@ -211,13 +247,17 @@ impl<'a, Chunk: CharEventBuffer<'a>> ChunkedEventBuffer<Chunk> {
     }
 }
 
-impl<'a, Chunk: CharEventBuffer<'a>> Default for ChunkedEventBuffer<Chunk> {
+impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> Default
+    for ChunkedEventBuffer<ChunkIdx, Chunk>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a, Chunk: CharEventBuffer<'a>> EventSequence<'a> for ChunkedEventBuffer<Chunk> {
+impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> EventSequence<'a>
+    for ChunkedEventBuffer<ChunkIdx, Chunk>
+{
     type Ev = Chunk::Ev;
     type Marker = (ChunkIdx, Chunk::Marker);
 
@@ -231,14 +271,19 @@ impl<'a, Chunk: CharEventBuffer<'a>> EventSequence<'a> for ChunkedEventBuffer<Ch
                 0
             };
             chunk_idx = Some(new_chunk_idx);
+            let new_chunk_idx = ChunkIdx::from_usize(new_chunk_idx);
             chunk_end_marker = chunk.for_each(|event, range| {
                 f(
                     event,
-                    &(new_chunk_idx, range.start.clone())..&(new_chunk_idx, range.end.clone()),
+                    &(new_chunk_idx.clone(), range.start.clone())
+                        ..&(new_chunk_idx.clone(), range.end.clone()),
                 )
             });
         }
-        (chunk_idx.unwrap_or(0), chunk_end_marker)
+        (
+            ChunkIdx::from_usize(chunk_idx.unwrap_or(0)),
+            chunk_end_marker,
+        )
     }
 
     fn special_ops(&'a self) -> <Self::Ev as Event>::SpecialOps<'a, Self::Marker> {
@@ -246,16 +291,16 @@ impl<'a, Chunk: CharEventBuffer<'a>> EventSequence<'a> for ChunkedEventBuffer<Ch
     }
 
     fn start_marker() -> Self::Marker {
-        (0, Chunk::start_marker())
+        (ChunkIdx::from_usize(0), Chunk::start_marker())
     }
 }
 
-impl<'a, Chunk: CharEventBuffer<'a>> CharEventOps<'a, (ChunkIdx, Chunk::Marker)>
-    for ChunkedEventBuffer<Chunk>
+impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>>
+    CharEventOps<'a, (ChunkIdx, Chunk::Marker)> for ChunkedEventBuffer<ChunkIdx, Chunk>
 {
     fn slice(&'a self, range: Range<&(ChunkIdx, Chunk::Marker)>) -> Cow<'a, str> {
-        if range.start.0 == range.end.0 && (range.start.0 as usize) < self.chunks.len() {
-            self.chunks[range.start.0 as usize]
+        if range.start.0 == range.end.0 && (range.start.0.to_usize()) < self.chunks.len() {
+            self.chunks[range.start.0.to_usize()]
                 .special_ops()
                 .slice(&range.start.1..&range.end.1)
         } else {
@@ -266,7 +311,9 @@ impl<'a, Chunk: CharEventBuffer<'a>> CharEventOps<'a, (ChunkIdx, Chunk::Marker)>
     }
 }
 
-impl<'a, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a> for ChunkedEventBuffer<Chunk> {
+impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
+    for ChunkedEventBuffer<ChunkIdx, Chunk>
+{
     type Input<'b> = Vec<Chunk::Input<'b>>;
 
     fn to_input(&self, range: Range<Option<&Self::Marker>>) -> Self::Input<'_> {
@@ -294,8 +341,9 @@ impl<'a, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a> for ChunkedEventBuffer<
         let removed_chunks = range.end.0 - range.start.0;
         let inserted_chunks = Self::inserted_chunks(&input);
         let max_chunk_idx = self.max_chunk_idx() - removed_chunks + inserted_chunks;
-        if max_chunk_idx >= MAX_CHUNKS {
-            return Err(format!("number of chunks cannot exceed {MAX_CHUNKS}"));
+        let max_chunks = ChunkIdx::max();
+        if max_chunk_idx >= max_chunks {
+            return Err(format!("number of chunks cannot exceed {max_chunks}"));
         }
 
         let mut result_range: Range<Self::Marker>;
@@ -305,12 +353,12 @@ impl<'a, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a> for ChunkedEventBuffer<
             let mut chunks = Vec::with_capacity(input.len());
             for chunk_input in input {
                 let (chunk, chunk_range) = Chunk::from_input_with_range(chunk_input)?;
-                result_range.end = (chunks.len() as ChunkIdx, chunk_range.end);
+                result_range.end = (ChunkIdx::from_usize(chunks.len()), chunk_range.end);
                 chunks.push(chunk);
             }
             self.chunks = chunks;
         } else if inserted_chunks == 0 {
-            let result_chunk_idx = range.start.0 as ChunkIdx;
+            let result_chunk_idx = ChunkIdx::from_usize(range.start.0);
             let chunk_input = input.pop().unwrap_or_else(Chunk::empty_input);
             let input_range: Range<Chunk::Marker>;
             if removed_chunks > 0 && range.end.1.is_some() {
@@ -332,7 +380,7 @@ impl<'a, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a> for ChunkedEventBuffer<
             }
             self.remove_chunks(range.start.0 + 1, removed_chunks);
             result_range =
-                (result_chunk_idx, input_range.start)..(result_chunk_idx, input_range.end);
+                (result_chunk_idx.clone(), input_range.start)..(result_chunk_idx, input_range.end);
         } else {
             let last_chunk_input = input.pop().unwrap();
             debug_assert_eq!(input.len(), inserted_chunks);
@@ -356,8 +404,8 @@ impl<'a, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a> for ChunkedEventBuffer<
                 self.chunks.reserve(inserted_chunks - removed_chunks);
             }
             self.replace_chunks(range.start.0, removed_chunks, chunks_to_insert);
-            let result_start_chunk_idx = range.start.0 as ChunkIdx;
-            let result_end_chunk_idx = (range.start.0 + inserted_chunks) as ChunkIdx;
+            let result_start_chunk_idx = ChunkIdx::from_usize(range.start.0);
+            let result_end_chunk_idx = ChunkIdx::from_usize(range.start.0 + inserted_chunks);
             result_range = (result_start_chunk_idx, first_chunk_start)
                 ..(result_end_chunk_idx, last_chunk_range.end);
         }
@@ -384,7 +432,7 @@ mod tests {
 
     #[test]
     fn from_empty_input() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(Vec::new())?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(Vec::new())?;
         assert_contents(&buffer, "");
         let pos = buffer.delete(None..None);
         assert_eq!(pos, (0, pack_marker(0)));
@@ -394,7 +442,7 @@ mod tests {
 
     #[test]
     fn from_single_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["abc"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["abc"])?;
         assert_contents(&buffer, "abc");
         let pos = buffer.delete(None..None);
         assert_eq!(pos, (0, pack_marker(0)));
@@ -404,7 +452,7 @@ mod tests {
 
     #[test]
     fn from_multiple_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "b", "c"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "b", "c"])?;
         assert_contents(&buffer, "abc");
         let pos = buffer.delete(None..None);
         assert_eq!(pos, (0, pack_marker(0)));
@@ -414,7 +462,7 @@ mod tests {
 
     #[test]
     fn delete_nothing() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "d"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d"])?;
         let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(1))));
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abcd");
@@ -423,7 +471,7 @@ mod tests {
 
     #[test]
     fn delete_within_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bcd", "e"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bcd", "e"])?;
         let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))));
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abde");
@@ -432,7 +480,8 @@ mod tests {
 
     #[test]
     fn delete_across_two_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "de", "f"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "de", "f"])?;
         let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(2, pack_marker(1))));
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abef");
@@ -441,7 +490,8 @@ mod tests {
 
     #[test]
     fn delete_across_three_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["ab", "c", "de", "f"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["ab", "c", "de", "f"])?;
         let pos = buffer.delete(Some(&(0, pack_marker(1)))..Some(&(2, pack_marker(1))));
         assert_eq!(pos, (0, pack_marker(1)));
         assert_contents(&buffer, "aef");
@@ -450,7 +500,7 @@ mod tests {
 
     #[test]
     fn insert_empty_input() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "d"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d"])?;
         let range = buffer.insert(&(1, pack_marker(1)), Vec::new())?;
         assert_eq!(range, (1, pack_marker(1))..(1, pack_marker(1)));
         assert_contents(&buffer, "abcd");
@@ -459,7 +509,7 @@ mod tests {
 
     #[test]
     fn insert_single_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "be", "f"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "be", "f"])?;
         let range = buffer.insert(&(1, pack_marker(1)), vec!["cd"])?;
         assert_eq!(range, (1, pack_marker(1))..(1, pack_marker(3)));
         assert_contents(&buffer, "abcdef");
@@ -468,7 +518,7 @@ mod tests {
 
     #[test]
     fn insert_multiple_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bg", "h"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bg", "h"])?;
         let range = buffer.insert(&(1, pack_marker(1)), vec!["c", "d", "ef"])?;
         assert_eq!(range, (1, pack_marker(1))..(3, pack_marker(2)));
         assert_contents(&buffer, "abcdefgh");
@@ -477,7 +527,7 @@ mod tests {
 
     #[test]
     fn replace_within_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bcd", "e"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bcd", "e"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))),
             vec!["xyz"],
@@ -489,7 +539,7 @@ mod tests {
 
     #[test]
     fn replace_additional_chunks_within_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bcd", "e"])?;
+        let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bcd", "e"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))),
             vec!["x", "y", "z"],
@@ -501,7 +551,8 @@ mod tests {
 
     #[test]
     fn replace_with_single_chunk() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "d", "ef", "g"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d", "ef", "g"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(3, pack_marker(1))),
             vec!["xx"],
@@ -513,7 +564,8 @@ mod tests {
 
     #[test]
     fn replace_with_fewer_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "d", "ef", "g"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d", "ef", "g"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(3, pack_marker(1))),
             vec!["xx", "yy"],
@@ -525,7 +577,8 @@ mod tests {
 
     #[test]
     fn replace_with_equal_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "d", "ef", "g"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "d", "ef", "g"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(3, pack_marker(1))),
             vec!["xx", "yy", "zz"],
@@ -537,7 +590,8 @@ mod tests {
 
     #[test]
     fn replace_with_more_chunks() -> Result<(), Message> {
-        let mut buffer = ChunkedEventBuffer::from_input(vec!["a", "bc", "de", "f"])?;
+        let mut buffer =
+            ChunkedEventBuffer::<u8, CharBuffer>::from_input(vec!["a", "bc", "de", "f"])?;
         let range = buffer.replace(
             Some(&(1, pack_marker(1)))..Some(&(2, pack_marker(1))),
             vec!["xx", "yy", "zz"],
@@ -547,7 +601,7 @@ mod tests {
         Ok(())
     }
 
-    fn assert_contents(buffer: &ChunkedEventBuffer<CharBuffer>, contents: &str) {
+    fn assert_contents<'a>(buffer: &impl CharEventBuffer<'a>, contents: &str) {
         let mut iter = contents.chars();
         buffer.for_each(|c, _| assert_eq!(Some(c), iter.next()));
         assert_eq!(None, iter.next());
