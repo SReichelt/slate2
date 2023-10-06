@@ -52,8 +52,9 @@ pub trait CharEventBuffer<'a>: Default + EventSequence<'a, Ev = char> {
         self.replace(Some(pos)..Some(pos), input)
     }
 
-    fn delete(&mut self, range: Range<Option<&Self::Marker>>) -> Self::Marker {
-        self.replace(range, Self::empty_input()).unwrap().start
+    fn delete(&mut self, range: Range<Option<&Self::Marker>>) -> Result<Self::Marker, Message> {
+        self.replace(range, Self::empty_input())
+            .map(|range| range.start)
     }
 
     fn empty_input<'b>() -> Self::Input<'b>;
@@ -373,7 +374,8 @@ impl<'a, ChunkIdx: LimitedIndex, Chunk: CharEventBuffer<'a>> CharEventBuffer<'a>
                     self.chunks[range.start.0].replace(Some(&input_range.end)..None, to_append)
                 {
                     self.chunks[range.start.0]
-                        .delete(Some(&input_range.start)..Some(&input_range.end));
+                        .delete(Some(&input_range.start)..Some(&input_range.end))
+                        .unwrap();
                     self.chunks[range.end.0] = last_removed_chunk;
                     return Err(err);
                 }
@@ -439,7 +441,7 @@ mod tests {
     fn from_empty_input() -> Result<(), Message> {
         let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(SmallVec::new())?;
         assert_contents(&buffer, "");
-        let pos = buffer.delete(None..None);
+        let pos = buffer.delete(None..None)?;
         assert_eq!(pos, (0, pack_marker(0)));
         assert_contents(&buffer, "");
         Ok(())
@@ -449,7 +451,7 @@ mod tests {
     fn from_single_chunk() -> Result<(), Message> {
         let mut buffer = ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["abc"])?;
         assert_contents(&buffer, "abc");
-        let pos = buffer.delete(None..None);
+        let pos = buffer.delete(None..None)?;
         assert_eq!(pos, (0, pack_marker(0)));
         assert_contents(&buffer, "");
         Ok(())
@@ -460,7 +462,7 @@ mod tests {
         let mut buffer =
             ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "b", "c"])?;
         assert_contents(&buffer, "abc");
-        let pos = buffer.delete(None..None);
+        let pos = buffer.delete(None..None)?;
         assert_eq!(pos, (0, pack_marker(0)));
         assert_contents(&buffer, "");
         Ok(())
@@ -470,7 +472,7 @@ mod tests {
     fn delete_nothing() -> Result<(), Message> {
         let mut buffer =
             ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "d"])?;
-        let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(1))));
+        let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(1))))?;
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abcd");
         Ok(())
@@ -480,7 +482,7 @@ mod tests {
     fn delete_within_chunk() -> Result<(), Message> {
         let mut buffer =
             ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bcd", "e"])?;
-        let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))));
+        let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(1, pack_marker(2))))?;
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abde");
         Ok(())
@@ -490,7 +492,7 @@ mod tests {
     fn delete_across_two_chunks() -> Result<(), Message> {
         let mut buffer =
             ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["a", "bc", "de", "f"])?;
-        let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(2, pack_marker(1))));
+        let pos = buffer.delete(Some(&(1, pack_marker(1)))..Some(&(2, pack_marker(1))))?;
         assert_eq!(pos, (1, pack_marker(1)));
         assert_contents(&buffer, "abef");
         Ok(())
@@ -500,7 +502,7 @@ mod tests {
     fn delete_across_three_chunks() -> Result<(), Message> {
         let mut buffer =
             ChunkedEventBuffer::<u8, CharBuffer>::from_input(smallvec!["ab", "c", "de", "f"])?;
-        let pos = buffer.delete(Some(&(0, pack_marker(1)))..Some(&(2, pack_marker(1))));
+        let pos = buffer.delete(Some(&(0, pack_marker(1)))..Some(&(2, pack_marker(1))))?;
         assert_eq!(pos, (0, pack_marker(1)));
         assert_contents(&buffer, "aef");
         Ok(())
