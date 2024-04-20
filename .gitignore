@@ -1,5 +1,7 @@
 scratch
 target
+out
+node_modules
 *.log
 *.out
 *.aux

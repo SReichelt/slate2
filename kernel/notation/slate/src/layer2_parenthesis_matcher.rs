@@ -15,6 +15,14 @@ impl Event for TokenEvent<'_> {}
 
 pub struct ParenthesisMatcher;
 
+impl ParenthesisMatcher {
+    pub fn new_translator<'a, Sink: EventSink<'a, Ev = TokenEvent<'a>>>(
+        sink: Sink,
+    ) -> TranslatorInst<'a, Tokenizer, TranslatorInst<'a, ParenthesisMatcher, Sink>> {
+        Tokenizer::new_translator(TranslatorInst::new(ParenthesisMatcher, sink))
+    }
+}
+
 impl<'a> EventTranslator<'a> for ParenthesisMatcher {
     type In = Token<'a>;
     type Out = TokenEvent<'a>;
@@ -867,10 +875,9 @@ mod tests {
         expected_ranges: RangeClassTree,
     ) -> Result<(), Message> {
         let mut token_events = Vec::new();
-        let token_sink = TranslatorInst::new(ParenthesisMatcher, &mut token_events);
-        let char_sink = TranslatorInst::new(Tokenizer, token_sink);
+        let sink = ParenthesisMatcher::new_translator(&mut token_events);
         let source = TestCharSource::new(input)?;
-        source.run(char_sink);
+        source.run(sink);
         assert_eq!(token_events, expected_token_groups.into_events());
         let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);

@@ -78,6 +78,20 @@ impl<'a> ParameterIdentifier<'a> {
     pub fn new(metamodel_getter: &'a impl MetaModelGetter) -> Self {
         ParameterIdentifier { metamodel_getter }
     }
+
+    pub fn new_translator<Sink: EventSink<'a, Ev = ParameterEvent<'a>>>(
+        sink: Sink,
+        metamodel_getter: &'a impl MetaModelGetter,
+    ) -> TranslatorInst<
+        'a,
+        Tokenizer,
+        TranslatorInst<'a, ParenthesisMatcher, TranslatorInst<'a, ParameterIdentifier<'a>, Sink>>,
+    > {
+        ParenthesisMatcher::new_translator(TranslatorInst::new(
+            ParameterIdentifier::new(metamodel_getter),
+            sink,
+        ))
+    }
 }
 
 impl<'a> EventTranslator<'a> for ParameterIdentifier<'a> {
@@ -90,7 +104,7 @@ impl<'a> EventTranslator<'a> for ParameterIdentifier<'a> {
         source: EventSourceWithOps<'a, Self::In, Src>,
     ) -> Self::Pass<Src> {
         ParameterIdentifierPass {
-            metamodel_getter: self.metamodel_getter.clone(),
+            metamodel_getter: self.metamodel_getter,
             source,
         }
     }
@@ -187,7 +201,7 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
                     match self.metamodel_getter.metamodel(name) {
                         Ok(metamodel) => {
                             out(
-                                ParameterEvent::MetaModel(metamodel.clone()),
+                                ParameterEvent::MetaModel(metamodel),
                                 &name_range.start..&name_range.end,
                             );
                             *state = ParameterIdentifierState::MetaModelSucceeded {
@@ -664,8 +678,12 @@ impl<'a, Src: EventSource + 'a> ParameterIdentifierPass<'a, Src> {
         Range<&'b Src::Marker>,
         Option<&'a dyn MappingKind<dyn ParamKind>>,
     )> {
-        let Some(notation_kind) = notation_kind else { return Some((event, range, None)); };
-        let Some(event) = event else { return Some((event, range, None)); };
+        let Some(notation_kind) = notation_kind else {
+            return Some((event, range, None));
+        };
+        let Some(event) = event else {
+            return Some((event, range, None));
+        };
 
         match mapping_state {
             ParamNotationMappingAnalysisState::TopLevel { paren_depth } => {
@@ -2717,7 +2735,7 @@ mod tests {
         char_slice::test_helpers::*, event::test_helpers::*, event_source::test_helpers::*,
     };
 
-    use crate::{layer1_tokenizer::*, metamodel::test_helpers::*};
+    use crate::metamodel::test_helpers::*;
 
     use super::*;
 
@@ -11792,12 +11810,9 @@ mod tests {
         expected_ranges: RangeClassTree,
     ) -> Result<(), Message> {
         let mut param_events = Vec::new();
-        let param_sink =
-            TranslatorInst::new(ParameterIdentifier::new(metamodel), &mut param_events);
-        let token_sink = TranslatorInst::new(ParenthesisMatcher, param_sink);
-        let char_sink = TranslatorInst::new(Tokenizer, token_sink);
+        let sink = ParameterIdentifier::new_translator(&mut param_events, metamodel);
         let source = TestCharSource::new(input)?;
-        source.run(char_sink);
+        source.run(sink);
         assert_eq!(param_events, expected_document.into_events());
         let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);

@@ -30,6 +30,14 @@ impl Event for Token<'_> {}
 
 pub struct Tokenizer;
 
+impl Tokenizer {
+    pub fn new_translator<'a, Sink: EventSink<'a, Ev = Token<'a>>>(
+        sink: Sink,
+    ) -> TranslatorInst<'a, Tokenizer, Sink> {
+        TranslatorInst::new(Tokenizer, sink)
+    }
+}
+
 impl<'a> EventTranslator<'a> for Tokenizer {
     type In = char;
     type Out = Token<'a>;
@@ -2545,9 +2553,9 @@ mod tests {
         expected_ranges: Option<RangeClassTree>,
     ) -> Result<(), Message> {
         let mut tokens = Vec::new();
-        let char_sink = TranslatorInst::new(Tokenizer, &mut tokens);
+        let sink = Tokenizer::new_translator(&mut tokens);
         let source = TestCharSource::new(input)?;
-        source.run(char_sink);
+        source.run(sink);
         assert_eq!(tokens, expected_tokens);
         let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);

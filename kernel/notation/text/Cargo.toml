@@ -1,8 +1,10 @@
 [package]
-name = "slate-kernel-notation-generic"
+name = "slate-kernel-notation-text"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 nonminmax = "0.1.1"
 smallvec = { version = "1.13", features = ["union", "const_generics"] }
+thiserror = "1.0"
+macro_find_and_replace = "1.0"

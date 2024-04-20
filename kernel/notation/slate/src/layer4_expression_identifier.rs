@@ -2,7 +2,10 @@ use std::ops::Range;
 
 use slate_kernel_notation_generic::{event::*, event_source::*, event_translator::*};
 
-use crate::layer3_parameter_identifier::*;
+use crate::{
+    layer1_tokenizer::*, layer2_parenthesis_matcher::*, layer3_parameter_identifier::*,
+    metamodel::*,
+};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ExpressionEvent<'a> {
@@ -12,6 +15,30 @@ pub enum ExpressionEvent<'a> {
 impl Event for ExpressionEvent<'_> {}
 
 pub struct ExpressionIdentifier;
+
+impl ExpressionIdentifier {
+    pub fn new_translator<'a, Sink: EventSink<'a, Ev = ExpressionEvent<'a>>>(
+        sink: Sink,
+        metamodel_getter: &'a impl MetaModelGetter,
+    ) -> TranslatorInst<
+        'a,
+        Tokenizer,
+        TranslatorInst<
+            'a,
+            ParenthesisMatcher,
+            TranslatorInst<
+                'a,
+                ParameterIdentifier<'a>,
+                TranslatorInst<'a, ExpressionIdentifier, Sink>,
+            >,
+        >,
+    > {
+        ParameterIdentifier::new_translator(
+            TranslatorInst::new(ExpressionIdentifier, sink),
+            metamodel_getter,
+        )
+    }
+}
 
 impl<'a> EventTranslator<'a> for ExpressionIdentifier {
     type In = ParameterEvent<'a>;
@@ -166,12 +193,9 @@ mod tests {
 
     use anyhow::Result;
 
-    use slate_kernel_notation_generic::{
-        char_slice::{test_helpers::*, *},
-        event::test_helpers::*,
-    };
+    use slate_kernel_notation_generic::{char_slice::test_helpers::*, event::test_helpers::*};
 
-    use crate::{layer1_tokenizer::*, layer2_parenthesis_matcher::*, metamodel::test_helpers::*};
+    use crate::metamodel::test_helpers::*;
 
     use super::*;
 
@@ -220,12 +244,9 @@ mod tests {
     ) -> Result<(), Message> {
         let metamodel = TestMetaModel::new();
         let mut expression_events = Vec::new();
-        let expression_sink = TranslatorInst::new(ExpressionIdentifier, &mut expression_events);
-        let param_sink = TranslatorInst::new(ParameterIdentifier::new(&metamodel), expression_sink);
-        let token_sink = TranslatorInst::new(ParenthesisMatcher, param_sink);
-        let char_sink = TranslatorInst::new(Tokenizer, token_sink);
+        let sink = ExpressionIdentifier::new_translator(&mut expression_events, &metamodel);
         let source = TestCharSource::new(input)?;
-        source.run(char_sink);
+        source.run(sink);
         assert_eq!(expression_events, expected_document.into_events());
         let (diagnostics, range_events) = source.results();
         assert_eq!(diagnostics, expected_diagnostics);

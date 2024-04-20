@@ -1,0 +1,54 @@
+{
+    "name": "slate2",
+    "description": "Slate proof assistant, version 2",
+    "author": "Sebastian Reichelt",
+    "license": "MIT",
+    "version": "0.0.1",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/SReichelt/slate2"
+    },
+    "engines": {
+        "vscode": "^1.83.0"
+    },
+    "contributes": {
+        "languages": [
+            {
+                "id": "slate2",
+                "aliases": [
+                    "Slate 2",
+                    "slate2"
+                ],
+                "extensions": [
+                    ".slate2"
+                ]
+            }
+        ],
+        "configurationDefaults": {
+            "[slate2]": {
+                "editor.unicodeHighlight.ambiguousCharacters": false
+            }
+        }
+    },
+    "activationEvents": [
+        "onLanguage:slate2"
+    ],
+    "main": "./out/extension.js",
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "test-compile": "tsc -p ./",
+        "compile": "cross-env NODE_ENV=production tsc -b",
+        "watch": "rm -rf out && tsc -b -w",
+        "package": "vsce package --no-dependencies",
+        "publish": "vsce publish --no-dependencies"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.8.3",
+        "@types/vscode": "^1.83.0",
+        "cross-env": "^7.0.3",
+        "typescript": "^5.2.2"
+    }
+}

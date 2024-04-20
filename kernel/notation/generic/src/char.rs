@@ -11,8 +11,6 @@ pub trait CharEventOps<'a, Marker> {
 }
 
 pub mod test_helpers {
-    use std::ops::Range;
-
     use super::*;
 
     pub struct CharRecordingSink<'a> {

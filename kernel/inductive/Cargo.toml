@@ -1,5 +1,5 @@
 [package]
-name = "slate-kernel-metalogic"
+name = "slate-kernel-inductive"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,8 +7,9 @@ edition = "2021"
 slate-kernel-util = { path = "../util" }
 slate-kernel-generic = { path = "../generic" }
 slate-kernel-generic-derive = { path = "../generic/derive" }
-anyhow = "1.0.81"
-log = "0.4.21"
-smallvec = { version = "1.13", features = ["union", "const_generics"] }
+anyhow = "1.0.69"
+log = "0.4.17"
+nonminmax = "0.1.1"
+smallvec = { version = "1.10", features = ["union", "const_generics"] }
 symbol_table = "0.3.0"
-rayon = "1.10.0"
+rayon = "1.6.1"

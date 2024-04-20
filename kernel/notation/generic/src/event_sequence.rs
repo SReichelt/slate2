@@ -29,3 +29,20 @@ pub trait EventSequence<'a> {
 
     fn start_marker() -> Self::Marker;
 }
+
+impl<'a, T: EventSequence<'a>, Extra> EventSequence<'a> for (T, Extra) {
+    type Ev = T::Ev;
+    type Marker = T::Marker;
+
+    fn for_each(&self, f: impl FnMut(Self::Ev, Range<&Self::Marker>)) -> Self::Marker {
+        self.0.for_each(f)
+    }
+
+    fn special_ops(&'a self) -> <Self::Ev as Event>::SpecialOps<'a, Self::Marker> {
+        self.0.special_ops()
+    }
+
+    fn start_marker() -> Self::Marker {
+        T::start_marker()
+    }
+}

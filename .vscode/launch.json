@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "extensionHost",
+            "request": "launch",
+            "name": "Launch VSCode Extension",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "--disable-extensions",
+                "--extensionDevelopmentPath=${workspaceRoot}/kernel/notation/lsp/vscode"
+            ],
+            "outFiles": [
+                "${workspaceRoot}/kernel/notation/lsp/vscode/out/**/*.js"
+            ],
+            "preLaunchTask": "rust: cargo build",
+            "env": {
+                "SERVER_PATH": "${workspaceRoot}/target/debug/slate-kernel-notation-lsp"
+            }
+        }
+    ]
+}

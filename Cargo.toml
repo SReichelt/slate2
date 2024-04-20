@@ -6,6 +6,9 @@ members = [
     "kernel/generic/examples",
     "kernel/notation/generic",
     "kernel/notation/slate",
+    "kernel/notation/text",
+    "kernel/notation/lsp",
     "kernel/metalogic",
     "kernel/metalogic/mltt",
 ]
+resolver = "2"

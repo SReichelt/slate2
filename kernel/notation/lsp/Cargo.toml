@@ -1,0 +1,12 @@
+[package]
+name = "slate-kernel-notation-lsp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slate-kernel-notation-generic = { path = "../generic" }
+slate-kernel-notation-slate = { path = "../slate" }
+slate-kernel-notation-text = { path = "../text" }
+anyhow = "1.0.81"
+tokio = { version = "1.37.0", features = ["full"] }
+tower-lsp = "0.20.0"
