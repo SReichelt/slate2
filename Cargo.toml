@@ -1,14 +1,3 @@
 [workspace]
-members = [
-    "kernel/util",
-    "kernel/generic",
-    "kernel/generic/derive",
-    "kernel/generic/examples",
-    "kernel/notation/generic",
-    "kernel/notation/slate",
-    "kernel/notation/text",
-    "kernel/notation/lsp",
-    "kernel/metalogic",
-    "kernel/metalogic/mltt",
-]
+members = ["lang_def"]
 resolver = "2"
