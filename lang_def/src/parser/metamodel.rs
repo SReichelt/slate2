@@ -6,30 +6,35 @@ pub trait MetaModelGetter {
     fn metamodel(&self, name: &str) -> Option<&dyn MetaModel>;
 }
 
-pub trait MetaModel: Debug {
+pub trait MetaModelPart: Debug {
+    /// Used to implement [`Eq`] on trait object references.
+    fn id(&self) -> usize;
+}
+
+macro_rules! meta_model_part {
+    ($($trait:tt)+) => {
+        impl PartialEq for &dyn $($trait)+ {
+            fn eq(&self, other: &Self) -> bool {
+                MetaModelPart::id(*self) == MetaModelPart::id(*other)
+            }
+        }
+
+        impl Eq for &dyn $($trait)+ {}
+
+        impl_mem_serializable_self!(&'static dyn $($trait)+);
+    };
+}
+
+pub trait MetaModel: MetaModelPart {
     fn name(&self) -> &str;
 
     // The section which implicitly surrounds the entire document.
     fn top_level_section_kind(&self) -> &dyn SectionKind;
 }
 
-// See https://github.com/rust-lang/rust/issues/106447.
-macro_rules! dyn_ptr_eq {
-    ($($trait:tt)+) => {
-        impl PartialEq for &dyn $($trait)+ {
-            fn eq(&self, other: &Self) -> bool {
-                *self as *const dyn $($trait)+ as *const u8
-                    == *other as *const dyn $($trait)+ as *const u8
-            }
-        }
+meta_model_part!(MetaModel);
 
-        impl_mem_serializable_self!(&'static dyn $($trait)+);
-    };
-}
-
-dyn_ptr_eq!(MetaModel);
-
-pub trait SectionKind: Debug {
+pub trait SectionKind: MetaModelPart {
     fn parameterization(&self, paren: char) -> Option<&dyn SectionKind>;
     fn data_kind(&self) -> &dyn DataKind;
     fn param_kind(&self) -> &dyn ParamKind;
@@ -37,25 +42,25 @@ pub trait SectionKind: Debug {
     fn notation_prefixes(&self) -> Option<NotationPrefixOptions>;
 }
 
-dyn_ptr_eq!(SectionKind);
+meta_model_part!(SectionKind);
 
 pub struct NotationPrefixOptions {
     pub paren: char,
 }
 
-pub trait ParamKind: Debug {
+pub trait ParamKind: MetaModelPart {
     fn keyword_is_notation_delimiter(&self, keyword: &str) -> bool;
     fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool;
     fn paren_is_notation_delimiter(&self, paren: char) -> bool;
 }
 
-dyn_ptr_eq!(ParamKind);
+meta_model_part!(ParamKind);
 
-pub trait MappingKind: Debug {
+pub trait MappingKind: MetaModelPart {
     fn param_kind(&self) -> &dyn ParamKind;
 }
 
-dyn_ptr_eq!(MappingKind);
+meta_model_part!(MappingKind);
 
 pub trait InfixMappingKind: MappingKind {
     fn binder_paren(&self) -> char;
@@ -63,9 +68,9 @@ pub trait InfixMappingKind: MappingKind {
     fn as_mapping_kind(&self) -> &dyn MappingKind;
 }
 
-dyn_ptr_eq!(InfixMappingKind);
+meta_model_part!(InfixMappingKind);
 
-pub trait DataKind: Debug {
+pub trait DataKind: MetaModelPart {
     fn parameterization(&self, paren: char) -> Option<&dyn SectionKind>;
     fn special_data_kind(&self, paren: char) -> Option<&dyn DataKind>;
     fn prefix_mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
@@ -73,9 +78,9 @@ pub trait DataKind: Debug {
     fn object_kind(&self, paren: char) -> Option<&dyn ObjectKind>;
 }
 
-dyn_ptr_eq!(DataKind);
+meta_model_part!(DataKind);
 
-pub trait ObjectKind: Debug {
+pub trait ObjectKind: MetaModelPart {
     fn separator(&self) -> char;
 
     fn parameterization(&self) -> &dyn SectionKind;
@@ -84,19 +89,18 @@ pub trait ObjectKind: Debug {
     fn extra_part_kind(&self, extra_part_idx: usize) -> Option<&dyn SectionKind>;
 }
 
-dyn_ptr_eq!(ObjectKind);
+meta_model_part!(ObjectKind);
 
 #[cfg(test)]
 pub mod testing {
-    use std::fmt;
-
     use super::*;
 
+    #[derive(Debug)]
     pub struct TestMetaModel;
 
-    impl Debug for TestMetaModel {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("test")
+    impl MetaModelPart for TestMetaModel {
+        fn id(&self) -> usize {
+            0
         }
     }
 
@@ -161,13 +165,37 @@ pub mod testing {
         }
     }
 
-    impl MappingKind for TestMetaModel {
-        fn param_kind(&self) -> &dyn ParamKind {
-            self
+    #[derive(Debug)]
+    pub struct TestPrefixMapping;
+
+    impl MetaModelPart for TestPrefixMapping {
+        fn id(&self) -> usize {
+            0
         }
     }
 
-    impl InfixMappingKind for TestMetaModel {
+    impl MappingKind for TestPrefixMapping {
+        fn param_kind(&self) -> &dyn ParamKind {
+            &TestMetaModel
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct TestInfixMapping;
+
+    impl MetaModelPart for TestInfixMapping {
+        fn id(&self) -> usize {
+            1
+        }
+    }
+
+    impl MappingKind for TestInfixMapping {
+        fn param_kind(&self) -> &dyn ParamKind {
+            &TestMetaModel
+        }
+    }
+
+    impl InfixMappingKind for TestInfixMapping {
         fn binder_paren(&self) -> char {
             '('
         }
@@ -191,14 +219,14 @@ pub mod testing {
 
         fn prefix_mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
             match identifier {
-                "λ" => Some(self),
+                "λ" => Some(&TestPrefixMapping),
                 _ => None,
             }
         }
 
         fn infix_mapping_kind(&self, identifier: &str) -> Option<&dyn InfixMappingKind> {
             match identifier {
-                "↦" => Some(self),
+                "↦" => Some(&TestInfixMapping),
                 _ => None,
             }
         }
