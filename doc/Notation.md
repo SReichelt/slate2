@@ -116,10 +116,8 @@ follows.
 
 * A parameter group may be a _section_, which is identified by a specific parenthesis pair specified
   by the metamodel. A section contains zero or more parameter groups with the same syntax as
-  top-level groups. It may optionally be followed by a semicolon. Moreover, the metamodel may allow
-  a section to be preceded by an arbitrary number of _prefixes_. A prefix is an identifier, number,
-  or arbitrary tokens surrounded by parentheses, followed by a dot. The scope of a parameter within
-  a section is always the same as the scope of the section.
+  top-level groups. It may optionally be followed by a semicolon.
+  The scope of a parameter within a section is always the same as the scope of the section.
 
 * A parameter group that is not a section ends at the first semicolon (disregarding semicolons
   within parentheses, as noted earlier). This semicolon is mandatory in the sense that the last
@@ -131,11 +129,14 @@ follows.
   semicolon. Each group within the parameterization may be parameterized again, which is referred to
   as _higher-order parameterization_.
 
+* The metamodel may allow a parameter group to be preceded by an arbitrary number of _prefixes_,
+  following the parameterizations (if any). A prefix is an identifier (that is not a prefix mapping
+  symbol; see below), a number, or arbitrary tokens surrounded by specific parentheses, followed by
+  a dot.
+
 Other than the above, a parameter group may contain arbitrary tokens, including the parentheses
 reserved for sections or parameterizations, as long as the group does not start with those
-parentheses (or, in the case of sections, with a token followed by a dot and then followed by the
-parentheses). However, there are three cases where parameters are identified anywhere within a
-group.
+parentheses. However, there are three cases where parameters are identified anywhere within a group.
 
 * The metamodel may decide that a given parenthesis pair should be regarded as a parameterization
   whenever it follows an opening parenthesis, a comma or semicolon within parentheses, a
@@ -190,8 +191,12 @@ terminating token, the group is regarded as having no parameters.
 The notation expression of a single parameter that is not part of a group may either be terminated
 by a token from the same list, or covers the entire parameter if no such token is present.
 
-If a section is preceded by a token and a dot, both are prepended to the notation expressions of all
-parameters in the section and its subsections.
+If a parameter group has at least one prefix, it must contain exactly one parameter, and special
+rules apply regarding parentheses around the notation expression of that parameter.
+* The notation _may_ always be surrounded by the same parentheses as those used for prefixes, and
+  those parentheses are ignored unless omitting them would render the notation expression invalid.
+* The notation _must_ be surrounded by those parentheses if it contains more than one identifier
+  or number in sequence at top level.
 
 ## Parameter Notation Analysis
 
@@ -229,17 +234,6 @@ The process of analyzing a notation expression abstracts over the following deta
 * Quoted and unquoted identifiers are equivalent if the resulting string contents are equal.
 
 * Numbers are treated as unquoted identifiers.
-
-* A notation expression may start with any number of prefixes (as defined above for sections), and
-  section prefixes are implicitly regarded as prefixes for every item within the section. Each
-  prefix must be a reference to a single parameter that parameterizes the notation, possibly
-  surrounded by parentheses, which are not considered part of the notation. If a notation expression
-  contains at least one prefix (not including prefixes of surrounding sections), the rest of the
-  notation expression
-  * _may_ be surrounded by the same parentheses as prefixes, which are ignored unless omitting them
-    would render the notation expression invalid, and
-  * _must_ be surrounded by parentheses if it contains at least one (top-level) identifier token
-    that follows another token.
 
 Keywords and strings are not allowed within (the non-ignored parts of) notation expressions, and
 dots are only allowed as part of mappings.

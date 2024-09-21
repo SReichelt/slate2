@@ -12,7 +12,7 @@ use super::{layer1_tokenizer::*, layer2_parenthesis_matcher::*, metamodel::*};
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub enum ParameterEvent<'a, Pos: Position> {
-    SectionStart(Parameterized<'a, Pos, SectionHeader<'a, Pos>>),
+    SectionStart(Parameterized<'a, Pos, &'static dyn SectionKind>),
     SectionEnd,
     ParamGroup(Parameterized<'a, Pos, ParamGroup<'a, Pos>>),
 }
@@ -20,6 +20,7 @@ pub enum ParameterEvent<'a, Pos: Position> {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Parameterized<'a, Pos: Position, T> {
     pub parameterizations: Vec<WithSpan<Parameterization<'a, Pos>, Pos>>,
+    pub prefixes: Vec<WithSpan<NotationExpr<'a>, Pos>>,
     pub data: Option<T>, // `None` in case of some parse errors
 }
 
@@ -28,12 +29,14 @@ impl<'a, Pos: Position, T: MemSerializable<Pos>> MemSerializable<Pos>
 {
     type Serialized = (
         <Vec<WithSpan<Parameterization<'a, Pos>, Pos>> as MemSerializable<Pos>>::Serialized,
+        <Vec<WithSpan<NotationExpr<'a>, Pos>> as MemSerializable<Pos>>::Serialized,
         <Option<T> as MemSerializable<Pos>>::Serialized,
     );
 
     fn serialize(&self, relative_to: &Pos) -> Self::Serialized {
         (
             self.parameterizations.serialize(relative_to),
+            self.prefixes.serialize(relative_to),
             self.data.serialize(relative_to),
         )
     }
@@ -41,7 +44,8 @@ impl<'a, Pos: Position, T: MemSerializable<Pos>> MemSerializable<Pos>
     fn deserialize(serialized: &Self::Serialized, relative_to: &Pos) -> Self {
         Parameterized {
             parameterizations: <_>::deserialize(&serialized.0, relative_to),
-            data: <_>::deserialize(&serialized.1, relative_to),
+            prefixes: <_>::deserialize(&serialized.1, relative_to),
+            data: <_>::deserialize(&serialized.2, relative_to),
         }
     }
 }
@@ -60,19 +64,11 @@ pub enum SectionItem<'a, Pos: Position> {
     ParamGroup(ParamGroup<'a, Pos>),
 }
 
-// TODO: prefixes should belong to section items (i.e. into Parameterized?); other notations don't need them
-// TODO: parentheses after prefixes (see description)
 // TODO: handle prefixes within parameterizations correctly
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
-pub struct SectionHeader<'a, Pos: Position> {
-    pub kind: &'static dyn SectionKind,
-    pub prefixes: Vec<WithSpan<NotationExpr<'a>, Pos>>,
-}
-
-#[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub struct Section<'a, Pos: Position> {
-    pub header: SectionHeader<'a, Pos>,
+    pub kind: &'static dyn SectionKind,
     pub items: SectionItems<'a, Pos>,
 }
 
@@ -130,7 +126,6 @@ pub struct ObjectItem<'a, Pos: Position> {
 // cause frequent re-parsing.
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub struct Notation<'a> {
-    pub prefixes: Vec<NotationExpr<'a>>,
     pub expr: NotationExpr<'a>,
     pub scope: NameScopeDesc,
     pub kind: Option<NameKindDesc>,
@@ -307,22 +302,27 @@ impl<
         let sub_ctx = notation_ctx.new_frame(Either::Left(Either::Left(Either::Left(
             Either::Left(&param_notations_rev),
         ))));
+
+        let prefixes = Self::parse_prefixes(interface, section_kind, &sub_ctx);
+
         let (Some(item_header), _) = Self::parse_section_item_header(
             interface,
             section_kind,
             true,
             None,
             !parameterizations.is_empty(),
+            !prefixes.is_empty(),
             &sub_ctx,
             NameScopeDesc::Global,
         ) else {
-            if !parameterizations.is_empty() {
+            if !parameterizations.is_empty() || !prefixes.is_empty() {
                 let span = parameterizations.first().unwrap().span()
                     ..parameterizations.last().unwrap().span();
                 interface.out(
                     span,
                     ParameterEvent::ParamGroup(Parameterized {
                         parameterizations,
+                        prefixes,
                         data: None,
                     }),
                 );
@@ -336,19 +336,21 @@ impl<
         }
 
         let out = match item_header.into_inner() {
-            SectionItemHeader::Section(header) => {
+            SectionItemHeader::Section(kind) => {
                 self.open_sections.push(OpenSection {
-                    kind: header.kind,
+                    kind,
                     param_notations_rev,
                 });
                 ParameterEvent::SectionStart(Parameterized {
                     parameterizations,
-                    data: Some(header),
+                    prefixes,
+                    data: Some(kind),
                 })
             }
             SectionItemHeader::ParamGroup(param_group) => {
                 ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
+                    prefixes,
                     data: Some(param_group),
                 })
             }
@@ -456,18 +458,21 @@ impl<'a> ParameterIdentifier<'a> {
             let sub_ctx = notation_ctx.new_frame(Either::Left(Either::Left(Either::Right(
                 &parameterizations,
             ))));
+            let prefixes = Self::parse_prefixes(interface, section_kind, &sub_ctx);
             let (item, finished) = Self::parse_section_item(
                 interface,
                 section_kind,
                 require_semicolon_after_last,
                 separator,
                 !parameterizations.is_empty(),
+                !prefixes.is_empty(),
                 &sub_ctx,
                 scope,
             );
-            if item.is_some() || !parameterizations.is_empty() {
+            if item.is_some() || !parameterizations.is_empty() || !prefixes.is_empty() {
                 items.push(Parameterized {
                     parameterizations,
+                    prefixes,
                     data: item,
                 });
             }
@@ -492,6 +497,7 @@ impl<'a> ParameterIdentifier<'a> {
         require_semicolon_after_last: bool,
         separator: Option<char>,
         has_parameterizations: bool,
+        has_prefixes: bool,
         notation_ctx: &NotationContext<'a, Pos>,
         scope: NameScopeDesc,
     ) -> (Option<SectionItem<'a, Pos>>, bool) {
@@ -501,6 +507,7 @@ impl<'a> ParameterIdentifier<'a> {
             require_semicolon_after_last,
             separator,
             has_parameterizations,
+            has_prefixes,
             notation_ctx,
             scope,
         );
@@ -508,19 +515,13 @@ impl<'a> ParameterIdentifier<'a> {
             return (None, finished);
         };
         match item_header.into_inner() {
-            SectionItemHeader::Section(header) => {
-                let items = Self::parse_section_items(
-                    interface,
-                    header.kind,
-                    true,
-                    None,
-                    notation_ctx,
-                    scope,
-                );
+            SectionItemHeader::Section(kind) => {
+                let items =
+                    Self::parse_section_items(interface, kind, true, None, notation_ctx, scope);
                 let end_token = interface.input().next().unwrap();
                 assert_eq!(*end_token, TokenEvent::ParenEnd);
                 (
-                    Some(SectionItem::Section(Section { header, items })),
+                    Some(SectionItem::Section(Section { kind, items })),
                     finished,
                 )
             }
@@ -544,19 +545,35 @@ impl<'a> ParameterIdentifier<'a> {
         require_semicolon_after_last: bool,
         separator: Option<char>,
         has_parameterizations: bool,
+        has_prefixes: bool,
         notation_ctx: &NotationContext<'a, Pos>,
         scope: NameScopeDesc,
     ) -> (Option<WithSpan<SectionItemHeader<'a, Pos>, Pos>>, bool) {
         {
-            let Some(start_token) = interface.input().look_ahead() else {
-                if has_parameterizations {
-                    let pos = interface.input().pos();
+            let no_item = |interface: &mut IF, pos: Option<Pos>| {
+                if has_prefixes {
+                    let pos = pos.unwrap_or_else(|| interface.input().pos());
+                    interface.error(
+                        pos,
+                        Some(ErrorKind::SyntaxError),
+                        format!("expected item after prefix"),
+                    );
+                    true
+                } else if has_parameterizations {
+                    let pos = pos.unwrap_or_else(|| interface.input().pos());
                     interface.error(
                         pos,
                         Some(ErrorKind::SyntaxError),
                         format!("expected item after parameterization"),
                     );
+                    true
+                } else {
+                    false
                 }
+            };
+
+            let Some(start_token) = interface.input().look_ahead() else {
+                no_item(interface, None);
                 return (None, true);
             };
             match *start_token {
@@ -564,13 +581,7 @@ impl<'a> ParameterIdentifier<'a> {
                     if ch == ';' || Some(ch) == separator =>
                 {
                     let start_token = start_token.consume();
-                    if has_parameterizations {
-                        interface.error(
-                            start_token.span().start,
-                            Some(ErrorKind::SyntaxError),
-                            format!("expected item after parameterization"),
-                        );
-                    } else if ch == ';' {
+                    if !no_item(interface, Some(start_token.span().start)) && ch == ';' {
                         interface.error(
                             &start_token,
                             Some(ErrorKind::SyntaxError),
@@ -584,10 +595,7 @@ impl<'a> ParameterIdentifier<'a> {
                         let start_token = start_token.consume();
                         return (
                             Some(WithSpan::new(
-                                SectionItemHeader::Section(SectionHeader {
-                                    kind: subsection_kind,
-                                    prefixes: Vec::new(),
-                                }),
+                                SectionItemHeader::Section(subsection_kind),
                                 &start_token,
                             )),
                             false,
@@ -595,15 +603,8 @@ impl<'a> ParameterIdentifier<'a> {
                     }
                 }
                 TokenEvent::ParenEnd => {
-                    if has_parameterizations {
-                        drop(start_token);
-                        let pos = interface.input().pos();
-                        interface.error(
-                            pos,
-                            Some(ErrorKind::SyntaxError),
-                            format!("expected item after parameterization"),
-                        );
-                    }
+                    drop(start_token);
+                    no_item(interface, None);
                     return (None, true);
                 }
                 _ => {}
@@ -616,59 +617,9 @@ impl<'a> ParameterIdentifier<'a> {
         let mut at_expr_start = true;
         let start_token = Self::parse_token_tree(interface, data_kind, at_expr_start).unwrap();
         at_expr_start = Self::token_tree_is_expr_prefix(&start_token);
-        let mut prefix_options = section_kind.notation_prefixes();
-        if let Some(options) = &prefix_options {
-            if !Self::token_tree_matches_prefix_options(&start_token, options) {
-                prefix_options = None;
-            }
-        }
         let mut span = start_token.span();
         let mut tokens = vec![start_token];
         let finished = loop {
-            if let Some(prefix_options) = &prefix_options {
-                if tokens.len() % 2 == 0 {
-                    let mut check_section = || {
-                        if let Some(paren_token) = interface.input().look_ahead() {
-                            if let TokenEvent::ParenStart(paren) = *paren_token {
-                                if let Some(subsection_kind) = section_kind.subsection(paren) {
-                                    let paren_token = paren_token.consume();
-                                    span.end = paren_token.span().end;
-                                    Some(subsection_kind)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    };
-                    if let Some(subsection_kind) = check_section() {
-                        let mut prefixes = Vec::new();
-                        for token in tokens.into_iter().step_by(2) {
-                            if let Some(prefix) = Self::create_prefix_notation_expr(
-                                interface,
-                                token,
-                                prefix_options,
-                                notation_ctx,
-                            ) {
-                                prefixes.push(prefix);
-                            }
-                        }
-                        return (
-                            Some(WithSpan::new(
-                                SectionItemHeader::Section(SectionHeader {
-                                    kind: subsection_kind,
-                                    prefixes,
-                                }),
-                                span,
-                            )),
-                            false,
-                        );
-                    }
-                }
-            }
             let Some(token) = Self::parse_token_tree(interface, data_kind, at_expr_start) else {
                 if require_semicolon_after_last {
                     interface.error(
@@ -688,33 +639,30 @@ impl<'a> ParameterIdentifier<'a> {
             ) {
                 break true;
             }
-            if let Some(options) = &prefix_options {
-                if tokens.len() % 2 == 0 {
-                    if !Self::token_tree_matches_prefix_options(&token, options) {
-                        prefix_options = None;
-                    }
-                } else {
-                    if !matches!(*token, TokenTree::Token(Token::ReservedChar('.', _, _))) {
-                        prefix_options = None;
-                    }
-                }
-            }
             at_expr_start = Self::token_tree_is_notation_delimiter(&token, param_kind).is_some()
                 || Self::token_tree_is_expr_prefix(&token);
             span.end = token.span().end;
             tokens.push(token);
         };
 
+        let prefix_options = if has_prefixes {
+            section_kind.notation_prefixes()
+        } else {
+            None
+        };
+
+        let param_group = Self::create_param_group(
+            interface,
+            tokens,
+            param_kind,
+            &prefix_options,
+            notation_ctx,
+            scope,
+        );
+
         (
             Some(WithSpan::new(
-                SectionItemHeader::ParamGroup(Self::create_param_group(
-                    interface,
-                    tokens,
-                    param_kind,
-                    &prefix_options,
-                    notation_ctx,
-                    scope,
-                )),
+                SectionItemHeader::ParamGroup(param_group),
                 span,
             )),
             finished,
@@ -762,6 +710,60 @@ impl<'a> ParameterIdentifier<'a> {
             ));
         }
         parameterizations
+    }
+
+    fn parse_prefixes<
+        Pos: Position,
+        IF: ParserInterface<
+            In = TokenEvent<'a>,
+            Out = ParameterEvent<'a, Pos>,
+            Pos = Pos,
+            Config = Config,
+        >,
+    >(
+        interface: &mut IF,
+        section_kind: &'static dyn SectionKind,
+        notation_ctx: &NotationContext<'a, Pos>,
+    ) -> Vec<WithSpan<NotationExpr<'a>, Pos>> {
+        let data_kind = section_kind.data_kind();
+        let mut prefixes = Vec::new();
+        if let Some(options) = section_kind.notation_prefixes() {
+            loop {
+                let mut first = true;
+                if Self::search_top_level_token(interface, |token| {
+                    if first {
+                        first = false;
+                        if Self::token_event_matches_prefix_options(&token, &options, data_kind) {
+                            None
+                        } else {
+                            Some(false)
+                        }
+                    } else {
+                        Some(matches!(
+                            token,
+                            TokenEvent::Token(Token::ReservedChar('.', _, _))
+                        ))
+                    }
+                }) != Some(true)
+                {
+                    break;
+                }
+                let token = Self::parse_token_tree(interface, data_kind, false).unwrap();
+                let span = token.span();
+                if let Some(prefix) =
+                    Self::create_token_notation_expr(interface, token, notation_ctx)
+                {
+                    let prefix = Self::remove_prefix_parentheses(prefix, &options, true);
+                    prefixes.push(WithSpan::new(prefix, span));
+                }
+                let dot = interface.input().next().unwrap();
+                assert!(matches!(
+                    *dot,
+                    TokenEvent::Token(Token::ReservedChar('.', _, _))
+                ));
+            }
+        }
+        prefixes
     }
 
     fn parse_object_items<
@@ -889,9 +891,15 @@ impl<'a> ParameterIdentifier<'a> {
                 if at_expr_start {
                     if let Some(parameterization) = data_kind.parameterization(paren) {
                         let param_kind = parameterization.param_kind();
-                        if Self::contains_top_level_token(interface, |token| {
-                            Self::token_event_is_notation_delimiter(token, param_kind).is_some()
-                        }) {
+                        if Self::search_top_level_token(interface, |token| {
+                            if Self::token_event_is_notation_delimiter(token, param_kind).is_some()
+                            {
+                                Some(true)
+                            } else {
+                                None
+                            }
+                        }) == Some(true)
+                        {
                             let items = Self::parse_section_items(
                                 interface,
                                 parameterization,
@@ -1124,6 +1132,14 @@ impl<'a> ParameterIdentifier<'a> {
             }
         }
 
+        if prefix_options.is_some() && param_notations.len() > 1 {
+            interface.error(
+                param_notations.first().unwrap()..param_notations.last().unwrap(),
+                Some(ErrorKind::SyntaxError),
+                format!("a parameter group with a prefix cannot contain multiple parameters"),
+            );
+        }
+
         ParamGroup {
             param_notations,
             data: tokens,
@@ -1140,7 +1156,7 @@ impl<'a> ParameterIdentifier<'a> {
         >,
     >(
         interface: &mut IF,
-        tokens: &mut Tokens<'a, Pos>, // will be drained
+        tokens: &mut Tokens<'a, Pos>, // will be drained (intentionally not moved to reuse vector allocations)
         param_kind: &'static dyn ParamKind,
         notation_ctx: &NotationContext<'a, Pos>,
     ) -> Vec<MappingParam<'a, Pos>> {
@@ -1198,7 +1214,7 @@ impl<'a> ParameterIdentifier<'a> {
         >,
     >(
         interface: &mut IF,
-        tokens: &mut Tokens<'a, Pos>, // will be drained
+        tokens: &mut Tokens<'a, Pos>, // will be drained (intentionally not moved to reuse vector allocations)
         param_kind: &'static dyn ParamKind,
         notation_ctx: &NotationContext<'a, Pos>,
     ) -> MappingParam<'a, Pos> {
@@ -1239,7 +1255,7 @@ impl<'a> ParameterIdentifier<'a> {
         >,
     >(
         interface: &mut IF,
-        tokens: &mut Tokens<'a, Pos>, // will be drained
+        tokens: &mut Tokens<'a, Pos>, // will be drained (intentionally not moved to reuse vector allocations)
         param_kind: &'static dyn ParamKind,
         notation_ctx: &NotationContext<'a, Pos>,
         scope: NameScopeDesc,
@@ -1291,41 +1307,12 @@ impl<'a> ParameterIdentifier<'a> {
         >,
     >(
         interface: &mut IF,
-        tokens: &mut Tokens<'a, Pos>, // will be drained
+        tokens: &mut Tokens<'a, Pos>, // will be drained (intentionally not moved to reuse vector allocations)
         prefix_options: &Option<NotationPrefixOptions>,
         notation_ctx: &NotationContext<'a, Pos>,
         scope: NameScopeDesc,
         mut kind: Option<NameKindDesc>,
     ) -> Option<WithSpan<Notation<'a>, Pos>> {
-        let mut prefixes = Vec::new();
-        if let Some(prefix_options) = prefix_options {
-            while let Some(dot_pos) = tokens.iter().position(|token| {
-                matches!(**token, TokenTree::Token(Token::ReservedChar('.', _, _)))
-            }) {
-                let mut prefix_tokens = tokens.drain(..dot_pos + 1);
-                if dot_pos == 1 {
-                    if let Some(prefix) = Self::create_prefix_notation_expr(
-                        interface,
-                        prefix_tokens.next().unwrap(),
-                        prefix_options,
-                        notation_ctx,
-                    ) {
-                        prefixes.push(prefix.into_inner());
-                    }
-                } else {
-                    let mut prefix_span = prefix_tokens.next().unwrap().span();
-                    for token in prefix_tokens {
-                        prefix_span.end = token.span().end;
-                    }
-                    interface.error(
-                        prefix_span,
-                        Some(ErrorKind::SyntaxError),
-                        format!("notation prefix must be a single token or wrapped in parentheses"),
-                    );
-                }
-            }
-        }
-
         if tokens.is_empty() {
             return None;
         }
@@ -1341,7 +1328,33 @@ impl<'a> ParameterIdentifier<'a> {
         let span = (tokens.first().unwrap()..tokens.last().unwrap()).span();
         interface.span_desc(span.clone(), SpanDesc::NameDef(scope, kind));
 
-        let expr = Self::create_notation_expr(interface, tokens, notation_ctx)?;
+        if prefix_options.is_some() {
+            let mut prev_is_ident = false;
+            for token in tokens.iter() {
+                if matches!(
+                    **token,
+                    TokenTree::Token(Token::Ident(_, _)) | TokenTree::Token(Token::Number(_))
+                ) {
+                    if prev_is_ident {
+                        interface.error(
+                            span.clone(),
+                            Some(ErrorKind::SyntaxError),
+                            format!("a prefixed notation with an identifier sequence must be wrapped in parentheses"),
+                        );
+                        break;
+                    }
+                    prev_is_ident = true;
+                } else {
+                    prev_is_ident = false;
+                }
+            }
+        }
+
+        let mut expr = Self::create_notation_expr(interface, tokens, notation_ctx)?;
+
+        if let Some(prefix_options) = prefix_options {
+            expr = Self::remove_prefix_parentheses(expr, prefix_options, false);
+        }
 
         if matches!(expr, NotationExpr::Param(_)) {
             interface.error(
@@ -1352,15 +1365,7 @@ impl<'a> ParameterIdentifier<'a> {
             return None;
         }
 
-        Some(WithSpan::new(
-            Notation {
-                prefixes,
-                expr,
-                scope,
-                kind,
-            },
-            span,
-        ))
+        Some(WithSpan::new(Notation { expr, scope, kind }, span))
     }
 
     fn create_notation_expr<
@@ -1373,7 +1378,7 @@ impl<'a> ParameterIdentifier<'a> {
         >,
     >(
         interface: &mut IF,
-        tokens: &mut Tokens<'a, Pos>, // will be drained
+        tokens: &mut Tokens<'a, Pos>, // will be drained (intentionally not moved to reuse vector allocations)
         notation_ctx: &NotationContext<'a, Pos>,
     ) -> Option<NotationExpr<'a>> {
         if tokens.len() > 1 {
@@ -1388,8 +1393,7 @@ impl<'a> ParameterIdentifier<'a> {
                     let mut target_tokens: Tokens<'a, Pos> = token_iter.collect();
                     if let Some(last_token) = target_tokens.last() {
                         mapping_span.end = last_token.span().end;
-                        target_span =
-                            target_tokens.first().unwrap().span().start..mapping_span.end.clone();
+                        target_span = (target_tokens.first().unwrap()..last_token).span();
                     }
                     for param in &mapping.params {
                         if !param.data.is_empty() {
@@ -1517,7 +1521,7 @@ impl<'a> ParameterIdentifier<'a> {
                     );
                     None
                 }
-                Token::Ident(name, _) => Some(NotationExpr::Ident(name)),
+                Token::Ident(identifier, _) => Some(NotationExpr::Ident(identifier)),
             },
 
             TokenTree::Paren(paren, inner) => {
@@ -1582,33 +1586,32 @@ impl<'a> ParameterIdentifier<'a> {
         }
     }
 
-    fn create_prefix_notation_expr<
-        Pos: Position,
-        IF: ParserInterface<
-            In = TokenEvent<'a>,
-            Out = ParameterEvent<'a, Pos>,
-            Pos = Pos,
-            Config = Config,
-        >,
-    >(
-        interface: &mut IF,
-        token: WithSpan<TokenTree<'a, Pos>, Pos>,
-        prefix_options: &NotationPrefixOptions,
-        notation_ctx: &NotationContext<'a, Pos>,
-    ) -> Option<WithSpan<NotationExpr<'a>, Pos>> {
-        let span = token.span();
-        let expr = if matches!(
-            *token,
-            TokenTree::Paren(paren, _) if paren == prefix_options.paren
-        ) {
-            let TokenTree::Paren(_, mut inner) = token.into_inner() else {
-                unreachable!()
-            };
-            Self::create_notation_expr(interface, &mut inner, notation_ctx)
-        } else {
-            Self::create_token_notation_expr(interface, token, notation_ctx)
-        }?;
-        Some(WithSpan::new(expr, span))
+    fn remove_prefix_parentheses(
+        expr: NotationExpr<'a>,
+        options: &NotationPrefixOptions,
+        allow_single_param: bool,
+    ) -> NotationExpr<'a> {
+        if let NotationExpr::Paren(paren, inner) = &expr {
+            if *paren == options.paren && inner.len() == 1 {
+                let row = inner.first().unwrap();
+                if row.len() == 1 {
+                    if allow_single_param || !matches!(row.first().unwrap(), NotationExpr::Param(_))
+                    {
+                        let NotationExpr::Paren(_, inner) = expr else {
+                            unreachable!()
+                        };
+                        return inner
+                            .into_iter()
+                            .next()
+                            .unwrap()
+                            .into_iter()
+                            .next()
+                            .unwrap();
+                    }
+                }
+            }
+        }
+        expr
     }
 
     fn identify_notation<
@@ -1661,10 +1664,10 @@ impl<'a> ParameterIdentifier<'a> {
                         for param in params.iter().rev() {
                             mapping_param_idx -= 1;
                             if mapping_param_idx == mapping_mismatch_param_idx {
-                                let msg = if let NotationExpr::Ident(name) =
+                                let msg = if let NotationExpr::Ident(identifier) =
                                     mapping_mismatch_notation
                                 {
-                                    format!("mapping parameter name does not match parameterization; expected `{name}`")
+                                    format!("mapping parameter name does not match parameterization; expected `{identifier}`")
                                 } else {
                                     format!("mapping parameter notation does not match parameterization")
                                 };
@@ -1967,7 +1970,7 @@ impl<'a> ParameterIdentifier<'a> {
         span
     }
 
-    fn contains_top_level_token<
+    fn search_top_level_token<
         Pos: Position,
         IF: ParserInterface<
             In = TokenEvent<'a>,
@@ -1977,33 +1980,32 @@ impl<'a> ParameterIdentifier<'a> {
         >,
     >(
         interface: &mut IF,
-        mut pred: impl FnMut(&TokenEvent<'a>) -> bool,
-    ) -> bool {
+        mut pred: impl FnMut(&TokenEvent<'a>) -> Option<bool>,
+    ) -> Option<bool> {
         let mut depth: usize = 0;
-        interface
-            .input()
-            .look_ahead_unbounded(|token| {
-                if depth == 0 && pred(token) {
-                    Some(true)
-                } else {
-                    match token {
-                        TokenEvent::ParenStart(_) => {
-                            depth += 1;
-                            None
-                        }
-                        TokenEvent::ParenEnd => {
-                            if depth > 0 {
-                                depth -= 1;
-                                None
-                            } else {
-                                Some(false)
-                            }
-                        }
-                        _ => None,
+        interface.input().look_ahead_unbounded(|token| {
+            if depth == 0 {
+                let result = pred(token);
+                if result.is_some() {
+                    return result;
+                }
+            }
+            match token {
+                TokenEvent::ParenStart(_) => {
+                    depth += 1;
+                    None
+                }
+                TokenEvent::ParenEnd => {
+                    if depth > 0 {
+                        depth -= 1;
+                        None
+                    } else {
+                        Some(false)
                     }
                 }
-            })
-            .unwrap_or(false)
+                _ => None,
+            }
+        })
     }
 
     fn token_tree_is_reserved_char<Pos: Position>(token: &TokenTree<'a, Pos>, ch: char) -> bool {
@@ -2049,14 +2051,19 @@ impl<'a> ParameterIdentifier<'a> {
         }
     }
 
-    fn token_tree_matches_prefix_options<Pos: Position>(
-        token: &TokenTree<'a, Pos>,
+    fn token_event_matches_prefix_options(
+        token: &TokenEvent<'a>,
         options: &NotationPrefixOptions,
+        data_kind: &'static dyn DataKind,
     ) -> bool {
-        matches!(
-            token,
-            TokenTree::Token(Token::Ident(_, _)) | TokenTree::Token(Token::Number(_))
-        ) || matches!(token, TokenTree::Paren(paren, _) if *paren == options.paren)
+        match token {
+            TokenEvent::Token(Token::Ident(identifier, IdentifierType::Unquoted)) => {
+                data_kind.prefix_mapping_kind(identifier).is_none()
+            }
+            TokenEvent::Token(Token::Ident(_, _)) | TokenEvent::Token(Token::Number(_)) => true,
+            TokenEvent::ParenStart(paren) => *paren == options.paren,
+            _ => false,
+        }
     }
 }
 
@@ -2067,7 +2074,7 @@ struct OpenSection<'a> {
 }
 
 enum SectionItemHeader<'a, Pos: Position> {
-    Section(SectionHeader<'a, Pos>),
+    Section(&'static dyn SectionKind),
     ParamGroup(ParamGroup<'a, Pos>),
 }
 
@@ -2499,6 +2506,7 @@ mod tests {
                 ExpectedFragmentContent::Input("x"),
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
+                    prefixes: Vec::new(),
                     data: Some(ParamGroup {
                         param_notations: Vec::new(),
                         data: vec![WithSpan::new(
@@ -2640,10 +2648,25 @@ mod tests {
         print_parameter_identifier_output(
             "%slate \"test\"; [[a : T] { b_a : U; }] { c(a ↦ b_a) : V; }",
         );
-        print_parameter_identifier_output("%slate \"test\"; a.{}");
-        print_parameter_identifier_output("%slate \"test\"; (a b).{ x : T; }");
-        print_parameter_identifier_output("%slate \"test\"; a.(b c).{ x : T; }");
-        print_parameter_identifier_output("%slate \"test\"; a b.{}");
+    }
+
+    #[test]
+    fn prefixes() {
+        print_parameter_identifier_output("%slate \"test\"; x.{}");
+        print_parameter_identifier_output("%slate \"test\"; x.y : T;");
+        print_parameter_identifier_output("%slate \"test\"; x.y.{}");
+        print_parameter_identifier_output("%slate \"test\"; x.{ y : T; }");
+        print_parameter_identifier_output("%slate \"test\"; x.{ y.z : T; }");
+        print_parameter_identifier_output("%slate \"test\"; (x y z).{}");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.{}");
+        print_parameter_identifier_output("%slate \"test\"; [x y : T] (x y).{}");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.y : U;");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.(y) : U;");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.(y z) : U;");
+        print_parameter_identifier_output("%slate \"test\"; [x,y : T] x.(y) : U;");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.y(z) : U;");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.y z : U;");
+        print_parameter_identifier_output("%slate \"test\"; [x : T] x.y,z : U;");
     }
 
     #[test]
