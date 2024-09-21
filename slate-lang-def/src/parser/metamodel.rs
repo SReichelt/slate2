@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use lang_def::impl_mem_serializable_self;
+use lang_def::{impl_mem_serializable_self, parser::NameKindDesc};
 
 pub trait MetaModelGetter {
     fn metamodel(&self, name: &str) -> Option<&dyn MetaModel>;
@@ -28,7 +28,7 @@ macro_rules! meta_model_part {
 pub trait MetaModel: MetaModelPart {
     fn name(&self) -> &str;
 
-    // The section which implicitly surrounds the entire document.
+    /// The section which implicitly surrounds the entire document.
     fn top_level_section_kind(&self) -> &dyn SectionKind;
 }
 
@@ -49,12 +49,14 @@ pub struct NotationPrefixOptions {
 }
 
 pub trait ParamKind: MetaModelPart {
-    fn keyword_is_notation_delimiter(&self, keyword: &str) -> bool;
-    fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool;
-    fn paren_is_notation_delimiter(&self, paren: char) -> bool;
+    fn keyword_is_notation_delimiter(&self, keyword: &str) -> Option<NotationDelimiterDesc>;
+    fn identifier_is_notation_delimiter(&self, identifier: &str) -> Option<NotationDelimiterDesc>;
+    fn paren_is_notation_delimiter(&self, paren: char) -> Option<NotationDelimiterDesc>;
 }
 
 meta_model_part!(ParamKind);
+
+pub type NotationDelimiterDesc = Option<NameKindDesc>;
 
 pub trait MappingKind: MetaModelPart {
     fn param_kind(&self) -> &dyn ParamKind;
@@ -152,16 +154,37 @@ pub mod testing {
     }
 
     impl ParamKind for TestMetaModel {
-        fn keyword_is_notation_delimiter(&self, keyword: &str) -> bool {
-            keyword == "%Type"
+        fn keyword_is_notation_delimiter(&self, keyword: &str) -> Option<NotationDelimiterDesc> {
+            if keyword == "%Type" {
+                Some(Some(NameKindDesc::Type))
+            } else {
+                None
+            }
         }
 
-        fn identifier_is_notation_delimiter(&self, identifier: &str) -> bool {
-            identifier.starts_with(':') || identifier == "↦"
+        fn identifier_is_notation_delimiter(
+            &self,
+            identifier: &str,
+        ) -> Option<NotationDelimiterDesc> {
+            if identifier.starts_with(':') {
+                if identifier == ":" {
+                    Some(Some(NameKindDesc::Value))
+                } else {
+                    Some(None)
+                }
+            } else if identifier == "↦" {
+                Some(None)
+            } else {
+                None
+            }
         }
 
-        fn paren_is_notation_delimiter(&self, paren: char) -> bool {
-            paren == '⎿'
+        fn paren_is_notation_delimiter(&self, paren: char) -> Option<NotationDelimiterDesc> {
+            if paren == '⎿' {
+                Some(None)
+            } else {
+                None
+            }
         }
     }
 

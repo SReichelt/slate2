@@ -1,3 +1,3 @@
 [workspace]
-members = ["lang_def"]
+members = ["slate-lang-def"]
 resolver = "2"

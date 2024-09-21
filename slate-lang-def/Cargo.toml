@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 lang-def = { git = "https://github.com/SReichelt/lang-tools.git" }
-lang-def-derive = { git = "https://github.com/SReichelt/lang-tools.git" }
 lang-test = { git = "https://github.com/SReichelt/lang-tools.git" }
-smallvec = { version = "1.13.2", features = ["union", "const_generics"] }
+temp-inst = { git = "https://github.com/SReichelt/temp-inst.git", features = [
+    "derive",
+] }
+temp-stack = { git = "https://github.com/SReichelt/temp-inst.git" }
+either = { version = "1.13.0" }

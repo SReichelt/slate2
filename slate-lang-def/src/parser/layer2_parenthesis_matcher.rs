@@ -1,5 +1,7 @@
-use lang_def::parser::{compose::*, *};
-use lang_def_derive::MemSerializable;
+use lang_def::{
+    mem_serializable::*,
+    parser::{compose::*, *},
+};
 
 use super::{chars::*, layer1_tokenizer::*};
 

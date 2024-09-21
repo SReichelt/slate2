@@ -1,7 +1,6 @@
 use std::{borrow::Cow, fmt::Debug, ops::Range};
 
-use lang_def::parser::*;
-use lang_def_derive::MemSerializable;
+use lang_def::{mem_serializable::*, parser::*};
 
 use super::chars::*;
 

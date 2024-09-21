@@ -1,13 +1,12 @@
-use std::{borrow::Cow, fmt::Debug, iter::FusedIterator, mem::take, ops::Range, slice};
+use std::{borrow::Cow, fmt::Debug, mem::take, ops::Range, slice};
 
+use either::Either;
 use lang_def::{
     mem_serializable::*,
     parser::{buffer::BufferedParserInterface, compose::*, *},
 };
-use lang_def_derive::MemSerializable;
-use smallvec::{smallvec, SmallVec};
-
-use crate::util::ref_stack::*;
+use temp_inst::{TempRef, TempRepr};
+use temp_stack::TempStack;
 
 use super::{layer1_tokenizer::*, layer2_parenthesis_matcher::*, metamodel::*};
 
@@ -61,17 +60,18 @@ pub enum SectionItem<'a, Pos: Position> {
     ParamGroup(ParamGroup<'a, Pos>),
 }
 
+// TODO: prefixes should belong to section items (i.e. into Parameterized?); other notations don't need them
 // TODO: parentheses after prefixes (see description)
 // TODO: handle prefixes within parameterizations correctly
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub struct SectionHeader<'a, Pos: Position> {
+    pub kind: &'static dyn SectionKind,
     pub prefixes: Vec<WithSpan<NotationExpr<'a>, Pos>>,
 }
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub struct Section<'a, Pos: Position> {
-    pub kind: &'static dyn SectionKind,
     pub header: SectionHeader<'a, Pos>,
     pub items: SectionItems<'a, Pos>,
 }
@@ -102,7 +102,14 @@ pub type Tokens<'a, Pos> = Vec<WithSpan<TokenTree<'a, Pos>, Pos>>;
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub struct Mapping<'a, Pos: Position> {
     pub kind: &'static dyn MappingKind,
-    pub params: Vec<Param<'a, Pos>>,
+    pub params: Vec<MappingParam<'a, Pos>>,
+}
+
+#[derive(Clone, PartialEq, MemSerializable, Debug)]
+pub struct MappingParam<'a, Pos: Position> {
+    pub mappings: Vec<Mapping<'a, Pos>>,
+    pub notation: Option<WithSpan<Notation<'a>, Pos>>,
+    pub data: Tokens<'a, Pos>,
 }
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
@@ -125,6 +132,8 @@ pub struct ObjectItem<'a, Pos: Position> {
 pub struct Notation<'a> {
     pub prefixes: Vec<NotationExpr<'a>>,
     pub expr: NotationExpr<'a>,
+    pub scope: NameScopeDesc,
+    pub kind: Option<NameKindDesc>,
 }
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
@@ -138,14 +147,13 @@ pub enum NotationExpr<'a> {
 }
 
 impl<'a> NotationExpr<'a> {
-    // TODO: avoid double-matching
     pub fn find_in_sequence(&self, seq: &[Self]) -> Option<Range<usize>> {
         if let NotationExpr::Seq(exprs) = self {
             // Could be simplified once `Iterator::map_windows` is stabilized.
             let seq_len = seq.len();
             let exprs_len = exprs.len();
             if seq_len >= exprs_len {
-                for idx in 0..(seq_len - exprs_len + 1) {
+                for idx in 0..=(seq_len - exprs_len) {
                     let range = idx..(idx + exprs_len);
                     let sub_seq = &seq[range.clone()];
                     if sub_seq == exprs {
@@ -160,6 +168,24 @@ impl<'a> NotationExpr<'a> {
         }
         None
     }
+
+    fn contains_param_ref(&self, range: Range<ParamIdx>) -> bool {
+        match self {
+            NotationExpr::ReservedChar(_) | NotationExpr::Ident(_) => false,
+            NotationExpr::Seq(items) => items
+                .iter()
+                .any(|item| item.contains_param_ref(range.clone())),
+            NotationExpr::Paren(_, rows) => rows.iter().any(|cols| {
+                cols.iter()
+                    .any(|item| item.contains_param_ref(range.clone()))
+            }),
+            NotationExpr::Mapping(mapping) => mapping.target_expr.contains_param_ref(
+                (range.start - mapping.params_len as isize)
+                    ..(range.end - mapping.params_len as isize),
+            ),
+            NotationExpr::Param(idx) => range.contains(idx),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
@@ -171,7 +197,7 @@ pub struct MappingNotationExpr<'a> {
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 struct NotationInfo<'a> {
-    parameterizations: Vec<NotationExpr<'a>>,
+    parameterizations_rev: Vec<NotationExpr<'a>>,
     notation: Notation<'a>,
 }
 
@@ -247,48 +273,49 @@ impl<
 
         let parameterizations = Self::parse_parameterizations(interface, section_kind);
 
-        let param_notations: Vec<NotationInfo<'a>> = parameterizations
-            .iter()
-            .flat_map(|parameterization| ParamGroupIter::new(&parameterization.items))
-            .flat_map(|group_info| {
-                let parameterizations: Vec<NotationExpr<'a>> = group_info
-                    .parameterizations
-                    .iter()
-                    .flat_map(|parameterization| ParamGroupIter::new(&parameterization.items))
-                    .flat_map(|group_info| &group_info.param_group.param_notations)
-                    .map(|notation| notation.expr.clone())
-                    .collect();
-                group_info
-                    .param_group
-                    .param_notations
-                    .iter()
-                    .map(move |notation| NotationInfo {
-                        parameterizations: parameterizations.clone(),
-                        notation: (**notation).clone(),
-                    })
-            })
-            .collect();
+        let mut param_notations_rev = Vec::new();
+        for parameterization in &parameterizations {
+            Self::for_each_param_group_rev(
+                &TempStack::new_root(()),
+                &parameterization.items,
+                &mut |parameterizations, param_group| {
+                    let mut parameterizations_rev = Vec::new();
+                    for frame in parameterizations.iter() {
+                        for parameterization in frame.iter().rev() {
+                            Self::for_each_param_notation_rev(
+                                &parameterization.items,
+                                |_, notation| {
+                                    parameterizations_rev.push(notation.expr.clone());
+                                },
+                            );
+                        }
+                    }
+                    for notation in param_group.param_notations.iter().rev() {
+                        param_notations_rev.push(NotationInfo {
+                            parameterizations_rev: parameterizations_rev.clone(),
+                            notation: (**notation).clone(),
+                        });
+                    }
+                },
+            );
+        }
 
-        let (Some(item_header), _) =
-            NotationContext::with_open_sections(&self.open_sections, |notation_ctx| {
-                notation_ctx.with_item_iter(
-                    param_notations
-                        .iter()
-                        .map(|notation_info| NotationContextItem::Stored { notation_info }),
-                    |sub_ctx| {
-                        Self::parse_section_item_header(
-                            interface,
-                            section_kind,
-                            true,
-                            None,
-                            !parameterizations.is_empty(),
-                            sub_ctx,
-                            VarScopeDesc::Global,
-                        )
-                    },
-                )
-            })
-        else {
+        let notation_ctx = NotationContext::new_root(());
+        let notation_ctx = notation_ctx.new_frame(Either::Left(Either::Left(Either::Left(
+            Either::Right(&self.open_sections),
+        ))));
+        let sub_ctx = notation_ctx.new_frame(Either::Left(Either::Left(Either::Left(
+            Either::Left(&param_notations_rev),
+        ))));
+        let (Some(item_header), _) = Self::parse_section_item_header(
+            interface,
+            section_kind,
+            true,
+            None,
+            !parameterizations.is_empty(),
+            &sub_ctx,
+            NameScopeDesc::Global,
+        ) else {
             if !parameterizations.is_empty() {
                 let span = parameterizations.first().unwrap().span()
                     ..parameterizations.last().unwrap().span();
@@ -309,10 +336,10 @@ impl<
         }
 
         let out = match item_header.into_inner() {
-            SectionItemHeader::Section(kind, header) => {
+            SectionItemHeader::Section(header) => {
                 self.open_sections.push(OpenSection {
-                    kind,
-                    param_notations,
+                    kind: header.kind,
+                    param_notations_rev,
                 });
                 ParameterEvent::SectionStart(Parameterized {
                     parameterizations,
@@ -420,25 +447,23 @@ impl<'a> ParameterIdentifier<'a> {
         section_kind: &'static dyn SectionKind,
         require_semicolon_after_last: bool,
         separator: Option<char>,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
+        notation_ctx: &NotationContext<'a, Pos>,
+        scope: NameScopeDesc,
     ) -> SectionItems<'a, Pos> {
         let mut items = Vec::new();
         loop {
             let parameterizations = Self::parse_parameterizations(interface, section_kind);
-            let (item, finished) = notation_ctx.as_restricted().with_parameterizations(
+            let sub_ctx = notation_ctx.new_frame(Either::Left(Either::Left(Either::Right(
                 &parameterizations,
-                |sub_ctx| {
-                    Self::parse_section_item(
-                        interface,
-                        section_kind,
-                        require_semicolon_after_last,
-                        separator,
-                        !parameterizations.is_empty(),
-                        sub_ctx,
-                        scope,
-                    )
-                },
+            ))));
+            let (item, finished) = Self::parse_section_item(
+                interface,
+                section_kind,
+                require_semicolon_after_last,
+                separator,
+                !parameterizations.is_empty(),
+                &sub_ctx,
+                scope,
             );
             if item.is_some() || !parameterizations.is_empty() {
                 items.push(Parameterized {
@@ -467,8 +492,8 @@ impl<'a> ParameterIdentifier<'a> {
         require_semicolon_after_last: bool,
         separator: Option<char>,
         has_parameterizations: bool,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
+        notation_ctx: &NotationContext<'a, Pos>,
+        scope: NameScopeDesc,
     ) -> (Option<SectionItem<'a, Pos>>, bool) {
         let (item_header, finished) = Self::parse_section_item_header(
             interface,
@@ -483,17 +508,19 @@ impl<'a> ParameterIdentifier<'a> {
             return (None, finished);
         };
         match item_header.into_inner() {
-            SectionItemHeader::Section(kind, header) => {
-                let items =
-                    Self::parse_section_items(interface, kind, true, None, notation_ctx, scope);
+            SectionItemHeader::Section(header) => {
+                let items = Self::parse_section_items(
+                    interface,
+                    header.kind,
+                    true,
+                    None,
+                    notation_ctx,
+                    scope,
+                );
                 let end_token = interface.input().next().unwrap();
                 assert_eq!(*end_token, TokenEvent::ParenEnd);
                 (
-                    Some(SectionItem::Section(Section {
-                        kind,
-                        header,
-                        items,
-                    })),
+                    Some(SectionItem::Section(Section { header, items })),
                     finished,
                 )
             }
@@ -517,8 +544,8 @@ impl<'a> ParameterIdentifier<'a> {
         require_semicolon_after_last: bool,
         separator: Option<char>,
         has_parameterizations: bool,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
+        notation_ctx: &NotationContext<'a, Pos>,
+        scope: NameScopeDesc,
     ) -> (Option<WithSpan<SectionItemHeader<'a, Pos>, Pos>>, bool) {
         {
             let Some(start_token) = interface.input().look_ahead() else {
@@ -557,12 +584,10 @@ impl<'a> ParameterIdentifier<'a> {
                         let start_token = start_token.consume();
                         return (
                             Some(WithSpan::new(
-                                SectionItemHeader::Section(
-                                    subsection_kind,
-                                    SectionHeader {
-                                        prefixes: Vec::new(),
-                                    },
-                                ),
+                                SectionItemHeader::Section(SectionHeader {
+                                    kind: subsection_kind,
+                                    prefixes: Vec::new(),
+                                }),
                                 &start_token,
                             )),
                             false,
@@ -633,10 +658,10 @@ impl<'a> ParameterIdentifier<'a> {
                         }
                         return (
                             Some(WithSpan::new(
-                                SectionItemHeader::Section(
-                                    subsection_kind,
-                                    SectionHeader { prefixes },
-                                ),
+                                SectionItemHeader::Section(SectionHeader {
+                                    kind: subsection_kind,
+                                    prefixes,
+                                }),
                                 span,
                             )),
                             false,
@@ -674,7 +699,7 @@ impl<'a> ParameterIdentifier<'a> {
                     }
                 }
             }
-            at_expr_start = Self::token_tree_is_notation_delimiter(&token, param_kind)
+            at_expr_start = Self::token_tree_is_notation_delimiter(&token, param_kind).is_some()
                 || Self::token_tree_is_expr_prefix(&token);
             span.end = token.span().end;
             tokens.push(token);
@@ -708,7 +733,7 @@ impl<'a> ParameterIdentifier<'a> {
         interface: &mut IF,
         section_kind: &'static dyn SectionKind,
     ) -> Vec<WithSpan<Parameterization<'a, Pos>, Pos>> {
-        let empty_ctx = NotationContext::new(());
+        let empty_ctx = NotationContext::new_root(());
         let mut parameterizations = Vec::new();
         loop {
             let Some(start_token) = interface.input().look_ahead() else {
@@ -727,7 +752,7 @@ impl<'a> ParameterIdentifier<'a> {
                 false,
                 None,
                 &empty_ctx,
-                VarScopeDesc::Local,
+                NameScopeDesc::Param,
             );
             let end_token = interface.input().next().unwrap();
             assert_eq!(*end_token, TokenEvent::ParenEnd);
@@ -752,9 +777,9 @@ impl<'a> ParameterIdentifier<'a> {
         object_kind: &'static dyn ObjectKind,
     ) -> Vec<ObjectItem<'a, Pos>> {
         let separator = object_kind.separator();
-        let parameterization = object_kind.parameterization();
+        let parameterization_kind = object_kind.parameterization();
         let param_data_kind = object_kind.param_data_kind();
-        let empty_ctx = NotationContext::new(());
+        let empty_ctx = NotationContext::new_root(());
         let mut items = Vec::new();
         while let Some(token) = Self::parse_token_tree(interface, param_data_kind, false) {
             let mut param_tokens = Vec::new();
@@ -773,11 +798,11 @@ impl<'a> ParameterIdentifier<'a> {
                 if Self::token_tree_is_reserved_char(&token, separator) {
                     parameterization_items = Self::parse_section_items(
                         interface,
-                        parameterization,
+                        parameterization_kind,
                         false,
                         Some(separator),
                         &empty_ctx,
-                        VarScopeDesc::Field,
+                        NameScopeDesc::Field,
                     );
                     if !parameterization_items.is_empty() {
                         loop {
@@ -790,7 +815,7 @@ impl<'a> ParameterIdentifier<'a> {
                                     false,
                                     Some(separator),
                                     &empty_ctx,
-                                    VarScopeDesc::Instance,
+                                    NameScopeDesc::Instance,
                                 );
                                 if extra_part_items.is_empty() {
                                     break;
@@ -821,24 +846,20 @@ impl<'a> ParameterIdentifier<'a> {
                     param_tokens.push(token);
                 }
             }
-            let param = NotationContext::new(()).with_section_items(
-                &parameterization_items,
-                VarScopeDesc::Field,
-                |sub_ctx| {
-                    Self::create_param(
-                        interface,
-                        &mut param_tokens,
-                        object_kind.param_kind(),
-                        sub_ctx,
-                        VarScopeDesc::Instance,
-                    )
-                },
+            let parameterization = Parameterization {
+                kind: parameterization_kind,
+                items: parameterization_items,
+            };
+            let sub_ctx = empty_ctx.new_frame(Either::Left(Either::Right(&parameterization)));
+            let param = Self::create_param(
+                interface,
+                &mut param_tokens,
+                object_kind.param_kind(),
+                &sub_ctx,
+                NameScopeDesc::Instance,
             );
             items.push(ObjectItem {
-                parameterization: Parameterization {
-                    kind: parameterization,
-                    items: parameterization_items,
-                },
+                parameterization,
                 param,
                 extra_parts,
             })
@@ -869,15 +890,15 @@ impl<'a> ParameterIdentifier<'a> {
                     if let Some(parameterization) = data_kind.parameterization(paren) {
                         let param_kind = parameterization.param_kind();
                         if Self::contains_top_level_token(interface, |token| {
-                            Self::token_event_is_notation_delimiter(token, param_kind)
+                            Self::token_event_is_notation_delimiter(token, param_kind).is_some()
                         }) {
                             let items = Self::parse_section_items(
                                 interface,
                                 parameterization,
                                 false,
                                 None,
-                                &NotationContext::new(()),
-                                VarScopeDesc::Local,
+                                &NotationContext::new_root(()),
+                                NameScopeDesc::Local,
                             );
                             let end_token = interface.input().next().unwrap();
                             assert_eq!(*end_token, TokenEvent::ParenEnd);
@@ -949,12 +970,11 @@ impl<'a> ParameterIdentifier<'a> {
                                 format!("expected `.`"),
                             );
                         }
-                        let params = Self::create_params(
+                        let params = Self::create_mapping_params(
                             interface,
                             &mut param_tokens,
                             mapping_kind.param_kind(),
-                            &NotationContext::new(()),
-                            VarScopeDesc::Local,
+                            &NotationContext::new_root(()),
                         );
                         return Some(WithSpan::new(
                             TokenTree::Mapping(Mapping {
@@ -1012,12 +1032,11 @@ impl<'a> ParameterIdentifier<'a> {
                             };
                             expr_tokens = inner;
                         }
-                        let params = Self::create_params(
+                        let params = Self::create_mapping_params(
                             interface,
                             &mut expr_tokens,
                             mapping_kind.param_kind(),
-                            &NotationContext::new(()),
-                            VarScopeDesc::Local,
+                            &NotationContext::new_root(()),
                         );
                         let mapping_token = WithSpan::new(
                             TokenTree::Mapping(Mapping {
@@ -1052,13 +1071,13 @@ impl<'a> ParameterIdentifier<'a> {
         mut tokens: Tokens<'a, Pos>,
         param_kind: &'static dyn ParamKind,
         prefix_options: &Option<NotationPrefixOptions>,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
+        notation_ctx: &NotationContext<'a, Pos>,
+        scope: NameScopeDesc,
     ) -> ParamGroup<'a, Pos> {
         let mut param_notations = Vec::new();
 
         let notation_delimiter_found = tokens.iter().find_map(|token| {
-            if Self::token_tree_is_notation_delimiter(&token, param_kind) {
+            if Self::token_tree_is_notation_delimiter(&token, param_kind).is_some() {
                 Some(true)
             } else if matches!(
                 **token,
@@ -1073,7 +1092,9 @@ impl<'a> ParameterIdentifier<'a> {
             let mut token_iter = take(&mut tokens).into_iter();
             while let Some(token) = token_iter.next() {
                 let is_comma = matches!(*token, TokenTree::Token(Token::ReservedChar(',', _, _)));
-                if is_comma || Self::token_tree_is_notation_delimiter(&token, param_kind) {
+                let notation_delimiter_desc =
+                    Self::token_tree_is_notation_delimiter(&token, param_kind);
+                if is_comma || notation_delimiter_desc.is_some() {
                     if tokens.is_empty() {
                         interface.error(
                             token.span().start,
@@ -1087,6 +1108,7 @@ impl<'a> ParameterIdentifier<'a> {
                             prefix_options,
                             notation_ctx,
                             scope,
+                            notation_delimiter_desc.unwrap_or(None),
                         ) {
                             param_notations.push(notation);
                         }
@@ -1108,7 +1130,7 @@ impl<'a> ParameterIdentifier<'a> {
         }
     }
 
-    fn create_params<
+    fn create_mapping_params<
         Pos: Position,
         IF: ParserInterface<
             In = TokenEvent<'a>,
@@ -1120,9 +1142,8 @@ impl<'a> ParameterIdentifier<'a> {
         interface: &mut IF,
         tokens: &mut Tokens<'a, Pos>, // will be drained
         param_kind: &'static dyn ParamKind,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
-    ) -> Vec<Param<'a, Pos>> {
+        notation_ctx: &NotationContext<'a, Pos>,
+    ) -> Vec<MappingParam<'a, Pos>> {
         let mut params = Vec::new();
 
         let mut param_tokens = Vec::new();
@@ -1144,12 +1165,11 @@ impl<'a> ParameterIdentifier<'a> {
                         format!("superfluous comma"),
                     );
                 } else {
-                    params.push(Self::create_param(
+                    params.push(Self::create_mapping_param(
                         interface,
                         &mut param_tokens,
                         param_kind,
                         notation_ctx,
-                        scope,
                     ));
                 }
             } else {
@@ -1157,16 +1177,56 @@ impl<'a> ParameterIdentifier<'a> {
             }
         }
         if !param_tokens.is_empty() {
-            params.push(Self::create_param(
+            params.push(Self::create_mapping_param(
                 interface,
                 &mut param_tokens,
                 param_kind,
                 notation_ctx,
-                scope,
             ));
         }
 
         params
+    }
+
+    fn create_mapping_param<
+        Pos: Position,
+        IF: ParserInterface<
+            In = TokenEvent<'a>,
+            Out = ParameterEvent<'a, Pos>,
+            Pos = Pos,
+            Config = Config,
+        >,
+    >(
+        interface: &mut IF,
+        tokens: &mut Tokens<'a, Pos>, // will be drained
+        param_kind: &'static dyn ParamKind,
+        notation_ctx: &NotationContext<'a, Pos>,
+    ) -> MappingParam<'a, Pos> {
+        if let Some(token) = tokens.first() {
+            if matches!(**token, TokenTree::Mapping(_)) {
+                let token = tokens.remove(0);
+                let TokenTree::Mapping(mapping) = token.into_inner() else {
+                    unreachable!()
+                };
+                let sub_ctx = notation_ctx.new_frame(Either::Right(&mapping.params));
+                let mut param = Self::create_mapping_param(interface, tokens, param_kind, &sub_ctx);
+                param.mappings.insert(0, mapping);
+                return param;
+            }
+        }
+
+        let param = Self::create_param(
+            interface,
+            tokens,
+            param_kind,
+            notation_ctx,
+            NameScopeDesc::Param,
+        );
+        MappingParam {
+            mappings: Vec::new(),
+            notation: param.notation,
+            data: param.data,
+        }
     }
 
     fn create_param<
@@ -1181,15 +1241,18 @@ impl<'a> ParameterIdentifier<'a> {
         interface: &mut IF,
         tokens: &mut Tokens<'a, Pos>, // will be drained
         param_kind: &'static dyn ParamKind,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
+        notation_ctx: &NotationContext<'a, Pos>,
+        scope: NameScopeDesc,
     ) -> Param<'a, Pos> {
         let mut notation = Vec::new();
         let mut data = Vec::new();
+        let mut kind = None;
 
         let mut token_iter = tokens.drain(..);
         while let Some(token) = token_iter.next() {
-            if Self::token_tree_is_notation_delimiter(&token, param_kind) {
+            let notation_delimiter_desc =
+                Self::token_tree_is_notation_delimiter(&token, param_kind);
+            if let Some(kind_override) = notation_delimiter_desc {
                 if notation.is_empty() {
                     interface.error(
                         token.span().start,
@@ -1199,13 +1262,21 @@ impl<'a> ParameterIdentifier<'a> {
                 }
                 data.push(token);
                 data.extend(token_iter);
+                kind = kind_override;
                 break;
             }
             notation.push(token);
         }
 
         Param {
-            notation: Self::create_notation(interface, &mut notation, &None, notation_ctx, scope),
+            notation: Self::create_notation(
+                interface,
+                &mut notation,
+                &None,
+                notation_ctx,
+                scope,
+                kind,
+            ),
             data,
         }
     }
@@ -1222,16 +1293,10 @@ impl<'a> ParameterIdentifier<'a> {
         interface: &mut IF,
         tokens: &mut Tokens<'a, Pos>, // will be drained
         prefix_options: &Option<NotationPrefixOptions>,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
-        scope: VarScopeDesc,
+        notation_ctx: &NotationContext<'a, Pos>,
+        scope: NameScopeDesc,
+        mut kind: Option<NameKindDesc>,
     ) -> Option<WithSpan<Notation<'a>, Pos>> {
-        if tokens.is_empty() {
-            return None;
-        }
-
-        let span = (tokens.first().unwrap()..tokens.last().unwrap()).span();
-        interface.span_desc(span.clone(), SpanDesc::VarDef(scope));
-
         let mut prefixes = Vec::new();
         if let Some(prefix_options) = prefix_options {
             while let Some(dot_pos) = tokens.iter().position(|token| {
@@ -1261,6 +1326,21 @@ impl<'a> ParameterIdentifier<'a> {
             }
         }
 
+        if tokens.is_empty() {
+            return None;
+        }
+
+        if kind.is_some() && Self::is_notation_parameterized(notation_ctx) {
+            match kind {
+                Some(NameKindDesc::Value) => kind = Some(NameKindDesc::Function),
+                Some(NameKindDesc::Type) => kind = Some(NameKindDesc::GenericType),
+                _ => {}
+            }
+        }
+
+        let span = (tokens.first().unwrap()..tokens.last().unwrap()).span();
+        interface.span_desc(span.clone(), SpanDesc::NameDef(scope, kind));
+
         let expr = Self::create_notation_expr(interface, tokens, notation_ctx)?;
 
         if matches!(expr, NotationExpr::Param(_)) {
@@ -1272,7 +1352,15 @@ impl<'a> ParameterIdentifier<'a> {
             return None;
         }
 
-        Some(WithSpan::new(Notation { prefixes, expr }, span))
+        Some(WithSpan::new(
+            Notation {
+                prefixes,
+                expr,
+                scope,
+                kind,
+            },
+            span,
+        ))
     }
 
     fn create_notation_expr<
@@ -1286,7 +1374,7 @@ impl<'a> ParameterIdentifier<'a> {
     >(
         interface: &mut IF,
         tokens: &mut Tokens<'a, Pos>, // will be drained
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
+        notation_ctx: &NotationContext<'a, Pos>,
     ) -> Option<NotationExpr<'a>> {
         if tokens.len() > 1 {
             let span = (tokens.first().unwrap()..tokens.last().unwrap()).span();
@@ -1296,29 +1384,33 @@ impl<'a> ParameterIdentifier<'a> {
             while let Some(token) = token_iter.next() {
                 if let TokenTree::Mapping(mapping) = &*token {
                     let mut mapping_span = token.span();
+                    let mut target_span = mapping_span.clone();
                     let mut target_tokens: Tokens<'a, Pos> = token_iter.collect();
                     if let Some(last_token) = target_tokens.last() {
                         mapping_span.end = last_token.span().end;
+                        target_span =
+                            target_tokens.first().unwrap().span().start..mapping_span.end.clone();
                     }
                     for param in &mapping.params {
                         if !param.data.is_empty() {
-                            // TODO: This should actually be supported inside source parameters of
-                            // (non-notation) mappings. Need a place to move this data before
-                            // creating the notation.
                             interface.error(
                                 param.data.first().unwrap()..param.data.last().unwrap(),
                                 Some(ErrorKind::SyntaxError),
-                                format!("a mapping parameter within a notation cannot be followed by additional information"),
+                                format!("a mapping parameter within a notation cannot be followed by additional data"),
                             );
                         }
                     }
+                    let sub_ctx = notation_ctx.new_frame(Either::Right(&mapping.params));
                     if let Some(target_expr) =
-                        notation_ctx
-                            .as_restricted()
-                            .with_params(&mapping.params, |sub_ctx| {
-                                Self::create_notation_expr(interface, &mut target_tokens, sub_ctx)
-                            })
+                        Self::create_notation_expr(interface, &mut target_tokens, &sub_ctx)
                     {
+                        if target_expr.contains_param_ref(-(mapping.params.len() as isize)..0) {
+                            interface.error(
+                                target_span,
+                                Some(ErrorKind::SyntaxError),
+                                format!("a mapping target within a notation cannot reference a standalone mapping parameter"),
+                            );
+                        }
                         exprs.push(NotationExpr::Mapping(Box::new(MappingNotationExpr {
                             kind: mapping.kind,
                             params_len: mapping.params.len(),
@@ -1336,11 +1428,14 @@ impl<'a> ParameterIdentifier<'a> {
                     spans.push(token_span);
                 }
             }
-            while let Some((range, param_idx, param_scope)) =
-                notation_ctx.identify(interface, &exprs, span.clone())
+            while let Some((range, param_idx, param_scope, param_kind)) =
+                Self::identify_notation(interface, &exprs, span.clone(), notation_ctx)
             {
                 let param_span = spans[range.start].start.clone()..spans[range.end - 1].end.clone();
-                interface.span_desc(param_span.clone(), SpanDesc::VarRef(param_scope));
+                interface.span_desc(
+                    param_span.clone(),
+                    SpanDesc::NameRef(param_scope, param_kind),
+                );
                 if range == (0..exprs.len()) {
                     return Some(NotationExpr::Param(param_idx));
                 }
@@ -1371,14 +1466,17 @@ impl<'a> ParameterIdentifier<'a> {
     >(
         interface: &mut IF,
         token: WithSpan<TokenTree<'a, Pos>, Pos>,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
+        notation_ctx: &NotationContext<'a, Pos>,
     ) -> Option<NotationExpr<'a>> {
         let span = token.span();
         let expr = Self::create_token_notation_expr_impl(interface, token, notation_ctx)?;
-        if let Some((_, param_idx, param_scope)) =
-            notation_ctx.identify(interface, slice::from_ref(&expr), span.clone())
-        {
-            interface.span_desc(span, SpanDesc::VarRef(param_scope));
+        if let Some((_, param_idx, param_scope, param_kind)) = Self::identify_notation(
+            interface,
+            slice::from_ref(&expr),
+            span.clone(),
+            notation_ctx,
+        ) {
+            interface.span_desc(span, SpanDesc::NameRef(param_scope, param_kind));
             Some(NotationExpr::Param(param_idx))
         } else {
             Some(expr)
@@ -1396,7 +1494,7 @@ impl<'a> ParameterIdentifier<'a> {
     >(
         interface: &mut IF,
         token: WithSpan<TokenTree<'a, Pos>, Pos>,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
+        notation_ctx: &NotationContext<'a, Pos>,
     ) -> Option<NotationExpr<'a>> {
         let span = token.span();
         match token.into_inner() {
@@ -1496,7 +1594,7 @@ impl<'a> ParameterIdentifier<'a> {
         interface: &mut IF,
         token: WithSpan<TokenTree<'a, Pos>, Pos>,
         prefix_options: &NotationPrefixOptions,
-        notation_ctx: &NotationContext<'_, 'a, Pos>,
+        notation_ctx: &NotationContext<'a, Pos>,
     ) -> Option<WithSpan<NotationExpr<'a>, Pos>> {
         let span = token.span();
         let expr = if matches!(
@@ -1511,6 +1609,315 @@ impl<'a> ParameterIdentifier<'a> {
             Self::create_token_notation_expr(interface, token, notation_ctx)
         }?;
         Some(WithSpan::new(expr, span))
+    }
+
+    fn identify_notation<
+        Pos: Position,
+        IF: ParserInterface<
+            In = TokenEvent<'a>,
+            Out = ParameterEvent<'a, Pos>,
+            Pos = Pos,
+            Config = Config,
+        >,
+    >(
+        interface: &mut IF,
+        seq: &[NotationExpr<'a>],
+        span: Range<Pos>,
+        notation_ctx: &NotationContext<'a, Pos>,
+    ) -> Option<(Range<usize>, ParamIdx, NameScopeDesc, Option<NameKindDesc>)> {
+        let mut range = None;
+        let mut result = None;
+        Self::for_each_valid_notation(notation_ctx, |idx, notation, mapping_mismatches| {
+            if let Some(notation_range) = notation.expr.find_in_sequence(seq) {
+                if let Some(range) = &mut range {
+                    match range_overlap(range, &notation_range) {
+                        RangeOverlap::Disjoint | RangeOverlap::Exact | RangeOverlap::Narrowing => {}
+                        RangeOverlap::Widening => {
+                            *range = notation_range;
+                            result = Some((idx, notation.scope, notation.kind, mapping_mismatches));
+                        }
+                        RangeOverlap::Overlapping => {
+                            *range = notation_range;
+                            result = None;
+                        }
+                    }
+                } else {
+                    range = Some(notation_range);
+                    result = Some((idx, notation.scope, notation.kind, mapping_mismatches));
+                }
+            }
+        });
+        if let Some(range) = range {
+            if let Some((param_idx, param_scope, param_kind, mapping_mismatches)) = result {
+                let mut mapping_notation_ctx = notation_ctx;
+                let mut mapping_param_idx = 0;
+                for (mapping_mismatch_param_idx, mapping_mismatch_notation) in mapping_mismatches {
+                    'find_param: while let NotationContext::Frame { data, parent } =
+                        mapping_notation_ctx
+                    {
+                        let NotationContextFrame::Mapping(params) = data else {
+                            unreachable!();
+                        };
+                        for param in params.iter().rev() {
+                            mapping_param_idx -= 1;
+                            if mapping_param_idx == mapping_mismatch_param_idx {
+                                let msg = if let NotationExpr::Ident(name) =
+                                    mapping_mismatch_notation
+                                {
+                                    format!("mapping parameter name does not match parameterization; expected `{name}`")
+                                } else {
+                                    format!("mapping parameter notation does not match parameterization")
+                                };
+                                interface.warning(
+                                    param.notation.as_ref().unwrap().span(),
+                                    Some(WarningKind::SyntaxWarning),
+                                    msg,
+                                );
+                                break 'find_param;
+                            }
+                        }
+                        mapping_notation_ctx = &*parent;
+                    }
+                }
+                return Some((range, param_idx, param_scope, param_kind));
+            } else {
+                interface.error(
+                    span,
+                    Some(ErrorKind::SyntaxError),
+                    format!("ambiguous parameter references in notation"),
+                );
+            }
+        }
+        None
+    }
+
+    fn for_each_notation<Pos: Position>(
+        mut notation_ctx: &NotationContext<'a, Pos>,
+        mut f: impl FnMut(usize, ParameterizationNotations<'a, '_, Pos>, &Notation<'a>),
+    ) {
+        let mut cur_idx = 0;
+        while let NotationContext::Frame { data, parent } = notation_ctx {
+            match data {
+                NotationContextFrame::DirectRev(notation_infos_rev) => {
+                    for notation_info in &**notation_infos_rev {
+                        f(
+                            cur_idx,
+                            ParameterizationNotations::DirectRev(
+                                &notation_info.parameterizations_rev,
+                            ),
+                            &notation_info.notation,
+                        );
+                        cur_idx += 1;
+                    }
+                }
+                NotationContextFrame::OpenSections(open_sections) => {
+                    for open_section in open_sections.iter().rev() {
+                        for notation_info in &open_section.param_notations_rev {
+                            f(
+                                cur_idx,
+                                ParameterizationNotations::DirectRev(
+                                    &notation_info.parameterizations_rev,
+                                ),
+                                &notation_info.notation,
+                            );
+                            cur_idx += 1;
+                        }
+                    }
+                }
+                NotationContextFrame::Parameterizations(parameterizations) => {
+                    for parameterization in parameterizations.iter().rev() {
+                        Self::for_each_param_notation_rev(
+                            &parameterization.items,
+                            |parameterizations, notation| {
+                                f(
+                                    cur_idx,
+                                    ParameterizationNotations::Parameterizations(parameterizations),
+                                    notation,
+                                );
+                                cur_idx += 1;
+                            },
+                        );
+                    }
+                }
+                NotationContextFrame::Parameterization(parameterization) => {
+                    Self::for_each_param_notation_rev(
+                        &parameterization.items,
+                        |parameterizations, notation| {
+                            f(
+                                cur_idx,
+                                ParameterizationNotations::Parameterizations(parameterizations),
+                                notation,
+                            );
+                            cur_idx += 1;
+                        },
+                    );
+                }
+                NotationContextFrame::Mapping(params) => {
+                    for param in params.iter().rev() {
+                        if let Some(notation) = &param.notation {
+                            f(
+                                cur_idx,
+                                ParameterizationNotations::Mappings(&param.mappings),
+                                notation,
+                            );
+                        }
+                        cur_idx += 1;
+                    }
+                }
+            }
+            notation_ctx = &*parent;
+        }
+    }
+
+    fn for_each_valid_notation<Pos: Position>(
+        notation_ctx: &NotationContext<'a, Pos>,
+        mut f: impl FnMut(isize, &Notation<'a>, Vec<(isize, NotationExpr<'a>)>),
+    ) {
+        let mapping_len = Self::mapping_len(notation_ctx);
+        Self::for_each_notation(notation_ctx, |idx, parameterizations, notation| {
+            if idx < mapping_len {
+                f(!(idx as isize), notation, Vec::new());
+            } else {
+                let mut parameterizations_len = 0;
+                let mut mapping_mismatches = Vec::new();
+                let mut mapping_notation_ctx = notation_ctx;
+                let mut mapping_notation_param_idx = 0;
+                parameterizations.for_each_notation_rev(|notation| {
+                    loop {
+                        let NotationContext::Frame { data, parent } = mapping_notation_ctx else {
+                            break;
+                        };
+                        let NotationContextFrame::Mapping(params) = data else {
+                            break;
+                        };
+                        if mapping_notation_param_idx < params.len() {
+                            mapping_notation_param_idx += 1;
+                            if let Some(notation) = notation {
+                                let param = &params[params.len() - mapping_notation_param_idx];
+                                if let Some(param_notation) = &param.notation {
+                                    if param_notation.expr != *notation {
+                                        mapping_mismatches.push((
+                                            !(parameterizations_len as isize),
+                                            notation.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                            break;
+                        } else {
+                            mapping_notation_ctx = parent;
+                            mapping_notation_param_idx = 0;
+                        }
+                    }
+                    parameterizations_len += 1;
+                });
+                if parameterizations_len == mapping_len {
+                    f(!(idx as isize), notation, mapping_mismatches);
+                }
+            }
+        });
+    }
+
+    fn mapping_len<Pos: Position>(mut notation_ctx: &NotationContext<'a, Pos>) -> usize {
+        let mut result = 0;
+        while let NotationContext::Frame { data, parent } = notation_ctx {
+            let NotationContextFrame::Mapping(params) = data else {
+                break;
+            };
+            result += params.len();
+            notation_ctx = &*parent;
+        }
+        result
+    }
+
+    fn is_notation_parameterized<Pos: Position>(
+        mut notation_ctx: &NotationContext<'a, Pos>,
+    ) -> bool {
+        while let NotationContext::Frame { data, parent } = notation_ctx {
+            match data {
+                NotationContextFrame::DirectRev(notation_infos_rev) => {
+                    if !notation_infos_rev.is_empty() {
+                        return true;
+                    }
+                }
+                NotationContextFrame::OpenSections(open_sections) => {
+                    if open_sections
+                        .iter()
+                        .any(|open_section| !open_section.param_notations_rev.is_empty())
+                    {
+                        return true;
+                    }
+                }
+                NotationContextFrame::Parameterizations(parameterizations) => {
+                    for parameterization in parameterizations.iter().rev() {
+                        let mut result = false;
+                        Self::for_each_param_notation_rev(&parameterization.items, |_, _| {
+                            result = true;
+                        });
+                        if result {
+                            return true;
+                        }
+                    }
+                }
+                NotationContextFrame::Parameterization(parameterization) => {
+                    let mut result = false;
+                    Self::for_each_param_notation_rev(&parameterization.items, |_, _| {
+                        result = true;
+                    });
+                    if result {
+                        return true;
+                    }
+                }
+                NotationContextFrame::Mapping(params) => {
+                    if !params.is_empty() {
+                        return true;
+                    }
+                }
+            }
+            notation_ctx = &*parent;
+        }
+        false
+    }
+
+    fn for_each_param_group_rev<Pos: Position>(
+        parameterizations: &TempStack<(), TempRef<[WithSpan<Parameterization<'a, Pos>, Pos>]>>,
+        section_items: &[Parameterized<'a, Pos, SectionItem<'a, Pos>>],
+        f: &mut impl FnMut(
+            &TempStack<(), TempRef<[WithSpan<Parameterization<'a, Pos>, Pos>]>>,
+            &ParamGroup<'a, Pos>,
+        ),
+    ) {
+        for item in section_items.iter().rev() {
+            let sub_parameterizations = parameterizations.new_frame(&item.parameterizations);
+            if let Some(data) = &item.data {
+                match data {
+                    SectionItem::Section(section) => {
+                        Self::for_each_param_group_rev(&sub_parameterizations, &section.items, f)
+                    }
+                    SectionItem::ParamGroup(param_group) => {
+                        f(&sub_parameterizations, param_group);
+                    }
+                }
+            }
+        }
+    }
+
+    fn for_each_param_notation_rev<Pos: Position>(
+        section_items: &[Parameterized<'a, Pos, SectionItem<'a, Pos>>],
+        mut f: impl FnMut(
+            &TempStack<(), TempRef<[WithSpan<Parameterization<'a, Pos>, Pos>]>>,
+            &Notation<'a>,
+        ),
+    ) {
+        Self::for_each_param_group_rev(
+            &TempStack::new_root(()),
+            section_items,
+            &mut |parameterizations, param_group| {
+                for notation in param_group.param_notations.iter().rev() {
+                    f(parameterizations, notation);
+                }
+            },
+        )
     }
 
     fn skip_until_top_level_token<
@@ -1613,7 +2020,7 @@ impl<'a> ParameterIdentifier<'a> {
     fn token_tree_is_notation_delimiter<Pos: Position>(
         token: &TokenTree<'a, Pos>,
         param_kind: &'static dyn ParamKind,
-    ) -> bool {
+    ) -> Option<NotationDelimiterDesc> {
         match token {
             TokenTree::Token(Token::Keyword(keyword)) => {
                 param_kind.keyword_is_notation_delimiter(keyword)
@@ -1622,14 +2029,14 @@ impl<'a> ParameterIdentifier<'a> {
                 param_kind.identifier_is_notation_delimiter(identifier)
             }
             TokenTree::Paren(paren, _) => param_kind.paren_is_notation_delimiter(*paren),
-            _ => false,
+            _ => None,
         }
     }
 
     fn token_event_is_notation_delimiter(
         token: &TokenEvent<'a>,
         param_kind: &'static dyn ParamKind,
-    ) -> bool {
+    ) -> Option<NotationDelimiterDesc> {
         match token {
             TokenEvent::Token(Token::Keyword(keyword)) => {
                 param_kind.keyword_is_notation_delimiter(keyword)
@@ -1638,7 +2045,7 @@ impl<'a> ParameterIdentifier<'a> {
                 param_kind.identifier_is_notation_delimiter(identifier)
             }
             TokenEvent::ParenStart(paren) => param_kind.paren_is_notation_delimiter(*paren),
-            _ => false,
+            _ => None,
         }
     }
 
@@ -1656,225 +2063,58 @@ impl<'a> ParameterIdentifier<'a> {
 #[derive(MemSerializable)]
 struct OpenSection<'a> {
     kind: &'static dyn SectionKind,
-    param_notations: Vec<NotationInfo<'a>>,
+    param_notations_rev: Vec<NotationInfo<'a>>,
 }
 
 enum SectionItemHeader<'a, Pos: Position> {
-    Section(&'static dyn SectionKind, SectionHeader<'a, Pos>),
+    Section(SectionHeader<'a, Pos>),
     ParamGroup(ParamGroup<'a, Pos>),
 }
 
-const MAX_EXPECTED_SECTION_DEPTH: usize = 4;
-
-pub struct ParamGroupIter<'b, 'a, Pos: Position> {
-    headers: SmallVec<[&'b SectionHeader<'a, Pos>; MAX_EXPECTED_SECTION_DEPTH]>,
-    iters: SmallVec<
-        [slice::Iter<'b, Parameterized<'a, Pos, SectionItem<'a, Pos>>>; MAX_EXPECTED_SECTION_DEPTH],
-    >,
+#[derive(TempRepr)]
+enum NotationContextFrame<'a, Pos: Position> {
+    DirectRev(TempRef<[NotationInfo<'a>]>),
+    OpenSections(TempRef<[OpenSection<'a>]>),
+    Parameterizations(TempRef<[WithSpan<Parameterization<'a, Pos>, Pos>]>),
+    Parameterization(TempRef<Parameterization<'a, Pos>>),
+    Mapping(TempRef<[MappingParam<'a, Pos>]>),
 }
 
-impl<'b, 'a, Pos: Position> ParamGroupIter<'b, 'a, Pos> {
-    pub fn new(items: &'b [Parameterized<'a, Pos, SectionItem<'a, Pos>>]) -> Self {
-        ParamGroupIter {
-            headers: SmallVec::new(),
-            iters: smallvec![items.iter()],
-        }
-    }
+type NotationContext<'a, Pos> = TempStack<(), NotationContextFrame<'a, Pos>>;
+
+#[derive(Clone, Copy)]
+enum ParameterizationNotations<'a, 'b, Pos: Position> {
+    DirectRev(&'b [NotationExpr<'a>]),
+    Parameterizations(&'b TempStack<(), TempRef<[WithSpan<Parameterization<'a, Pos>, Pos>]>>),
+    Mappings(&'b [Mapping<'a, Pos>]),
 }
 
-impl<'b, 'a, Pos: Position> Iterator for ParamGroupIter<'b, 'a, Pos> {
-    type Item = ParamGroupInfo<'b, 'a, Pos>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(iter) = self.iters.last_mut() {
-            if let Some(item) = iter.next() {
-                if let Some(data) = &item.data {
-                    match data {
-                        SectionItem::Section(section) => {
-                            self.headers.push(&section.header);
-                            self.iters.push(section.items.iter());
-                        }
-                        SectionItem::ParamGroup(param_group) => {
-                            return Some(ParamGroupInfo {
-                                headers: self.headers.clone(),
-                                parameterizations: &item.parameterizations,
-                                param_group,
-                            });
-                        }
-                    }
-                }
-            } else {
-                self.iters.pop();
-                self.headers.pop();
-            }
-        }
-        None
-    }
-}
-
-impl<'b, 'a, Pos: Position> FusedIterator for ParamGroupIter<'b, 'a, Pos> {}
-
-pub struct ParamGroupInfo<'b, 'a, Pos: Position> {
-    pub headers: SmallVec<[&'b SectionHeader<'a, Pos>; MAX_EXPECTED_SECTION_DEPTH]>,
-    pub parameterizations: &'b [WithSpan<Parameterization<'a, Pos>, Pos>],
-    pub param_group: &'b ParamGroup<'a, Pos>,
-}
-
-enum NotationContextItem<'b, 'a, Pos: Position> {
-    Stored {
-        notation_info: &'b NotationInfo<'a>,
-    },
-    Referenced {
-        headers: SmallVec<[&'b SectionHeader<'a, Pos>; MAX_EXPECTED_SECTION_DEPTH]>,
-        parameterizations: &'b [WithSpan<Parameterization<'a, Pos>, Pos>],
-        notation: &'b Notation<'a>,
-        scope: VarScopeDesc,
-    },
-}
-
-impl<'b, 'a, Pos: Position> NotationContextItem<'b, 'a, Pos> {
-    fn notation(&self) -> &Notation<'a> {
+impl<'a, 'b, Pos: Position> ParameterizationNotations<'a, 'b, Pos> {
+    fn for_each_notation_rev(&self, mut f: impl FnMut(Option<&NotationExpr<'a>>)) {
         match self {
-            NotationContextItem::Stored { notation_info } => &notation_info.notation,
-            NotationContextItem::Referenced { notation, .. } => notation,
-        }
-    }
-
-    fn scope(&self) -> VarScopeDesc {
-        match self {
-            NotationContextItem::Stored { .. } => VarScopeDesc::Local,
-            NotationContextItem::Referenced { scope, .. } => *scope,
-        }
-    }
-}
-
-type NotationContext<'b, 'a, Pos> = RefStack<NotationContextItem<'b, 'a, Pos>>;
-
-impl<'b, 'a, Pos: Position> NotationContext<'b, 'a, Pos> {
-    fn with_open_sections<R>(
-        open_sections: &'b [OpenSection<'a>],
-        f: impl FnOnce(&Self) -> R,
-    ) -> R {
-        NotationContext::new(()).with_item_iter(
-            open_sections
-                .iter()
-                .flat_map(|open_section| &open_section.param_notations)
-                .map(|notation_info| NotationContextItem::Stored { notation_info }),
-            f,
-        )
-    }
-
-    fn with_section_items<R>(
-        &self,
-        items: &'b [Parameterized<'a, Pos, SectionItem<'a, Pos>>],
-        scope: VarScopeDesc,
-        f: impl FnOnce(&Self) -> R,
-    ) -> R {
-        self.with_item_iter(
-            ParamGroupIter::new(items).flat_map(|group_info| {
-                group_info
-                    .param_group
-                    .param_notations
-                    .iter()
-                    .map(move |notation| NotationContextItem::Referenced {
-                        headers: group_info.headers.clone(),
-                        parameterizations: group_info.parameterizations,
-                        notation,
-                        scope,
-                    })
-            }),
-            f,
-        )
-    }
-
-    fn with_parameterizations<R>(
-        &self,
-        parameterizations: &'b [WithSpan<Parameterization<'a, Pos>, Pos>],
-        f: impl FnOnce(&Self) -> R,
-    ) -> R {
-        if let Some((parameterization, rest)) = parameterizations.split_first() {
-            self.with_section_items(&parameterization.items, VarScopeDesc::Local, |sub_ctx| {
-                sub_ctx.with_parameterizations(rest, f)
-            })
-        } else {
-            f(self)
-        }
-    }
-
-    fn with_params<R>(&self, params: &'b [Param<'a, Pos>], f: impl FnOnce(&Self) -> R) -> R {
-        self.with_item_iter(
-            params
-                .iter()
-                .filter_map(|param| param.notation.as_ref())
-                .map(|notation| NotationContextItem::Referenced {
-                    headers: SmallVec::new(),
-                    parameterizations: &[],
-                    notation,
-                    scope: VarScopeDesc::Local,
-                }),
-            f,
-        )
-    }
-
-    fn as_restricted<'c>(&self) -> &NotationContext<'c, 'a, Pos>
-    where
-        'b: 'c,
-    {
-        // SAFETY: Existing items in the context can only be accessed via shared references, making
-        // the lifetime covariant (in particular regarding the `SmallVec` in `NotationContextItem`).
-        unsafe { &*(self as *const _ as *const _) }
-    }
-
-    fn identify<
-        IF: ParserInterface<
-            In = TokenEvent<'a>,
-            Out = ParameterEvent<'a, Pos>,
-            Pos = Pos,
-            Config = Config,
-        >,
-    >(
-        &self,
-        interface: &mut IF,
-        seq: &[NotationExpr<'a>],
-        span: Range<Pos>,
-    ) -> Option<(Range<usize>, ParamIdx, VarScopeDesc)> {
-        let mut range = None;
-        let mut result = None;
-        let mut cur_idx: isize = 0;
-        for item in self {
-            let notation = item.notation();
-            cur_idx -= 1;
-            if let Some(notation_range) = notation.expr.find_in_sequence(seq) {
-                if let Some(range) = &mut range {
-                    match range_overlap(range, &notation_range) {
-                        RangeOverlap::Disjoint | RangeOverlap::Exact | RangeOverlap::Narrowing => {}
-                        RangeOverlap::Widening => {
-                            *range = notation_range;
-                            result = Some((cur_idx, item.scope()));
-                        }
-                        RangeOverlap::Overlapping => {
-                            *range = notation_range;
-                            result = None;
-                        }
-                    }
-                } else {
-                    range = Some(notation_range);
-                    result = Some((cur_idx, item.scope()));
+            ParameterizationNotations::DirectRev(notations_rev) => {
+                for notation in *notations_rev {
+                    f(Some(notation));
                 }
             }
-        }
-        if let Some(range) = range {
-            if let Some((param_idx, param_scope)) = result {
-                return Some((range, param_idx, param_scope));
-            } else {
-                interface.error(
-                    span,
-                    Some(ErrorKind::SyntaxError),
-                    format!("ambiguous parameter references in notation"),
-                );
+            ParameterizationNotations::Parameterizations(parameterizations) => {
+                for frame in parameterizations.iter() {
+                    for parameterization in frame.iter().rev() {
+                        ParameterIdentifier::for_each_param_notation_rev(
+                            &parameterization.items,
+                            |_, notation| f(Some(&notation.expr)),
+                        );
+                    }
+                }
+            }
+            ParameterizationNotations::Mappings(mappings) => {
+                for mapping in mappings.iter().rev() {
+                    for param in mapping.params.iter().rev() {
+                        f(param.notation.as_ref().map(|notation| &notation.expr));
+                    }
+                }
             }
         }
-        None
     }
 }
 
@@ -2352,6 +2592,10 @@ mod tests {
         print_parameter_identifier_output(
             "%slate \"test\"; [[c : C; d : D] b(c,d) : B] λ c. λ d. b(c,d) : A;",
         );
+        print_parameter_identifier_output(
+            // Make sure that b(-2,-1) is not misidentified as b(c,d).
+            "%slate \"test\"; [[c : C; d : D] b(c,d) : B; [d : D] e(d) : E] λ d. b(e(d),d) : A;",
+        );
         print_parameter_identifier_output("%slate \"test\"; [[c : C] b(c) : B] a(c ↦ b(c)) : A;");
         print_parameter_identifier_output(
             "%slate \"test\"; [[c : C; d : D] b(c,d) : B] a((c,d) ↦ b(c,d)) : A;",
@@ -2360,7 +2604,7 @@ mod tests {
             "%slate \"test\"; [[c : C; d : D] b(c,d) : B] a(c ↦ d ↦ b(c,d)) : A;",
         );
         print_parameter_identifier_output(
-            "%slate \"test\"; [[c : C] { [d : D] b(c,d) : B; } e(c) : E] a(c ↦ (d ↦ b(c,d), e(c))) : A;",
+            "%slate \"test\"; [[c : C] { [d : D] b(c,d) : B; e(c) : E }] a(c ↦ (d ↦ b(c,d), e(c))) : A;",
         );
         print_parameter_identifier_output(
             "%slate \"test\"; [[d : D] b(d),c(d) : B] a(d ↦ b(d), d ↦ c(d)) : A;",

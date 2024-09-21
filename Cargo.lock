@@ -32,6 +32,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "either"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60b1af1c220855b6ceac025d3f6ecdd2b7c4894bfe9cd9bda4fbb4bc7c0d4cf0"
+
+[[package]]
 name = "itoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -40,17 +46,19 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 [[package]]
 name = "lang-def"
 version = "0.1.0"
-source = "git+https://github.com/SReichelt/lang-tools.git#91e0fd93274ebe8605ec4934afda1d3a980edf5c"
+source = "git+https://github.com/SReichelt/lang-tools.git#906623d8c91d49707323671ed1712e2b453666d9"
 dependencies = [
  "compact_str",
+ "lang-def-derive",
  "nonminmax",
  "smallvec",
+ "temp-inst",
 ]
 
 [[package]]
 name = "lang-def-derive"
 version = "0.1.0"
-source = "git+https://github.com/SReichelt/lang-tools.git#91e0fd93274ebe8605ec4934afda1d3a980edf5c"
+source = "git+https://github.com/SReichelt/lang-tools.git#906623d8c91d49707323671ed1712e2b453666d9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -60,7 +68,7 @@ dependencies = [
 [[package]]
 name = "lang-test"
 version = "0.1.0"
-source = "git+https://github.com/SReichelt/lang-tools.git#91e0fd93274ebe8605ec4934afda1d3a980edf5c"
+source = "git+https://github.com/SReichelt/lang-tools.git#906623d8c91d49707323671ed1712e2b453666d9"
 dependencies = [
  "lang-def",
 ]
@@ -81,9 +89,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.36"
+version = "1.0.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa76aaf39101c457836aec0ce2316dbdc3ab723cdda1c6bd4e6ad4208acaca7"
+checksum = "b5b9d34b8991d19d98081b46eacdd8eb58c6f2b201139f7c5f643cc155a633af"
 dependencies = [
  "proc-macro2",
 ]
@@ -96,18 +104,19 @@ checksum = "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6"
 
 [[package]]
 name = "ryu"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e86697c916019a8588c99b5fac3cead74ec0b4b819707a682fd4d23fa0ce1ba1"
+checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "slate-lang-def"
 version = "0.1.0"
 dependencies = [
+ "either",
  "lang-def",
- "lang-def-derive",
  "lang-test",
- "smallvec",
+ "temp-inst",
+ "temp-stack",
 ]
 
 [[package]]
@@ -124,9 +133,9 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "syn"
-version = "2.0.74"
+version = "2.0.77"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fceb41e3d546d0bd83421d3409b1460cc7444cd389341a4c880fe7a042cb3d7"
+checksum = "9f35bcdf61fd8e7be6caf75f429fdca8beb3ed76584befb503b1569faee373ed"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -134,7 +143,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "temp-inst"
+version = "1.0.0"
+source = "git+https://github.com/SReichelt/temp-inst.git#eef1bff82ffce6d351e4ffc0498f95ff04c18bfa"
+dependencies = [
+ "either",
+ "temp-inst-derive",
+]
+
+[[package]]
+name = "temp-inst-derive"
+version = "1.0.1"
+source = "git+https://github.com/SReichelt/temp-inst.git#eef1bff82ffce6d351e4ffc0498f95ff04c18bfa"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "temp-stack"
+version = "1.0.1"
+source = "git+https://github.com/SReichelt/temp-inst.git#eef1bff82ffce6d351e4ffc0498f95ff04c18bfa"
+dependencies = [
+ "either",
+ "temp-inst",
+]
+
+[[package]]
 name = "unicode-ident"
-version = "1.0.12"
+version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
+checksum = "e91b56cd4cadaeb79bbf1a5645f6b4f8dc5bde8834ad5894a8db35fda9efa1fe"

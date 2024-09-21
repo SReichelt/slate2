@@ -210,11 +210,13 @@ The process of analyzing a notation expression abstracts over the following deta
 
 * For every mapping within the notation expression, each source parameter is abstracted as follows.
   * Only the notation of the source parameter is considered part of the surrounding notation; the
-    tokens following the notation are ignored.
-  * If the source parameter does not include any mapping symbols, then it may be replaced with an
+    tokens following the notation are not.
+  * If the source parameter does not contain any mapping symbols, then it may be replaced with an
     arbitrary notation expression when substituting the parameter within the target accordingly.
   * Otherwise, this only applies to the target(s) of mapping symbol(s) within the source parameter,
-    taking into account all other abstraction rules.
+    taking into account all other abstraction rules. (In particular, the source of a mapping within
+    the source parameter may again be replaced with another expression while performing the same
+    replacement in the target.)
 
 * For an infix mapping with a single parameter, the variants with and without parentheses around the
   source are considered equivalent.
