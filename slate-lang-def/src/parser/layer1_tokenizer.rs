@@ -609,53 +609,42 @@ impl IdentifierContent {
 
 #[cfg(test)]
 mod tests {
-    use lang_test::parser::*;
+    use lang_def::parser::{DiagnosticSeverity::*, ErrorKind::*};
+    use lang_test::parser::{ExpectedFragmentContent::*, *};
 
-    use super::*;
+    use super::{Token::*, TokenIsolation::*, *};
 
     fn assert_tokenizer_output(expected_fragments: Vec<ExpectedFragment<Token>>) {
         assert_parser_output::<TokenizerConfig>(expected_fragments, TokenizerConfig)
     }
 
     fn blank(input: &str) -> ExpectedFragment<Token> {
-        (ExpectedFragmentContent::Input(input), None)
+        (Input(input), None)
     }
 
     fn block_comment(content: ExpectedFragmentContent) -> ExpectedFragment<Token> {
         (
-            ExpectedFragmentContent::WithDesc(
-                Box::new(block_comment_content(content)),
-                SpanDesc::Comment,
-            ),
+            WithDesc(Box::new(block_comment_content(content)), SpanDesc::Comment),
             None,
         )
     }
 
     fn block_comment_content(content: ExpectedFragmentContent) -> ExpectedFragmentContent {
-        ExpectedFragmentContent::Seq(vec![
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Input("/*")),
-                SpanDesc::ParenStart,
-            ),
+        Seq(vec![
+            WithDesc(Box::new(Input("/*")), SpanDesc::ParenStart),
             content,
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Input("*/")),
-                SpanDesc::ParenEnd,
-            ),
+            WithDesc(Box::new(Input("*/")), SpanDesc::ParenEnd),
         ])
     }
 
     fn unterminated_block_comment(content: ExpectedFragmentContent) -> ExpectedFragment<Token> {
         (
-            ExpectedFragmentContent::WithDiag(
-                Box::new(ExpectedFragmentContent::WithDesc(
+            WithDiag(
+                Box::new(WithDesc(
                     Box::new(unterminated_block_comment_content(content)),
                     SpanDesc::Comment,
                 )),
-                (
-                    DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                    "unterminated comment".into(),
-                ),
+                (Error(Some(SyntaxError)), "unterminated comment".into()),
             ),
             None,
         )
@@ -664,31 +653,22 @@ mod tests {
     fn unterminated_block_comment_content(
         content: ExpectedFragmentContent,
     ) -> ExpectedFragmentContent {
-        ExpectedFragmentContent::Seq(vec![
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Input("/*")),
-                SpanDesc::ParenStart,
-            ),
+        Seq(vec![
+            WithDesc(Box::new(Input("/*")), SpanDesc::ParenStart),
             content,
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Empty),
-                SpanDesc::ParenEnd,
-            ),
+            WithDesc(Box::new(Empty), SpanDesc::ParenEnd),
         ])
     }
 
     fn line_comment(content: ExpectedFragmentContent) -> ExpectedFragment<Token> {
         (
-            ExpectedFragmentContent::WithDesc(
-                Box::new(line_comment_content(content)),
-                SpanDesc::Comment,
-            ),
+            WithDesc(Box::new(line_comment_content(content)), SpanDesc::Comment),
             None,
         )
     }
 
     fn line_comment_content(content: ExpectedFragmentContent) -> ExpectedFragmentContent {
-        ExpectedFragmentContent::Seq(vec![ExpectedFragmentContent::Input("//"), content])
+        Seq(vec![Input("//"), content])
     }
 
     fn reserved_char(
@@ -700,52 +680,43 @@ mod tests {
         let ch = iter.next().unwrap();
         assert!(iter.next().is_none());
         (
-            ExpectedFragmentContent::Input(input),
-            Some(Token::ReservedChar(ch, pre_isolation, post_isolation)),
+            Input(input),
+            Some(ReservedChar(ch, pre_isolation, post_isolation)),
         )
     }
 
     fn keyword(keyword: &str) -> ExpectedFragment<Token> {
         (
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Input(keyword)),
-                SpanDesc::Keyword,
-            ),
-            Some(Token::Keyword(keyword.into())),
+            WithDesc(Box::new(Input(keyword)), SpanDesc::Keyword),
+            Some(Keyword(keyword.into())),
         )
     }
 
     fn number(number: &str) -> ExpectedFragment<Token> {
         (
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Input(number)),
-                SpanDesc::Number,
-            ),
-            Some(Token::Number(number.into())),
+            WithDesc(Box::new(Input(number)), SpanDesc::Number),
+            Some(Number(number.into())),
         )
     }
 
     fn unquoted_identifier(name: &str) -> ExpectedFragment<Token> {
         (
-            ExpectedFragmentContent::Input(name),
-            Some(Token::Ident(name.into(), IdentifierType::Unquoted)),
+            Input(name),
+            Some(Ident(name.into(), IdentifierType::Unquoted)),
         )
     }
 
     fn quoted_identifier<'a>(input: &'a str, name: &'a str) -> ExpectedFragment<'a, Token<'a>> {
         (
-            ExpectedFragmentContent::Input(input),
-            Some(Token::Ident(name.into(), IdentifierType::Quoted)),
+            Input(input),
+            Some(Ident(name.into(), IdentifierType::Quoted)),
         )
     }
 
     fn string<'a>(input: &'a str, content: &'a str) -> ExpectedFragment<'a, Token<'a>> {
         (
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Input(input)),
-                SpanDesc::String,
-            ),
-            Some(Token::String(input.chars().next().unwrap(), content.into())),
+            WithDesc(Box::new(Input(input)), SpanDesc::String),
+            Some(String(input.chars().next().unwrap(), content.into())),
         )
     }
 
@@ -755,253 +726,128 @@ mod tests {
         assert_tokenizer_output(vec![blank(" ")]);
         assert_tokenizer_output(vec![blank("\t")]);
         assert_tokenizer_output(vec![blank(" \n\t\r\n ")]);
-        assert_tokenizer_output(vec![block_comment(ExpectedFragmentContent::Empty)]);
-        assert_tokenizer_output(vec![block_comment(ExpectedFragmentContent::Input(" "))]);
-        assert_tokenizer_output(vec![
-            blank(" "),
-            block_comment(ExpectedFragmentContent::Input(" ")),
-            blank(" "),
-        ]);
-        assert_tokenizer_output(vec![block_comment(ExpectedFragmentContent::Input("*"))]);
-        assert_tokenizer_output(vec![block_comment(ExpectedFragmentContent::Input(" // "))]);
-        assert_tokenizer_output(vec![block_comment(block_comment_content(
-            ExpectedFragmentContent::Empty,
-        ))]);
-        assert_tokenizer_output(vec![block_comment(block_comment_content(
-            ExpectedFragmentContent::Input(" "),
-        ))]);
-        assert_tokenizer_output(vec![block_comment(ExpectedFragmentContent::Seq(vec![
-            ExpectedFragmentContent::Input(" "),
-            block_comment_content(ExpectedFragmentContent::Input(" ")),
-            ExpectedFragmentContent::Input(" "),
+        assert_tokenizer_output(vec![block_comment(Empty)]);
+        assert_tokenizer_output(vec![block_comment(Input(" "))]);
+        assert_tokenizer_output(vec![blank(" "), block_comment(Input(" ")), blank(" ")]);
+        assert_tokenizer_output(vec![block_comment(Input("*"))]);
+        assert_tokenizer_output(vec![block_comment(Input(" // "))]);
+        assert_tokenizer_output(vec![block_comment(block_comment_content(Empty))]);
+        assert_tokenizer_output(vec![block_comment(block_comment_content(Input(" ")))]);
+        assert_tokenizer_output(vec![block_comment(Seq(vec![
+            Input(" "),
+            block_comment_content(Input(" ")),
+            Input(" "),
         ]))]);
         assert_tokenizer_output(vec![
             blank(" "),
-            block_comment(ExpectedFragmentContent::Input(" abc \n def ")),
+            block_comment(Input(" abc \n def ")),
             blank(" "),
-            block_comment(ExpectedFragmentContent::Input(" ghi ")),
+            block_comment(Input(" ghi ")),
             blank(" "),
         ]);
-        assert_tokenizer_output(vec![
-            block_comment(ExpectedFragmentContent::Empty),
-            unquoted_identifier("*/"),
-        ]);
-        assert_tokenizer_output(vec![unterminated_block_comment(
-            ExpectedFragmentContent::Empty,
-        )]);
-        assert_tokenizer_output(vec![unterminated_block_comment(
-            ExpectedFragmentContent::Input("/"),
-        )]);
-        assert_tokenizer_output(vec![unterminated_block_comment(
-            ExpectedFragmentContent::Input("/ "),
-        )]);
+        assert_tokenizer_output(vec![block_comment(Empty), unquoted_identifier("*/")]);
+        assert_tokenizer_output(vec![unterminated_block_comment(Empty)]);
+        assert_tokenizer_output(vec![unterminated_block_comment(Input("/"))]);
+        assert_tokenizer_output(vec![unterminated_block_comment(Input("/ "))]);
         assert_tokenizer_output(vec![unterminated_block_comment(block_comment_content(
-            ExpectedFragmentContent::Empty,
+            Empty,
         ))]);
         assert_tokenizer_output(vec![unterminated_block_comment(
-            unterminated_block_comment_content(ExpectedFragmentContent::Input("/")),
+            unterminated_block_comment_content(Input("/")),
         )]);
-        assert_tokenizer_output(vec![unterminated_block_comment(
-            ExpectedFragmentContent::Seq(vec![
-                ExpectedFragmentContent::Input("/"),
-                unterminated_block_comment_content(ExpectedFragmentContent::Input("/")),
-            ]),
-        )]);
-        assert_tokenizer_output(vec![line_comment(ExpectedFragmentContent::Empty)]);
-        assert_tokenizer_output(vec![line_comment(ExpectedFragmentContent::Input("/"))]);
-        assert_tokenizer_output(vec![line_comment(ExpectedFragmentContent::Input(" "))]);
-        assert_tokenizer_output(vec![
-            line_comment(ExpectedFragmentContent::Empty),
-            blank("\n"),
-        ]);
-        assert_tokenizer_output(vec![
-            line_comment(ExpectedFragmentContent::Input(" ")),
-            blank("\n"),
-        ]);
+        assert_tokenizer_output(vec![unterminated_block_comment(Seq(vec![
+            Input("/"),
+            unterminated_block_comment_content(Input("/")),
+        ]))]);
+        assert_tokenizer_output(vec![line_comment(Empty)]);
+        assert_tokenizer_output(vec![line_comment(Input("/"))]);
+        assert_tokenizer_output(vec![line_comment(Input(" "))]);
+        assert_tokenizer_output(vec![line_comment(Empty), blank("\n")]);
+        assert_tokenizer_output(vec![line_comment(Input(" ")), blank("\n")]);
     }
 
     #[test]
     fn reserved_chars() {
-        assert_tokenizer_output(vec![reserved_char(
-            ".",
-            TokenIsolation::Isolated,
-            TokenIsolation::Isolated,
-        )]);
+        assert_tokenizer_output(vec![reserved_char(".", Isolated, Isolated)]);
         assert_tokenizer_output(vec![
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
         ]);
         assert_tokenizer_output(vec![
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
         ]);
         assert_tokenizer_output(vec![
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
         ]);
         assert_tokenizer_output(vec![
-            reserved_char(
-                ".",
-                TokenIsolation::Isolated,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(".", Isolated, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, Isolated),
         ]);
         assert_tokenizer_output(vec![
-            reserved_char(
-                ".",
-                TokenIsolation::Isolated,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(".", Isolated, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, Isolated),
         ]);
         assert_tokenizer_output(vec![
             blank(" "),
-            block_comment(ExpectedFragmentContent::Empty),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
-            block_comment(ExpectedFragmentContent::Empty),
+            block_comment(Empty),
+            reserved_char(".", StronglyConnected, StronglyConnected),
+            block_comment(Empty),
             blank(" "),
         ]);
         assert_tokenizer_output(vec![
             blank(" "),
-            block_comment(ExpectedFragmentContent::Empty),
+            block_comment(Empty),
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
-            block_comment(ExpectedFragmentContent::Empty),
+            block_comment(Empty),
             blank(" "),
         ]);
         assert_tokenizer_output(vec![
-            line_comment(ExpectedFragmentContent::Empty),
+            line_comment(Empty),
             blank("\n"),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
         ]);
         assert_tokenizer_output(vec![
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
-            line_comment(ExpectedFragmentContent::Input(" : ")),
-            (ExpectedFragmentContent::Input("\n "), None),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            line_comment(Input(" : ")),
+            (Input("\n "), None),
+            reserved_char(".", Isolated, Isolated),
         ]);
         assert_tokenizer_output(vec![
-            reserved_char(
-                ".",
-                TokenIsolation::Isolated,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ",",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ";",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
-            reserved_char(
-                "(",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ")",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
-            reserved_char(
-                "[",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                "]",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
-            reserved_char(
-                "{",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                "}",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
-            reserved_char(
-                "|",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
-            reserved_char(
-                "〈",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                "〉",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(".", Isolated, WeaklyConnected),
+            reserved_char(",", WeaklyConnected, WeaklyConnected),
+            reserved_char(";", WeaklyConnected, StronglyConnected),
+            reserved_char("(", WeaklyConnected, WeaklyConnected),
+            reserved_char(")", WeaklyConnected, StronglyConnected),
+            reserved_char("[", StronglyConnected, WeaklyConnected),
+            reserved_char("]", WeaklyConnected, StronglyConnected),
+            reserved_char("{", StronglyConnected, WeaklyConnected),
+            reserved_char("}", WeaklyConnected, StronglyConnected),
+            reserved_char("|", StronglyConnected, StronglyConnected),
+            reserved_char("〈", StronglyConnected, WeaklyConnected),
+            reserved_char("〉", WeaklyConnected, Isolated),
         ]);
         assert_tokenizer_output(vec![
-            reserved_char(
-                "|",
-                TokenIsolation::Isolated,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                "|",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char("|", Isolated, WeaklyConnected),
+            reserved_char("|", WeaklyConnected, Isolated),
         ]);
-        assert_tokenizer_output(vec![reserved_char(
-            "_",
-            TokenIsolation::Isolated,
-            TokenIsolation::Isolated,
-        )]);
+        assert_tokenizer_output(vec![reserved_char("_", Isolated, Isolated)]);
         assert_tokenizer_output(vec![
-            reserved_char(
-                "(",
-                TokenIsolation::Isolated,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("(", Isolated, StronglyConnected),
             unquoted_identifier("+"),
-            reserved_char(
-                ")",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(")", StronglyConnected, WeaklyConnected),
+            reserved_char(".", StronglyConnected, StronglyConnected),
             unquoted_identifier("0"),
         ]);
     }
@@ -1029,20 +875,12 @@ mod tests {
         ]);
         assert_tokenizer_output(vec![
             keyword("%for"),
-            reserved_char(
-                "_",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("_", StronglyConnected, StronglyConnected),
             unquoted_identifier("each"),
         ]);
         assert_tokenizer_output(vec![
             keyword("%for"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, StronglyConnected),
             unquoted_identifier("each"),
         ]);
         assert_tokenizer_output(vec![keyword("%for'"), unquoted_identifier("each")]);
@@ -1099,166 +937,82 @@ mod tests {
         assert_tokenizer_output(vec![unquoted_identifier("a'"), unquoted_identifier("+")]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                "_",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("_", StronglyConnected, StronglyConnected),
             unquoted_identifier("b"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                "_",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("_", StronglyConnected, StronglyConnected),
             unquoted_identifier("+"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("+"),
-            reserved_char(
-                "_",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("_", StronglyConnected, StronglyConnected),
             unquoted_identifier("a"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                "_",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("_", StronglyConnected, StronglyConnected),
             number("1"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                "^",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("^", StronglyConnected, StronglyConnected),
             number("2"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, StronglyConnected),
             unquoted_identifier("b"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, StronglyConnected),
             unquoted_identifier("b"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("a"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, StronglyConnected),
             unquoted_identifier("b"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("-"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, StronglyConnected),
             unquoted_identifier("-"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("ℕ"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, StronglyConnected),
             unquoted_identifier("0"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("ℕ"),
             blank(" "),
-            reserved_char(
-                ".",
-                TokenIsolation::Isolated,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", Isolated, StronglyConnected),
             unquoted_identifier("0"),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("f"),
-            reserved_char(
-                "(",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("(", StronglyConnected, StronglyConnected),
             unquoted_identifier("x"),
-            reserved_char(
-                ")",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(")", StronglyConnected, Isolated),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("f"),
-            reserved_char(
-                "(",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("(", StronglyConnected, StronglyConnected),
             unquoted_identifier("-"),
-            reserved_char(
-                ")",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(")", StronglyConnected, Isolated),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("f"),
-            reserved_char(
-                "(",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char("(", StronglyConnected, StronglyConnected),
             unquoted_identifier("xy"),
-            reserved_char(
-                ",",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(",", StronglyConnected, StronglyConnected),
             unquoted_identifier("-"),
-            reserved_char(
-                ")",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(")", StronglyConnected, Isolated),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("x"),
@@ -1284,14 +1038,11 @@ mod tests {
             unquoted_identifier("abc"),
             blank(" "),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Input("@\"def")),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "unterminated string".into(),
-                    ),
+                WithDiag(
+                    Box::new(Input("@\"def")),
+                    (Error(Some(SyntaxError)), "unterminated string".into()),
                 ),
-                Some(Token::Ident("def".into(), IdentifierType::Quoted)),
+                Some(Ident("def".into(), IdentifierType::Quoted)),
             ),
         ]);
     }
@@ -1347,7 +1098,7 @@ mod tests {
             blank(" "),
             number("1"),
             blank(" "),
-            reserved_char(".", TokenIsolation::Isolated, TokenIsolation::Isolated),
+            reserved_char(".", Isolated, Isolated),
             blank(" "),
             unquoted_identifier("2"),
             blank(" "),
@@ -1357,42 +1108,22 @@ mod tests {
         assert_tokenizer_output(vec![
             blank(" "),
             number("0.1"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, StronglyConnected),
             unquoted_identifier("2"),
         ]);
         assert_tokenizer_output(vec![
             blank(" "),
             number("0"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, StronglyConnected),
             number("1"),
         ]);
         assert_tokenizer_output(vec![
             blank(" "),
             number("0"),
             blank(" "),
-            reserved_char(
-                ".",
-                TokenIsolation::Isolated,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(".", Isolated, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, Isolated),
             blank(" "),
             number("1"),
         ]);
@@ -1400,42 +1131,14 @@ mod tests {
         assert_tokenizer_output(vec![
             blank(" "),
             number("0"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, StronglyConnected),
             number("1"),
-            reserved_char(
-                ".",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::WeaklyConnected,
-            ),
-            reserved_char(
-                ".",
-                TokenIsolation::WeaklyConnected,
-                TokenIsolation::StronglyConnected,
-            ),
+            reserved_char(".", StronglyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, WeaklyConnected),
+            reserved_char(".", WeaklyConnected, StronglyConnected),
             unquoted_identifier("n"),
         ]);
         assert_tokenizer_output(vec![
@@ -1447,19 +1150,11 @@ mod tests {
         ]);
         assert_tokenizer_output(vec![number(".1"), unquoted_identifier("+"), number(".2")]);
         assert_tokenizer_output(vec![
-            reserved_char(
-                "(",
-                TokenIsolation::Isolated,
-                TokenIsolation::WeaklyConnected,
-            ),
+            reserved_char("(", Isolated, WeaklyConnected),
             number(".1"),
             blank(" "),
             number(".2"),
-            reserved_char(
-                ")",
-                TokenIsolation::StronglyConnected,
-                TokenIsolation::Isolated,
-            ),
+            reserved_char(")", StronglyConnected, Isolated),
         ]);
     }
 
@@ -1497,172 +1192,160 @@ mod tests {
         assert_tokenizer_output(vec![string("\"\\u{17}\"", "\u{17}")]);
         assert_tokenizer_output(vec![string("\"abc\\u{17}def\"", "abc\u{17}def")]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\""),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\\u4")),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\""),
+                    WithDiag(
+                        Box::new(Input("\\u4")),
                         (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                            Error(Some(SyntaxError)),
                             "invalid escape sequence: expected `{` after `\\u`".into(),
                         ),
                     ),
-                    ExpectedFragmentContent::Input("2\""),
+                    Input("2\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "42".into())),
+            Some(String('"', "42".into())),
         )]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\""),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\\u{}")),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\""),
+                    WithDiag(
+                        Box::new(Input("\\u{}")),
                         (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                            Error(Some(SyntaxError)),
                             "invalid escape sequence: expected hexadecimal number".into(),
                         ),
                     ),
-                    ExpectedFragmentContent::Input("\""),
+                    Input("\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "".into())),
+            Some(String('"', "".into())),
         )]);
         assert_tokenizer_output(vec![string("\"\\u{e3a}\"", "\u{e3a}")]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\""),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\\u{e3g")),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\""),
+                    WithDiag(
+                        Box::new(Input("\\u{e3g")),
                         (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                            Error(Some(SyntaxError)),
                             "invalid escape sequence: expected hexadecimal digit or `}`".into(),
                         ),
                     ),
-                    ExpectedFragmentContent::Input("}\""),
+                    Input("}\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "g}".into())),
+            Some(String('"', "g}".into())),
         )]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\""),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\\u{e3a")),
-                        (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                            "invalid escape sequence".into(),
-                        ),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\""),
+                    WithDiag(
+                        Box::new(Input("\\u{e3a")),
+                        (Error(Some(SyntaxError)), "invalid escape sequence".into()),
                     ),
-                    ExpectedFragmentContent::Input("\""),
+                    Input("\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "".into())),
+            Some(String('"', "".into())),
         )]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\""),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\\u{e3g")),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\""),
+                    WithDiag(
+                        Box::new(Input("\\u{e3g")),
                         (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                            Error(Some(SyntaxError)),
                             "invalid escape sequence: expected hexadecimal digit or `}`".into(),
                         ),
                     ),
-                    ExpectedFragmentContent::Input("\""),
+                    Input("\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "g".into())),
+            Some(String('"', "g".into())),
         )]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\"\\u{"),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("d800")),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\"\\u{"),
+                    WithDiag(
+                        Box::new(Input("d800")),
                         (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                            Error(Some(SyntaxError)),
                             "`d800` is not a valid Unicode character code".into(),
                         ),
                     ),
-                    ExpectedFragmentContent::Input("}\""),
+                    Input("}\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "".into())),
+            Some(String('"', "".into())),
         )]);
         assert_tokenizer_output(vec![string("\"\\u{10000}\"", "\u{10000}")]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\"abc\\u{"),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("10000000")),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\"abc\\u{"),
+                    WithDiag(
+                        Box::new(Input("10000000")),
                         (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                            Error(Some(SyntaxError)),
                             "`10000000` is not a valid Unicode character code".into(),
                         ),
                     ),
-                    ExpectedFragmentContent::Input("}def\""),
+                    Input("}def\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "abcdef".into())),
+            Some(String('"', "abcdef".into())),
         )]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::Seq(vec![
-                    ExpectedFragmentContent::Input("\"a"),
-                    ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\\b")),
-                        (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                            "invalid escape sequence".into(),
-                        ),
+            WithDesc(
+                Box::new(Seq(vec![
+                    Input("\"a"),
+                    WithDiag(
+                        Box::new(Input("\\b")),
+                        (Error(Some(SyntaxError)), "invalid escape sequence".into()),
                     ),
-                    ExpectedFragmentContent::Input("c\""),
+                    Input("c\""),
                 ])),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "abc".into())),
+            Some(String('"', "abc".into())),
         )]);
         assert_tokenizer_output(vec![(
-            ExpectedFragmentContent::WithDesc(
-                Box::new(ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Input("\"")),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "unterminated string".into(),
-                    ),
+            WithDesc(
+                Box::new(WithDiag(
+                    Box::new(Input("\"")),
+                    (Error(Some(SyntaxError)), "unterminated string".into()),
                 )),
                 SpanDesc::String,
             ),
-            Some(Token::String('"', "".into())),
+            Some(String('"', "".into())),
         )]);
         assert_tokenizer_output(vec![
             blank(" "),
             unquoted_identifier("abc"),
             blank(" "),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\" def ")),
-                        (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                            "unterminated string".into(),
-                        ),
+                WithDesc(
+                    Box::new(WithDiag(
+                        Box::new(Input("\" def ")),
+                        (Error(Some(SyntaxError)), "unterminated string".into()),
                     )),
                     SpanDesc::String,
                 ),
-                Some(Token::String('"', " def ".into())),
+                Some(String('"', " def ".into())),
             ),
         ]);
         assert_tokenizer_output(vec![
@@ -1670,34 +1353,28 @@ mod tests {
             unquoted_identifier("abc"),
             blank(" "),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\" def \\")),
-                        (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                            "unterminated string".into(),
-                        ),
+                WithDesc(
+                    Box::new(WithDiag(
+                        Box::new(Input("\" def \\")),
+                        (Error(Some(SyntaxError)), "unterminated string".into()),
                     )),
                     SpanDesc::String,
                 ),
-                Some(Token::String('"', " def ".into())),
+                Some(String('"', " def ".into())),
             ),
         ]);
         assert_tokenizer_output(vec![
             unquoted_identifier("abc"),
             blank(" "),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\"def")),
-                        (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                            "unterminated string".into(),
-                        ),
+                WithDesc(
+                    Box::new(WithDiag(
+                        Box::new(Input("\"def")),
+                        (Error(Some(SyntaxError)), "unterminated string".into()),
                     )),
                     SpanDesc::String,
                 ),
-                Some(Token::String('"', "def".into())),
+                Some(String('"', "def".into())),
             ),
             blank("\n"),
             unquoted_identifier("ghi"),
@@ -1706,17 +1383,14 @@ mod tests {
             unquoted_identifier("abc"),
             blank(" "),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::WithDiag(
-                        Box::new(ExpectedFragmentContent::Input("\"def\\")),
-                        (
-                            DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                            "unterminated string".into(),
-                        ),
+                WithDesc(
+                    Box::new(WithDiag(
+                        Box::new(Input("\"def\\")),
+                        (Error(Some(SyntaxError)), "unterminated string".into()),
                     )),
                     SpanDesc::String,
                 ),
-                Some(Token::String('"', "def".into())),
+                Some(String('"', "def".into())),
             ),
             blank("\n"),
             unquoted_identifier("ghi"),

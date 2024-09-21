@@ -145,9 +145,10 @@ impl CharParserDesc for ParenthesisMatcherConfig {
 
 #[cfg(test)]
 mod tests {
-    use lang_test::parser::*;
+    use lang_def::parser::{DiagnosticSeverity::*, ErrorKind::*};
+    use lang_test::parser::{ExpectedFragmentContent::*, *};
 
-    use super::*;
+    use super::{IdentifierType::*, Token::*, TokenEvent::*, *};
 
     fn assert_parenthesis_matcher_output(expected_fragments: Vec<ExpectedFragment<TokenEvent>>) {
         assert_parser_output::<ParenthesisMatcherConfig>(
@@ -160,411 +161,201 @@ mod tests {
     fn matched_parentheses() {
         assert_parenthesis_matcher_output(vec![]);
         assert_parenthesis_matcher_output(vec![(
-            ExpectedFragmentContent::Input("abc"),
-            Some(TokenEvent::Token(Token::Ident(
-                "abc".into(),
-                IdentifierType::Unquoted,
-            ))),
+            Input("abc"),
+            Some(Token(Ident("abc".into(), Unquoted))),
         )]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
+            (Input("abc"), Some(Token(Ident("abc".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("abc"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "abc".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
+            (Input("abc"), Some(Token(Ident("abc".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("abc"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "abc".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
+            ),
+            (Input("abc"), Some(Token(Ident("abc".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::Input("abc"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "abc".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
+            ),
+            (Input("abc"), Some(Token(Ident("abc".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::Input("abc"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "abc".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
+            ),
+            (Input("abc"), Some(Token(Ident("abc".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::Input("abc"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "abc".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%abc")),
-                    SpanDesc::Keyword,
-                ),
-                Some(TokenEvent::Token(Token::Keyword("%abc".into()))),
+                WithDesc(Box::new(Input("%abc")), SpanDesc::Keyword),
+                Some(Token(Keyword("%abc".into()))),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
+            ),
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::Input("^"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("^"),
+                Some(Token(ReservedChar(
                     '^',
                     TokenIsolation::StronglyConnected,
                     TokenIsolation::StronglyConnected,
                 ))),
             ),
-            (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::Input("⁻¹"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "⁻¹".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input("⁻¹"), Some(Token(Ident("⁻¹".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input("²"), Some(Token(Ident("²".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (
-                ExpectedFragmentContent::Input("²"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "²".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::Input("⁻¹"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "⁻¹".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input("⁻¹"), Some(Token(Ident("⁻¹".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
+            ),
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input("+"), Some(Token(Ident("+".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
+            ),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
+            (Input("-"), Some(Token(Ident("-".into(), Unquoted)))),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (
-                ExpectedFragmentContent::Input("+"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "+".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
-            ),
-            (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::Input("-"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "-".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::Input("⁻¹"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "⁻¹".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input("⁻¹"), Some(Token(Ident("⁻¹".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::Input("|"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("|"),
+                Some(Token(ReservedChar(
                     '|',
                     TokenIsolation::Isolated,
                     TokenIsolation::WeaklyConnected,
                 ))),
             ),
             (
-                ExpectedFragmentContent::Input("|"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("|"),
+                Some(Token(ReservedChar(
                     '|',
                     TokenIsolation::WeaklyConnected,
                     TokenIsolation::Isolated,
@@ -573,24 +364,24 @@ mod tests {
         ]);
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::Input("|"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("|"),
+                Some(Token(ReservedChar(
                     '|',
                     TokenIsolation::Isolated,
                     TokenIsolation::WeaklyConnected,
                 ))),
             ),
             (
-                ExpectedFragmentContent::Input("|"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("|"),
+                Some(Token(ReservedChar(
                     '|',
                     TokenIsolation::WeaklyConnected,
                     TokenIsolation::WeaklyConnected,
                 ))),
             ),
             (
-                ExpectedFragmentContent::Input("|"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("|"),
+                Some(Token(ReservedChar(
                     '|',
                     TokenIsolation::WeaklyConnected,
                     TokenIsolation::Isolated,
@@ -598,177 +389,87 @@ mod tests {
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
+            (Input(" "), None),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                Some(ParenStart('[')),
             ),
+            (Input("d"), Some(Token(Ident("d".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("[")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('[')),
-            ),
-            (
-                ExpectedFragmentContent::Input("d"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "d".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::Input("|"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("|"),
+                Some(Token(ReservedChar(
                     '|',
                     TokenIsolation::StronglyConnected,
                     TokenIsolation::StronglyConnected,
                 ))),
             ),
+            (Input("e"), Some(Token(Ident("e".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("e"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "e".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("]")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("]")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
+            (Input(" "), None),
+            (Input("f"), Some(Token(Ident("f".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input("⟦")), SpanDesc::ParenStart),
+                Some(ParenStart('⟦')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("g"), Some(Token(Ident("g".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("f"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "f".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("⟦")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('⟦')),
-            ),
-            (
-                ExpectedFragmentContent::Input("g"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "g".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("‖"),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("‖"),
+                Some(Token(ReservedChar(
                     '‖',
                     TokenIsolation::Isolated,
                     TokenIsolation::Isolated,
                 ))),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input(" "), None),
+            (Input("h"), Some(Token(Ident("h".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("h"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "h".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("⟧")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
+            ),
+            (Input(" "), None),
+            (
+                WithDesc(Box::new(Input("‖")), SpanDesc::ParenStart),
+                Some(ParenStart('‖')),
+            ),
+            (Input("i"), Some(Token(Ident("i".into(), Unquoted)))),
+            (
+                WithDesc(Box::new(Input("‖")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("⟧")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("‖")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('‖')),
-            ),
-            (
-                ExpectedFragmentContent::Input("i"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "i".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("‖")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (
-                ExpectedFragmentContent::Input("."),
-                Some(TokenEvent::Token(Token::ReservedChar(
+                Input("."),
+                Some(Token(ReservedChar(
                     '.',
                     TokenIsolation::StronglyConnected,
                     TokenIsolation::StronglyConnected,
                 ))),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
+            (Input("j"), Some(Token(Ident("j".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("j"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "j".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
     }
@@ -777,510 +478,240 @@ mod tests {
     fn unmatched_parentheses() {
         assert_parenthesis_matcher_output(vec![
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Empty),
-                        SpanDesc::ParenEnd,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                        Error(Some(SyntaxError)),
                         "unmatched parenthesis: `)` expected".into(),
                     ),
                 ),
-                Some(TokenEvent::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![(
-            ExpectedFragmentContent::WithDiag(
-                Box::new(ExpectedFragmentContent::Input(")")),
-                (
-                    DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                    "unmatched parenthesis".into(),
-                ),
+            WithDiag(
+                Box::new(Input(")")),
+                (Error(Some(SyntaxError)), "unmatched parenthesis".into()),
             ),
             None,
         )]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
+            (Input(" "), None),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
-            ),
-            (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Empty),
-                        SpanDesc::ParenEnd,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                        Error(Some(SyntaxError)),
                         "unmatched parenthesis: `)` expected".into(),
                     ),
                 ),
-                Some(TokenEvent::ParenEnd),
+                Some(ParenEnd),
             ),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "unmatched parenthesis".into(),
-                    ),
+                WithDiag(
+                    Box::new(Input(")")),
+                    (Error(Some(SyntaxError)), "unmatched parenthesis".into()),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input(" "), None),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                Some(ParenStart('[')),
             ),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("[")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('[')),
-            ),
-            (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Empty),
-                        SpanDesc::ParenEnd,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                        Error(Some(SyntaxError)),
                         "unmatched parenthesis: `]` expected".into(),
                     ),
                 ),
-                Some(TokenEvent::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("d"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "d".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input(" "), None),
+            (Input("d"), Some(Token(Ident("d".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
+                Some(ParenStart('|')),
             ),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('|')),
-            ),
-            (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Empty),
-                        SpanDesc::ParenEnd,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                        Error(Some(SyntaxError)),
                         "unmatched parenthesis: `|` expected".into(),
                     ),
                 ),
-                Some(TokenEvent::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("d"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "d".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input(" "), None),
+            (Input("d"), Some(Token(Ident("d".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
-            ),
-            (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Input("]")),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "unmatched parenthesis".into(),
-                    ),
+                WithDiag(
+                    Box::new(Input("]")),
+                    (Error(Some(SyntaxError)), "unmatched parenthesis".into()),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input(" "), None),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("d"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "d".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input(" "), None),
+            (Input("d"), Some(Token(Ident("d".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
-            ),
-            (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Input("|")),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "unmatched parenthesis".into(),
-                    ),
+                WithDiag(
+                    Box::new(Input("|")),
+                    (Error(Some(SyntaxError)), "unmatched parenthesis".into()),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input(" "), None),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("d"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "d".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input(" "), None),
+            (Input("d"), Some(Token(Ident("d".into(), Unquoted)))),
         ]);
         assert_parenthesis_matcher_output(vec![
+            (Input("a"), Some(Token(Ident("a".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("a"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "a".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("b"), Some(Token(Ident("b".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
+                Some(ParenStart('(')),
             ),
             (
-                ExpectedFragmentContent::Input("b"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "b".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
+                Some(ParenStart('{')),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input("c"), Some(Token(Ident("c".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("(")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('(')),
+                WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                Some(ParenStart('[')),
             ),
+            (Input("d"), Some(Token(Ident("d".into(), Unquoted)))),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("{")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('{')),
+                WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                Some(ParenStart('[')),
             ),
+            (Input("e"), Some(Token(Ident("e".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("c"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "c".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input("]")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input(" "), None),
+            (Input("f"), Some(Token(Ident("f".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("[")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('[')),
-            ),
-            (
-                ExpectedFragmentContent::Input("d"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "d".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("[")),
-                    SpanDesc::ParenStart,
-                ),
-                Some(TokenEvent::ParenStart('[')),
-            ),
-            (
-                ExpectedFragmentContent::Input("e"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "e".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("]")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("f"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "f".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Empty),
-                        SpanDesc::ParenEnd,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                        Error(Some(SyntaxError)),
                         "unmatched parenthesis: `]` expected".into(),
                     ),
                 ),
-                Some(TokenEvent::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Empty),
-                        SpanDesc::ParenEnd,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
+                        Error(Some(SyntaxError)),
                         "unmatched parenthesis: `}` expected".into(),
                     ),
                 ),
-                Some(TokenEvent::ParenEnd),
+                Some(ParenEnd),
             ),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input(" "), None),
+            (Input("g"), Some(Token(Ident("g".into(), Unquoted)))),
             (
-                ExpectedFragmentContent::Input("g"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "g".into(),
-                    IdentifierType::Unquoted,
-                ))),
+                WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
+                Some(ParenEnd),
             ),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input(")")),
-                    SpanDesc::ParenEnd,
-                ),
-                Some(TokenEvent::ParenEnd),
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::Input("h"),
-                Some(TokenEvent::Token(Token::Ident(
-                    "h".into(),
-                    IdentifierType::Unquoted,
-                ))),
-            ),
+            (Input(" "), None),
+            (Input("h"), Some(Token(Ident("h".into(), Unquoted)))),
         ]);
     }
 }

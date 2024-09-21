@@ -2224,10 +2224,12 @@ impl CharParserDesc for ParameterIdentifierConfig {
 
 #[cfg(test)]
 mod tests {
-    use lang_def::parser::str::StrPosition;
-    use lang_test::parser::*;
+    use lang_def::parser::{str::StrPosition, DiagnosticSeverity::*, ErrorKind::*};
+    use lang_test::parser::{ExpectedFragmentContent::*, *};
 
-    use super::{super::metamodel::testing::TestMetaModel, *};
+    use super::{
+        super::metamodel::testing::TestMetaModel, IdentifierType::*, Token::*, TokenTree::*, *,
+    };
 
     fn assert_parameter_identifier_output(
         expected_fragments: Vec<ExpectedFragment<ParameterEvent<StrPosition>>>,
@@ -2254,287 +2256,179 @@ mod tests {
     #[test]
     fn metamodel() {
         assert_parameter_identifier_output(vec![(
-            ExpectedFragmentContent::WithDiag(
-                Box::new(ExpectedFragmentContent::Empty),
-                (
-                    DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                    "expected keyword `%slate`".into(),
-                ),
+            WithDiag(
+                Box::new(Empty),
+                (Error(Some(SyntaxError)), "expected keyword `%slate`".into()),
             ),
             None,
         )]);
         assert_parameter_identifier_output(vec![(
-            ExpectedFragmentContent::WithDiag(
-                Box::new(ExpectedFragmentContent::Input("x")),
-                (
-                    DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                    "expected keyword `%slate`".into(),
-                ),
+            WithDiag(
+                Box::new(Input("x")),
+                (Error(Some(SyntaxError)), "expected keyword `%slate`".into()),
             ),
             None,
         )]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Empty),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected metamodel name".into(),
-                    ),
+                WithDiag(
+                    Box::new(Empty),
+                    (Error(Some(SyntaxError)), "expected metamodel name".into()),
                 ),
                 None,
             ),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Empty),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected metamodel name".into(),
-                    ),
+                WithDiag(
+                    Box::new(Empty),
+                    (Error(Some(SyntaxError)), "expected metamodel name".into()),
                 ),
                 None,
             ),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Input("x")),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected string".into(),
-                    ),
+                WithDiag(
+                    Box::new(Input("x")),
+                    (Error(Some(SyntaxError)), "expected string".into()),
                 ),
                 None,
             ),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Input("\"x\"")),
-                        SpanDesc::String,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Input("\"x\"")), SpanDesc::String)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::ResourceNotFound)),
+                        Error(Some(ResourceNotFound)),
                         "unknown metamodel \"x\"".into(),
                     ),
                 ),
                 None,
             ),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Empty),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected `;`".into(),
-                    ),
+                WithDiag(
+                    Box::new(Empty),
+                    (Error(Some(SyntaxError)), "expected `;`".into()),
                 ),
                 None,
             ),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Input("\"x\"")),
-                        SpanDesc::String,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Input("\"x\"")), SpanDesc::String)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::ResourceNotFound)),
+                        Error(Some(ResourceNotFound)),
                         "unknown metamodel \"x\"".into(),
                     ),
                 ),
                 None,
             ),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Empty),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected `;`".into(),
-                    ),
+                WithDiag(
+                    Box::new(Empty),
+                    (Error(Some(SyntaxError)), "expected `;`".into()),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(" x"), None),
+            (Input(" x"), None),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Input("\"x\"")),
-                        SpanDesc::String,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Input("\"x\"")), SpanDesc::String)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::ResourceNotFound)),
+                        Error(Some(ResourceNotFound)),
                         "unknown metamodel \"x\"".into(),
                     ),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(";"), None),
+            (Input(";"), None),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::WithDesc(
-                        Box::new(ExpectedFragmentContent::Input("\"x\"")),
-                        SpanDesc::String,
-                    )),
+                WithDiag(
+                    Box::new(WithDesc(Box::new(Input("\"x\"")), SpanDesc::String)),
                     (
-                        DiagnosticSeverity::Error(Some(ErrorKind::ResourceNotFound)),
+                        Error(Some(ResourceNotFound)),
                         "unknown metamodel \"x\"".into(),
                     ),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(";"), None),
-            (ExpectedFragmentContent::Input(" x;"), None),
+            (Input(";"), None),
+            (Input(" x;"), None),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("\"test\"")),
-                    SpanDesc::String,
-                ),
+                WithDesc(Box::new(Input("\"test\"")), SpanDesc::String),
                 None,
             ),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Empty),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected `;`".into(),
-                    ),
+                WithDiag(
+                    Box::new(Empty),
+                    (Error(Some(SyntaxError)), "expected `;`".into()),
                 ),
                 None,
             ),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("\"test\"")),
-                    SpanDesc::String,
-                ),
+                WithDesc(Box::new(Input("\"test\"")), SpanDesc::String),
                 None,
             ),
             (
-                ExpectedFragmentContent::WithDiag(
-                    Box::new(ExpectedFragmentContent::Empty),
-                    (
-                        DiagnosticSeverity::Error(Some(ErrorKind::SyntaxError)),
-                        "expected `;`".into(),
-                    ),
+                WithDiag(
+                    Box::new(Empty),
+                    (Error(Some(SyntaxError)), "expected `;`".into()),
                 ),
                 None,
             ),
-            (ExpectedFragmentContent::Input(" "), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::Input("x"),
+                Input("x"),
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
                     data: Some(ParamGroup {
                         param_notations: Vec::new(),
                         data: vec![WithSpan::new(
-                            TokenTree::Token(Token::Ident("x".into(), IdentifierType::Unquoted)),
+                            Token(Ident("x".into(), Unquoted)),
                             StrPosition::span_from_range(14..15),
                         )],
                     }),
                 })),
             ),
-            (ExpectedFragmentContent::Input(";"), None),
+            (Input(";"), None),
         ]);
         assert_parameter_identifier_output(vec![
+            (WithDesc(Box::new(Input("%slate")), SpanDesc::Keyword), None),
+            (Input(" "), None),
             (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("%slate")),
-                    SpanDesc::Keyword,
-                ),
+                WithDesc(Box::new(Input("\"test\"")), SpanDesc::String),
                 None,
             ),
-            (ExpectedFragmentContent::Input(" "), None),
-            (
-                ExpectedFragmentContent::WithDesc(
-                    Box::new(ExpectedFragmentContent::Input("\"test\"")),
-                    SpanDesc::String,
-                ),
-                None,
-            ),
-            (ExpectedFragmentContent::Input(";"), None),
+            (Input(";"), None),
         ]);
     }
 
