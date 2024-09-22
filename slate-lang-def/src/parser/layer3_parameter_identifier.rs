@@ -68,7 +68,6 @@ pub enum SectionItem<'a, Pos: Position> {
     ParamGroup(ParamGroup<'a, Pos>),
 }
 
-// TODO: objects items with mapping symbols should be references instead of definitions
 // TODO: test behavior of multiple consecutive parameterizations (e.g. indices)
 // TODO: underscores in place of notations
 // TODO: handle prefixes within parameterizations correctly
@@ -1191,6 +1190,11 @@ impl<'a> ParameterIdentifier<'a> {
                             format!("expected name/notation"),
                         );
                     } else {
+                        let notation_delimiter_desc =
+                            notation_delimiter_desc.unwrap_or(NotationDelimiterDesc {
+                                kind_override: None,
+                                is_ref: false,
+                            });
                         let notation = Self::create_notation(
                             interface,
                             &mut tokens,
@@ -1198,7 +1202,8 @@ impl<'a> ParameterIdentifier<'a> {
                             prefix_options,
                             notation_ctx,
                             scope,
-                            notation_delimiter_desc.unwrap_or(None),
+                            notation_delimiter_desc.kind_override,
+                            notation_delimiter_desc.is_ref,
                         );
                         param_notations.push(notation);
                     }
@@ -1360,12 +1365,13 @@ impl<'a> ParameterIdentifier<'a> {
         let mut notation = Vec::new();
         let mut data = Vec::new();
         let mut kind = None;
+        let mut is_ref = false;
 
         let mut token_iter = tokens.drain(..);
         while let Some(token) = token_iter.next() {
-            let notation_delimiter_desc =
-                Self::token_tree_is_notation_delimiter(&token, param_kind);
-            if let Some(kind_override) = notation_delimiter_desc {
+            if let Some(notation_delimiter_desc) =
+                Self::token_tree_is_notation_delimiter(&token, param_kind)
+            {
                 cur_pos = token.span().start;
                 if notation.is_empty() {
                     interface.error(
@@ -1376,7 +1382,8 @@ impl<'a> ParameterIdentifier<'a> {
                 }
                 data.push(token);
                 data.extend(token_iter);
-                kind = kind_override;
+                kind = notation_delimiter_desc.kind_override;
+                is_ref = notation_delimiter_desc.is_ref;
                 break;
             }
             notation.push(token);
@@ -1391,6 +1398,7 @@ impl<'a> ParameterIdentifier<'a> {
                 notation_ctx,
                 scope,
                 kind,
+                is_ref,
             ),
             data,
         }
@@ -1412,6 +1420,7 @@ impl<'a> ParameterIdentifier<'a> {
         notation_ctx: NotationContext<'_, 'a, Pos>,
         scope: NameScopeDesc,
         mut kind: Option<NameKindDesc>,
+        is_ref: bool,
     ) -> WithSpan<Notation<'a, Pos>, Pos> {
         if kind.is_some() && Self::is_notation_parameterized(notation_ctx) {
             match kind {
@@ -1433,7 +1442,14 @@ impl<'a> ParameterIdentifier<'a> {
         }
 
         let mut span = (tokens.first().unwrap()..tokens.last().unwrap()).span();
-        interface.span_desc(span.clone(), SpanDesc::NameDef(scope, kind));
+        interface.span_desc(
+            span.clone(),
+            if is_ref {
+                SpanDesc::NameRef(scope, kind)
+            } else {
+                SpanDesc::NameDef(scope, kind)
+            },
+        );
 
         if prefix_options.is_some() {
             let mut prev_is_ident = false;
@@ -2800,7 +2816,7 @@ mod tests {
                 Seq(vec![
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Global, None),
+                        SpanDesc::NameRef(NameScopeDesc::Global, None),
                     ),
                     Input(" ↦ y"),
                 ]),
@@ -12932,7 +12948,7 @@ mod tests {
                                 SpanDesc::NameRef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                             ),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameRef(NameScopeDesc::Instance, None),
                     ),
                     Input(" ↦ i | "),
                     WithDesc(
@@ -12953,7 +12969,7 @@ mod tests {
                                 SpanDesc::NameRef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                             ),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameRef(NameScopeDesc::Instance, None),
                     ),
                     Input(" ↦ j k | "),
                     WithDesc(
@@ -13404,7 +13420,7 @@ mod tests {
                     WithDesc(
                         Box::new(WithDesc(
                             Box::new(Input("0")),
-                            SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                            SpanDesc::NameRef(NameScopeDesc::Instance, None),
                         )),
                         SpanDesc::Number,
                     ),
@@ -13419,7 +13435,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameRef(NameScopeDesc::Instance, None),
                     ),
                     Input(" ↦ S"),
                     WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),

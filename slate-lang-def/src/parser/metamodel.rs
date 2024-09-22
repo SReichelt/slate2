@@ -56,7 +56,10 @@ pub trait ParamKind: MetaModelPart {
 
 meta_model_part!(ParamKind);
 
-pub type NotationDelimiterDesc = Option<NameKindDesc>;
+pub struct NotationDelimiterDesc {
+    pub kind_override: Option<NameKindDesc>,
+    pub is_ref: bool,
+}
 
 pub trait MappingKind: MetaModelPart {
     fn param_kind(&self) -> &dyn ParamKind;
@@ -156,7 +159,10 @@ pub mod testing {
     impl ParamKind for TestMetaModel {
         fn keyword_is_notation_delimiter(&self, keyword: &str) -> Option<NotationDelimiterDesc> {
             if keyword == "%Type" {
-                Some(Some(NameKindDesc::Type))
+                Some(NotationDelimiterDesc {
+                    kind_override: Some(NameKindDesc::Type),
+                    is_ref: false,
+                })
             } else {
                 None
             }
@@ -165,12 +171,21 @@ pub mod testing {
         fn identifier_is_notation_delimiter(&self, ident: &str) -> Option<NotationDelimiterDesc> {
             if ident.starts_with(':') {
                 if ident == ":" {
-                    Some(Some(NameKindDesc::Value))
+                    Some(NotationDelimiterDesc {
+                        kind_override: Some(NameKindDesc::Value),
+                        is_ref: false,
+                    })
                 } else {
-                    Some(None)
+                    Some(NotationDelimiterDesc {
+                        kind_override: None,
+                        is_ref: false,
+                    })
                 }
             } else if ident == "↦" {
-                Some(None)
+                Some(NotationDelimiterDesc {
+                    kind_override: None,
+                    is_ref: true,
+                })
             } else {
                 None
             }
@@ -178,7 +193,10 @@ pub mod testing {
 
         fn paren_is_notation_delimiter(&self, paren: char) -> Option<NotationDelimiterDesc> {
             if paren == '⎿' {
-                Some(None)
+                Some(NotationDelimiterDesc {
+                    kind_override: None,
+                    is_ref: false,
+                })
             } else {
                 None
             }
