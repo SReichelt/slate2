@@ -14,6 +14,9 @@ use smallvec::SmallVec;
 
 use super::{layer1_tokenizer::*, layer2_parenthesis_matcher::*, metamodel::*};
 
+// TODO: override scope/kind of mapping params in notations (and declare as references?)
+// TODO: handle prefixes within parameterizations correctly
+
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub enum ParameterEvent<'a, Pos: Position> {
     SectionStart(Parameterized<'a, Pos, &'static dyn SectionKind>),
@@ -67,10 +70,6 @@ pub enum SectionItem<'a, Pos: Position> {
     Section(Section<'a, Pos>),
     ParamGroup(ParamGroup<'a, Pos>),
 }
-
-// TODO: override scope/kind of mapping params in notations
-// TODO: object items (i.e. instances) should probably be declared as values/functions
-// TODO: handle prefixes within parameterizations correctly
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
 pub struct Section<'a, Pos: Position> {
@@ -1418,6 +1417,9 @@ impl<'a> ParameterIdentifier<'a> {
         mut kind: Option<NameKindDesc>,
         is_ref: bool,
     ) -> WithSpan<Notation<'a, Pos>, Pos> {
+        if kind.is_none() && scope == NameScopeDesc::Instance {
+            kind = Some(NameKindDesc::Value);
+        }
         if kind.is_some() && Self::is_notation_parameterized(notation_ctx) {
             match kind {
                 Some(NameKindDesc::Value) => kind = Some(NameKindDesc::Function),
@@ -11846,7 +11848,7 @@ mod tests {
                     WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -11880,7 +11882,7 @@ mod tests {
                                                 Notation {
                                                     expr: Some(NotationExpr::Ident("x".into())),
                                                     scope: NameScopeDesc::Instance,
-                                                    kind: None,
+                                                    kind: Some(NameKindDesc::Value),
                                                 },
                                                 StrPosition::span_from_range(21..22),
                                             ),
@@ -11908,12 +11910,12 @@ mod tests {
                     WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     Input(" || "),
                     WithDesc(
                         Box::new(Input("y")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -11948,7 +11950,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("x".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(21..22),
                                                 ),
@@ -11966,7 +11968,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("y".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(26..27),
                                                 ),
@@ -11995,12 +11997,12 @@ mod tests {
                     WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     Input(" | | "),
                     WithDesc(
                         Box::new(Input("y")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -12035,7 +12037,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("x".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(21..22),
                                                 ),
@@ -12053,7 +12055,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("y".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(27..28),
                                                 ),
@@ -12082,7 +12084,7 @@ mod tests {
                     WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     Input(" ||"),
                     WithDiag(
@@ -12092,7 +12094,7 @@ mod tests {
                     Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -12127,7 +12129,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("x".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(21..22),
                                                 ),
@@ -12145,7 +12147,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("y".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(27..28),
                                                 ),
@@ -12178,7 +12180,7 @@ mod tests {
                             Input("x"),
                             WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     Input(" || "),
                     WithDesc(
@@ -12187,7 +12189,7 @@ mod tests {
                             Input("y"),
                             WithDesc(Box::new(Input("|")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -12230,7 +12232,7 @@ mod tests {
                                                             )]],
                                                         )),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(21..24),
                                                 ),
@@ -12256,7 +12258,7 @@ mod tests {
                                                             )]],
                                                         )),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(28..31),
                                                 ),
@@ -12293,7 +12295,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" | "),
                     WithDesc(
@@ -12375,7 +12377,7 @@ mod tests {
                                                         ),
                                                     ])),
                                                     scope: NameScopeDesc::Instance,
-                                                    kind: None,
+                                                    kind: Some(NameKindDesc::Function),
                                                 },
                                                 StrPosition::span_from_range(21..25),
                                             ),
@@ -12411,7 +12413,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" | "),
                     WithDesc(
@@ -12493,7 +12495,7 @@ mod tests {
                                                         ),
                                                     ])),
                                                     scope: NameScopeDesc::Instance,
-                                                    kind: None,
+                                                    kind: Some(NameKindDesc::Function),
                                                 },
                                                 StrPosition::span_from_range(21..25),
                                             ),
@@ -12529,7 +12531,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" | "),
                     WithDesc(
@@ -12539,7 +12541,7 @@ mod tests {
                     Input(" : T || "),
                     WithDesc(
                         Box::new(Input("z")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -12636,7 +12638,7 @@ mod tests {
                                                             ),
                                                         ])),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Function),
                                                     },
                                                     StrPosition::span_from_range(21..25),
                                                 ),
@@ -12654,7 +12656,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("z".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(37..38),
                                                 ),
@@ -12691,7 +12693,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" | "),
                     WithDesc(
@@ -12706,7 +12708,7 @@ mod tests {
                     Input(" || "),
                     WithDesc(
                         Box::new(Input("z")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -12803,7 +12805,7 @@ mod tests {
                                                             ),
                                                         ])),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Function),
                                                     },
                                                     StrPosition::span_from_range(21..25),
                                                 ),
@@ -12852,7 +12854,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("z".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(49..50),
                                                 ),
@@ -12889,7 +12891,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" | "),
                     WithDesc(
@@ -12899,7 +12901,7 @@ mod tests {
                     Input(" : T | "),
                     WithDesc(
                         Box::new(Input("z")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     Input(" := λ "),
                     WithDesc(
@@ -12989,7 +12991,7 @@ mod tests {
                                                         ),
                                                     ])),
                                                     scope: NameScopeDesc::Instance,
-                                                    kind: None,
+                                                    kind: Some(NameKindDesc::Function),
                                                 },
                                                 StrPosition::span_from_range(21..25),
                                             ),
@@ -13003,7 +13005,7 @@ mod tests {
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("z".into())),
                                                         scope: NameScopeDesc::Instance,
-                                                        kind: None,
+                                                        kind: Some(NameKindDesc::Value),
                                                     },
                                                     StrPosition::span_from_range(36..37),
                                                 )],
@@ -13096,7 +13098,7 @@ mod tests {
                                 ),
                             ])),
                             scope: NameScopeDesc::Instance,
-                            kind: None,
+                            kind: Some(NameKindDesc::Function),
                         },
                         StrPosition::span_from_range(21..24),
                     ),
@@ -13193,7 +13195,7 @@ mod tests {
                                 ),
                             ])),
                             scope: NameScopeDesc::Instance,
-                            kind: None,
+                            kind: Some(NameKindDesc::Function),
                         },
                         StrPosition::span_from_range(42..47),
                     ),
@@ -13248,7 +13250,7 @@ mod tests {
                     Notation {
                         expr: Some(NotationExpr::Ident("z".into())),
                         scope: NameScopeDesc::Instance,
-                        kind: None,
+                        kind: Some(NameKindDesc::Value),
                     },
                     StrPosition::span_from_range(83..84),
                 ),
@@ -13273,7 +13275,7 @@ mod tests {
                                 SpanDesc::NameRef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                             ),
                         ])),
-                        SpanDesc::NameRef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameRef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" ↦ i | "),
                     WithDesc(
@@ -13294,7 +13296,7 @@ mod tests {
                                 SpanDesc::NameRef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                             ),
                         ])),
-                        SpanDesc::NameRef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameRef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" ↦ j k | "),
                     WithDesc(
@@ -13312,7 +13314,7 @@ mod tests {
                     WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("z")),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
@@ -13388,7 +13390,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("0".into())),
                                                 scope: NameScopeDesc::Instance,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(23..24),
                                         ),
@@ -13446,7 +13448,7 @@ mod tests {
                                                     ),
                                                 ])),
                                                 scope: NameScopeDesc::Instance,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Function),
                                             },
                                             StrPosition::span_from_range(28..32),
                                         ),
@@ -13560,7 +13562,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("0".into())),
                                                 scope: NameScopeDesc::Instance,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(75..76),
                                         ),
@@ -13627,7 +13629,7 @@ mod tests {
                                                     ),
                                                 ])),
                                                 scope: NameScopeDesc::Instance,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Function),
                                             },
                                             StrPosition::span_from_range(86..90),
                                         ),
@@ -13683,7 +13685,7 @@ mod tests {
                     WithDesc(
                         Box::new(WithDesc(
                             Box::new(Input("0")),
-                            SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                            SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                         )),
                         SpanDesc::Number,
                     ),
@@ -13698,7 +13700,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" | "),
                     WithDesc(
@@ -13745,7 +13747,7 @@ mod tests {
                     WithDesc(
                         Box::new(WithDesc(
                             Box::new(Input("0")),
-                            SpanDesc::NameRef(NameScopeDesc::Instance, None),
+                            SpanDesc::NameRef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                         )),
                         SpanDesc::Number,
                     ),
@@ -13760,7 +13762,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameRef(NameScopeDesc::Instance, None),
+                        SpanDesc::NameRef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
                     Input(" ↦ S"),
                     WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
