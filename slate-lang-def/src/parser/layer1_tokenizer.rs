@@ -159,11 +159,11 @@ impl Tokenizer {
             self.prev = *ch;
         }
 
-        let identifier = input.span_str(span.clone());
+        let ident = input.span_str(span.clone());
         let token = if is_keyword {
-            Token::Keyword(identifier)
+            Token::Keyword(ident)
         } else {
-            Token::Ident(identifier, IdentifierType::Unquoted)
+            Token::Ident(ident, IdentifierType::Unquoted)
         };
         interface.out(span.clone(), token);
         if is_keyword {

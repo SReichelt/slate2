@@ -50,7 +50,7 @@ pub struct NotationPrefixOptions {
 
 pub trait ParamKind: MetaModelPart {
     fn keyword_is_notation_delimiter(&self, keyword: &str) -> Option<NotationDelimiterDesc>;
-    fn identifier_is_notation_delimiter(&self, identifier: &str) -> Option<NotationDelimiterDesc>;
+    fn identifier_is_notation_delimiter(&self, ident: &str) -> Option<NotationDelimiterDesc>;
     fn paren_is_notation_delimiter(&self, paren: char) -> Option<NotationDelimiterDesc>;
 }
 
@@ -75,8 +75,8 @@ meta_model_part!(InfixMappingKind);
 pub trait DataKind: MetaModelPart {
     fn parameterization(&self, paren: char) -> Option<&dyn SectionKind>;
     fn special_data_kind(&self, paren: char) -> Option<&dyn DataKind>;
-    fn prefix_mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind>;
-    fn infix_mapping_kind(&self, identifier: &str) -> Option<&dyn InfixMappingKind>;
+    fn prefix_mapping_kind(&self, ident: &str) -> Option<&dyn MappingKind>;
+    fn infix_mapping_kind(&self, ident: &str) -> Option<&dyn InfixMappingKind>;
     fn object_kind(&self, paren: char) -> Option<&dyn ObjectKind>;
 }
 
@@ -162,17 +162,14 @@ pub mod testing {
             }
         }
 
-        fn identifier_is_notation_delimiter(
-            &self,
-            identifier: &str,
-        ) -> Option<NotationDelimiterDesc> {
-            if identifier.starts_with(':') {
-                if identifier == ":" {
+        fn identifier_is_notation_delimiter(&self, ident: &str) -> Option<NotationDelimiterDesc> {
+            if ident.starts_with(':') {
+                if ident == ":" {
                     Some(Some(NameKindDesc::Value))
                 } else {
                     Some(None)
                 }
-            } else if identifier == "↦" {
+            } else if ident == "↦" {
                 Some(None)
             } else {
                 None
@@ -240,15 +237,15 @@ pub mod testing {
             None
         }
 
-        fn prefix_mapping_kind(&self, identifier: &str) -> Option<&dyn MappingKind> {
-            match identifier {
+        fn prefix_mapping_kind(&self, ident: &str) -> Option<&dyn MappingKind> {
+            match ident {
                 "λ" => Some(&TestPrefixMapping),
                 _ => None,
             }
         }
 
-        fn infix_mapping_kind(&self, identifier: &str) -> Option<&dyn InfixMappingKind> {
-            match identifier {
+        fn infix_mapping_kind(&self, ident: &str) -> Option<&dyn InfixMappingKind> {
+            match ident {
                 "↦" => Some(&TestInfixMapping),
                 _ => None,
             }
