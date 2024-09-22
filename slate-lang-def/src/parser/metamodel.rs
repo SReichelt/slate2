@@ -57,7 +57,7 @@ pub trait ParamKind: MetaModelPart {
 meta_model_part!(ParamKind);
 
 pub struct NotationDelimiterDesc {
-    pub kind_override: Option<NameKindDesc>,
+    pub kind: Option<NameKindDesc>,
     pub is_ref: bool,
 }
 
@@ -160,7 +160,7 @@ pub mod testing {
         fn keyword_is_notation_delimiter(&self, keyword: &str) -> Option<NotationDelimiterDesc> {
             if keyword == "%Type" {
                 Some(NotationDelimiterDesc {
-                    kind_override: Some(NameKindDesc::Type),
+                    kind: Some(NameKindDesc::Type),
                     is_ref: false,
                 })
             } else {
@@ -172,18 +172,18 @@ pub mod testing {
             if ident.starts_with(':') {
                 if ident == ":" {
                     Some(NotationDelimiterDesc {
-                        kind_override: Some(NameKindDesc::Value),
+                        kind: Some(NameKindDesc::Value),
                         is_ref: false,
                     })
                 } else {
                     Some(NotationDelimiterDesc {
-                        kind_override: None,
+                        kind: None,
                         is_ref: false,
                     })
                 }
             } else if ident == "↦" {
                 Some(NotationDelimiterDesc {
-                    kind_override: None,
+                    kind: None,
                     is_ref: true,
                 })
             } else {
@@ -194,7 +194,7 @@ pub mod testing {
         fn paren_is_notation_delimiter(&self, paren: char) -> Option<NotationDelimiterDesc> {
             if paren == '⎿' {
                 Some(NotationDelimiterDesc {
-                    kind_override: None,
+                    kind: None,
                     is_ref: false,
                 })
             } else {

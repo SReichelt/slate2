@@ -68,8 +68,8 @@ pub enum SectionItem<'a, Pos: Position> {
     ParamGroup(ParamGroup<'a, Pos>),
 }
 
-// TODO: test behavior of multiple consecutive parameterizations (e.g. indices)
-// TODO: underscores in place of notations
+// TODO: override scope/kind of mapping params in notations
+// TODO: object items (i.e. instances) should probably be declared as values/functions
 // TODO: handle prefixes within parameterizations correctly
 
 #[derive(Clone, PartialEq, MemSerializable, Debug)]
@@ -1163,25 +1163,26 @@ impl<'a> ParameterIdentifier<'a> {
     ) -> ParamGroup<'a, Pos> {
         let mut param_notations = Vec::new();
 
-        let notation_delimiter_found = tokens.iter().find_map(|token| {
-            if Self::token_tree_is_notation_delimiter(&token, param_kind).is_some() {
-                Some(true)
-            } else if matches!(
-                **token,
-                TokenTree::Token(Token::Keyword(_)) | TokenTree::Token(Token::String(_, _))
-            ) {
-                Some(false)
+        let notation_delimiter_desc = tokens.iter().find_map(|token| {
+            let notation_delimiter_desc =
+                Self::token_tree_is_notation_delimiter(&token, param_kind);
+            if notation_delimiter_desc.is_some()
+                || matches!(
+                    **token,
+                    TokenTree::Token(Token::Keyword(_)) | TokenTree::Token(Token::String(_, _))
+                )
+            {
+                Some(notation_delimiter_desc)
             } else {
                 None
             }
         });
-        if notation_delimiter_found == Some(true) {
+        if let Some(Some(notation_delimiter_desc)) = notation_delimiter_desc {
             let mut token_iter = take(&mut tokens).into_iter();
             while let Some(token) = token_iter.next() {
                 let is_comma = matches!(*token, TokenTree::Token(Token::ReservedChar(',', _, _)));
-                let notation_delimiter_desc =
-                    Self::token_tree_is_notation_delimiter(&token, param_kind);
-                if is_comma || notation_delimiter_desc.is_some() {
+                if is_comma || Self::token_tree_is_notation_delimiter(&token, param_kind).is_some()
+                {
                     let cur_pos = token.span().start;
                     if tokens.is_empty() {
                         interface.error(
@@ -1190,11 +1191,6 @@ impl<'a> ParameterIdentifier<'a> {
                             format!("expected name/notation"),
                         );
                     } else {
-                        let notation_delimiter_desc =
-                            notation_delimiter_desc.unwrap_or(NotationDelimiterDesc {
-                                kind_override: None,
-                                is_ref: false,
-                            });
                         let notation = Self::create_notation(
                             interface,
                             &mut tokens,
@@ -1202,7 +1198,7 @@ impl<'a> ParameterIdentifier<'a> {
                             prefix_options,
                             notation_ctx,
                             scope,
-                            notation_delimiter_desc.kind_override,
+                            notation_delimiter_desc.kind,
                             notation_delimiter_desc.is_ref,
                         );
                         param_notations.push(notation);
@@ -1382,7 +1378,7 @@ impl<'a> ParameterIdentifier<'a> {
                 }
                 data.push(token);
                 data.extend(token_iter);
-                kind = notation_delimiter_desc.kind_override;
+                kind = notation_delimiter_desc.kind;
                 is_ref = notation_delimiter_desc.is_ref;
                 break;
             }
@@ -1441,7 +1437,27 @@ impl<'a> ParameterIdentifier<'a> {
             );
         }
 
-        let mut span = (tokens.first().unwrap()..tokens.last().unwrap()).span();
+        let first_token = tokens.first().unwrap();
+        let last_token = tokens.last().unwrap();
+        let mut span = (first_token..last_token).span();
+
+        if tokens.len() == 1
+            && matches!(
+                **first_token,
+                TokenTree::Token(Token::ReservedChar('_', _, _))
+            )
+        {
+            tokens.drain(..);
+            return WithSpan::new(
+                Notation {
+                    expr: None,
+                    scope,
+                    kind,
+                },
+                span,
+            );
+        }
+
         interface.span_desc(
             span.clone(),
             if is_ref {
@@ -1478,17 +1494,16 @@ impl<'a> ParameterIdentifier<'a> {
         if let Some(expr) = &mut expr {
             if let Some(prefix_options) = prefix_options {
                 Self::remove_prefix_parentheses(expr, prefix_options, false);
+                span = expr.span();
             }
 
             if matches!(**expr, NotationExpr::Param(_)) {
                 interface.error(
-                    span,
+                    span.clone(),
                     Some(ErrorKind::SyntaxError),
                     format!("a notation cannot consist entirely of a parameter"),
                 );
             }
-
-            span = expr.span();
         }
 
         WithSpan::new(
@@ -2657,6 +2672,44 @@ mod tests {
         ]);
         assert_parameter_identifier_test_output(vec![
             (
+                Input("_ : T := y"),
+                Some(ParameterEvent::ParamGroup(Parameterized {
+                    parameterizations: Vec::new(),
+                    prefixes: Vec::new(),
+                    data: Some(ParamGroup {
+                        param_notations: vec![WithSpan::new(
+                            Notation {
+                                expr: None,
+                                scope: NameScopeDesc::Global,
+                                kind: Some(NameKindDesc::Value),
+                            },
+                            StrPosition::span_from_range(15..16),
+                        )],
+                        data: vec![
+                            WithSpan::new(
+                                Token(Ident(":".into(), Unquoted)),
+                                StrPosition::span_from_range(17..18),
+                            ),
+                            WithSpan::new(
+                                Token(Ident("T".into(), Unquoted)),
+                                StrPosition::span_from_range(19..20),
+                            ),
+                            WithSpan::new(
+                                Token(Ident(":=".into(), Unquoted)),
+                                StrPosition::span_from_range(21..23),
+                            ),
+                            WithSpan::new(
+                                Token(Ident("y".into(), Unquoted)),
+                                StrPosition::span_from_range(24..25),
+                            ),
+                        ],
+                    }),
+                })),
+            ),
+            (Input(";"), None),
+        ]);
+        assert_parameter_identifier_test_output(vec![
+            (
                 Seq(vec![
                     WithDesc(
                         Box::new(Input("x")),
@@ -2687,7 +2740,7 @@ mod tests {
             (Input(";"), None),
         ]);
         assert_parameter_identifier_test_output(vec![
-            (Input("x. "), None),
+            (Input("x."), None),
             (
                 Input("T"),
                 Some(ParameterEvent::ParamGroup(Parameterized {
@@ -2700,7 +2753,7 @@ mod tests {
                         param_notations: Vec::new(),
                         data: vec![WithSpan::new(
                             Token(Ident("T".into(), Unquoted)),
-                            StrPosition::span_from_range(18..19),
+                            StrPosition::span_from_range(17..18),
                         )],
                     }),
                 })),
@@ -3692,7 +3745,7 @@ mod tests {
                 Seq(vec![
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Global, None),
+                        SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDesc(
@@ -3710,7 +3763,7 @@ mod tests {
                                 Notation {
                                     expr: Some(NotationExpr::Ident("x".into())),
                                     scope: NameScopeDesc::Global,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Value),
                                 },
                                 StrPosition::span_from_range(15..16),
                             ),
@@ -3743,12 +3796,12 @@ mod tests {
                 Seq(vec![
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Global, None),
+                        SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDesc(
                         Box::new(Input("y")),
-                        SpanDesc::NameDef(NameScopeDesc::Global, None),
+                        SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Value)),
                     ),
                     Input(", "),
                     WithDiag(
@@ -3766,7 +3819,7 @@ mod tests {
                                 Notation {
                                     expr: Some(NotationExpr::Ident("x".into())),
                                     scope: NameScopeDesc::Global,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Value),
                                 },
                                 StrPosition::span_from_range(15..16),
                             ),
@@ -3774,7 +3827,7 @@ mod tests {
                                 Notation {
                                     expr: Some(NotationExpr::Ident("y".into())),
                                     scope: NameScopeDesc::Global,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Value),
                                 },
                                 StrPosition::span_from_range(17..18),
                             ),
@@ -3799,7 +3852,7 @@ mod tests {
                 Seq(vec![
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Global, None),
+                        SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDiag(
@@ -3822,7 +3875,7 @@ mod tests {
                                 Notation {
                                     expr: Some(NotationExpr::Ident("x".into())),
                                     scope: NameScopeDesc::Global,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Value),
                                 },
                                 StrPosition::span_from_range(15..16),
                             ),
@@ -4299,12 +4352,12 @@ mod tests {
                     WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("b")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(", "),
                     WithDesc(
                         Box::new(Input("b c")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(", "),
                     WithDesc(
@@ -4323,18 +4376,18 @@ mod tests {
                             Input(" "),
                             WithDesc(
                                 Box::new(Input("b")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(" a"),
                             WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
                             WithDesc(
                                 Box::new(Input("b c")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(", "),
                             WithDesc(
                                 Box::new(Input("b")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(", "),
                             WithDesc(
@@ -4344,17 +4397,17 @@ mod tests {
                             Input(", "),
                             WithDesc(
                                 Box::new(Input("b")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(" "),
                             WithDesc(
                                 Box::new(Input("b c")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(", "),
                             WithDesc(
                                 Box::new(Input("b c")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(" "),
                             WithDesc(
@@ -4380,7 +4433,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("b".into())),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(16..17),
                                         ),
@@ -4397,7 +4450,7 @@ mod tests {
                                                     ),
                                                 ])),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(19..22),
                                         ),
@@ -4515,7 +4568,7 @@ mod tests {
                     WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("b")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDesc(
@@ -4529,7 +4582,7 @@ mod tests {
                         Box::new(Seq(vec![
                             WithDesc(
                                 Box::new(Input("b")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(" + "),
                             WithDesc(
@@ -4554,7 +4607,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("b".into())),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(16..17),
                                         ),
@@ -4625,8 +4678,271 @@ mod tests {
                 Seq(vec![
                     WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
                     WithDesc(
+                        Box::new(Input("b")),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                    ),
+                    Input(" : B; "),
+                    WithDesc(
+                        Box::new(Input("c")),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                    ),
+                    Input(" : C"),
+                    WithDesc(Box::new(Input("]")), SpanDesc::ParenEnd),
+                    Input(" "),
+                    WithDesc(
+                        Box::new(Seq(vec![
+                            WithDesc(
+                                Box::new(Input("b")),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                            ),
+                            Input(" + "),
+                            WithDesc(
+                                Box::new(Input("c")),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                            ),
+                        ])),
+                        SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Function)),
+                    ),
+                    Input(" : A"),
+                ]),
+                Some(ParameterEvent::ParamGroup(Parameterized {
+                    parameterizations: vec![WithSpan::new(
+                        super::Parameterization {
+                            kind: &TestMetaModel,
+                            items: vec![
+                                Parameterized {
+                                    parameterizations: Vec::new(),
+                                    prefixes: Vec::new(),
+                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        param_notations: vec![WithSpan::new(
+                                            Notation {
+                                                expr: Some(NotationExpr::Ident("b".into())),
+                                                scope: NameScopeDesc::Param,
+                                                kind: Some(NameKindDesc::Value),
+                                            },
+                                            StrPosition::span_from_range(16..17),
+                                        )],
+                                        data: vec![
+                                            WithSpan::new(
+                                                Token(Ident(":".into(), Unquoted)),
+                                                StrPosition::span_from_range(18..19),
+                                            ),
+                                            WithSpan::new(
+                                                Token(Ident("B".into(), Unquoted)),
+                                                StrPosition::span_from_range(20..21),
+                                            ),
+                                        ],
+                                    })),
+                                },
+                                Parameterized {
+                                    parameterizations: Vec::new(),
+                                    prefixes: Vec::new(),
+                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        param_notations: vec![WithSpan::new(
+                                            Notation {
+                                                expr: Some(NotationExpr::Ident("c".into())),
+                                                scope: NameScopeDesc::Param,
+                                                kind: Some(NameKindDesc::Value),
+                                            },
+                                            StrPosition::span_from_range(23..24),
+                                        )],
+                                        data: vec![
+                                            WithSpan::new(
+                                                Token(Ident(":".into(), Unquoted)),
+                                                StrPosition::span_from_range(25..26),
+                                            ),
+                                            WithSpan::new(
+                                                Token(Ident("C".into(), Unquoted)),
+                                                StrPosition::span_from_range(27..28),
+                                            ),
+                                        ],
+                                    })),
+                                },
+                            ],
+                        },
+                        StrPosition::span_from_range(15..29),
+                    )],
+                    prefixes: Vec::new(),
+                    data: Some(ParamGroup {
+                        param_notations: vec![WithSpan::new(
+                            Notation {
+                                expr: Some(NotationExpr::Seq(vec![
+                                    WithSpan::new(
+                                        NotationExpr::Param(-2),
+                                        StrPosition::span_from_range(30..31),
+                                    ),
+                                    WithSpan::new(
+                                        NotationExpr::Ident("+".into()),
+                                        StrPosition::span_from_range(32..33),
+                                    ),
+                                    WithSpan::new(
+                                        NotationExpr::Param(-1),
+                                        StrPosition::span_from_range(34..35),
+                                    ),
+                                ])),
+                                scope: NameScopeDesc::Global,
+                                kind: Some(NameKindDesc::Function),
+                            },
+                            StrPosition::span_from_range(30..35),
+                        )],
+                        data: vec![
+                            WithSpan::new(
+                                Token(Ident(":".into(), Unquoted)),
+                                StrPosition::span_from_range(36..37),
+                            ),
+                            WithSpan::new(
+                                Token(Ident("A".into(), Unquoted)),
+                                StrPosition::span_from_range(38..39),
+                            ),
+                        ],
+                    }),
+                })),
+            ),
+            (Input(";"), None),
+        ]);
+        assert_parameter_identifier_test_output(vec![
+            (
+                Seq(vec![
+                    WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                    WithDesc(
+                        Box::new(Input("b")),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                    ),
+                    Input(" : B"),
+                    WithDesc(Box::new(Input("]")), SpanDesc::ParenEnd),
+                    Input(" "),
+                    WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                    WithDesc(
+                        Box::new(Input("c")),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                    ),
+                    Input(" : C"),
+                    WithDesc(Box::new(Input("]")), SpanDesc::ParenEnd),
+                    Input(" "),
+                    WithDesc(
+                        Box::new(Seq(vec![
+                            WithDesc(
+                                Box::new(Input("b")),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                            ),
+                            Input(" + "),
+                            WithDesc(
+                                Box::new(Input("c")),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
+                            ),
+                        ])),
+                        SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Function)),
+                    ),
+                    Input(" : A"),
+                ]),
+                Some(ParameterEvent::ParamGroup(Parameterized {
+                    parameterizations: vec![
+                        WithSpan::new(
+                            super::Parameterization {
+                                kind: &TestMetaModel,
+                                items: vec![Parameterized {
+                                    parameterizations: Vec::new(),
+                                    prefixes: Vec::new(),
+                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        param_notations: vec![WithSpan::new(
+                                            Notation {
+                                                expr: Some(NotationExpr::Ident("b".into())),
+                                                scope: NameScopeDesc::Param,
+                                                kind: Some(NameKindDesc::Value),
+                                            },
+                                            StrPosition::span_from_range(16..17),
+                                        )],
+                                        data: vec![
+                                            WithSpan::new(
+                                                Token(Ident(":".into(), Unquoted)),
+                                                StrPosition::span_from_range(18..19),
+                                            ),
+                                            WithSpan::new(
+                                                Token(Ident("B".into(), Unquoted)),
+                                                StrPosition::span_from_range(20..21),
+                                            ),
+                                        ],
+                                    })),
+                                }],
+                            },
+                            StrPosition::span_from_range(15..22),
+                        ),
+                        WithSpan::new(
+                            super::Parameterization {
+                                kind: &TestMetaModel,
+                                items: vec![Parameterized {
+                                    parameterizations: Vec::new(),
+                                    prefixes: Vec::new(),
+                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        param_notations: vec![WithSpan::new(
+                                            Notation {
+                                                expr: Some(NotationExpr::Ident("c".into())),
+                                                scope: NameScopeDesc::Param,
+                                                kind: Some(NameKindDesc::Value),
+                                            },
+                                            StrPosition::span_from_range(24..25),
+                                        )],
+                                        data: vec![
+                                            WithSpan::new(
+                                                Token(Ident(":".into(), Unquoted)),
+                                                StrPosition::span_from_range(26..27),
+                                            ),
+                                            WithSpan::new(
+                                                Token(Ident("C".into(), Unquoted)),
+                                                StrPosition::span_from_range(28..29),
+                                            ),
+                                        ],
+                                    })),
+                                }],
+                            },
+                            StrPosition::span_from_range(23..30),
+                        ),
+                    ],
+                    prefixes: Vec::new(),
+                    data: Some(ParamGroup {
+                        param_notations: vec![WithSpan::new(
+                            Notation {
+                                expr: Some(NotationExpr::Seq(vec![
+                                    WithSpan::new(
+                                        NotationExpr::Param(-2),
+                                        StrPosition::span_from_range(31..32),
+                                    ),
+                                    WithSpan::new(
+                                        NotationExpr::Ident("+".into()),
+                                        StrPosition::span_from_range(33..34),
+                                    ),
+                                    WithSpan::new(
+                                        NotationExpr::Param(-1),
+                                        StrPosition::span_from_range(35..36),
+                                    ),
+                                ])),
+                                scope: NameScopeDesc::Global,
+                                kind: Some(NameKindDesc::Function),
+                            },
+                            StrPosition::span_from_range(31..36),
+                        )],
+                        data: vec![
+                            WithSpan::new(
+                                Token(Ident(":".into(), Unquoted)),
+                                StrPosition::span_from_range(37..38),
+                            ),
+                            WithSpan::new(
+                                Token(Ident("A".into(), Unquoted)),
+                                StrPosition::span_from_range(39..40),
+                            ),
+                        ],
+                    }),
+                })),
+            ),
+            (Input(";"), None),
+        ]);
+        assert_parameter_identifier_test_output(vec![
+            (
+                Seq(vec![
+                    WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
+                    WithDesc(
                         Box::new(Input("a b")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(", "),
                     WithDesc(
@@ -4670,7 +4986,7 @@ mod tests {
                                                     ),
                                                 ])),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(16..19),
                                         ),
@@ -4759,7 +5075,7 @@ mod tests {
                     Input(" "),
                     WithDesc(
                         Box::new(Input("b")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Function)),
                     ),
                     Input(","),
                     WithDesc(
@@ -4817,7 +5133,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("b".into())),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Function),
                                             },
                                             StrPosition::span_from_range(24..25),
                                         ),
@@ -7977,7 +8293,7 @@ mod tests {
                                         ),
                                     ])),
                                     scope: NameScopeDesc::Param,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Function),
                                 },
                                 StrPosition::span_from_range(24..28),
                             ),
@@ -8091,7 +8407,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Function)),
                     ),
                     Input(","),
                     WithDesc(
@@ -8128,7 +8444,10 @@ mod tests {
                                     ),
                                     WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                                 ])),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(
+                                    NameScopeDesc::Param,
+                                    Some(NameKindDesc::Function),
+                                ),
                             ),
                             Input(", "),
                             WithDesc(
@@ -9318,7 +9637,7 @@ mod tests {
                                         ),
                                     ])),
                                     scope: NameScopeDesc::Param,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Function),
                                 },
                                 StrPosition::span_from_range(35..48),
                             ),
@@ -9480,7 +9799,7 @@ mod tests {
                             ),
                             WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                         ])),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Function)),
                     ),
                     Input(","),
                     WithDesc(
@@ -9562,7 +9881,10 @@ mod tests {
                                     ),
                                     WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                                 ])),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(
+                                    NameScopeDesc::Param,
+                                    Some(NameKindDesc::Function),
+                                ),
                             ),
                             Input(", λ λ "),
                             WithDesc(
@@ -9965,7 +10287,7 @@ mod tests {
                     WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("a")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDesc(
@@ -9990,7 +10312,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("a".into())),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(16..17),
                                         ),
@@ -10030,7 +10352,7 @@ mod tests {
                             Input("x_"),
                             WithDesc(
                                 Box::new(Input("a")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Function)),
@@ -10087,7 +10409,7 @@ mod tests {
                             Input("y_"),
                             WithDesc(
                                 Box::new(Input("a")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input("_"),
                             WithDesc(
@@ -11055,7 +11377,7 @@ mod tests {
                     WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDesc(
@@ -11067,7 +11389,7 @@ mod tests {
                     Input(" "),
                     WithDesc(
                         Box::new(Input("x")),
-                        SpanDesc::NameRef(NameScopeDesc::Param, None),
+                        SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input("."),
                     WithDesc(
@@ -11096,7 +11418,7 @@ mod tests {
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("x".into())),
                                                 scope: NameScopeDesc::Param,
-                                                kind: None,
+                                                kind: Some(NameKindDesc::Value),
                                             },
                                             StrPosition::span_from_range(16..17),
                                         ),
@@ -11377,7 +11699,10 @@ mod tests {
                         Box::new(Seq(vec![
                             WithDesc(
                                 Box::new(Input("y")),
-                                SpanDesc::NameDef(NameScopeDesc::Global, None),
+                                SpanDesc::NameDef(
+                                    NameScopeDesc::Global,
+                                    Some(NameKindDesc::Function),
+                                ),
                             ),
                             Input(","),
                             WithDesc(
@@ -11437,7 +11762,7 @@ mod tests {
                                 Notation {
                                     expr: Some(NotationExpr::Ident("y".into())),
                                     scope: NameScopeDesc::Global,
-                                    kind: None,
+                                    kind: Some(NameKindDesc::Function),
                                 },
                                 StrPosition::span_from_range(25..26),
                             ),
@@ -13149,7 +13474,7 @@ mod tests {
                                     Notation {
                                         expr: Some(NotationExpr::Ident("m".into())),
                                         scope: NameScopeDesc::Param,
-                                        kind: None,
+                                        kind: Some(NameKindDesc::Value),
                                     },
                                     StrPosition::span_from_range(46..47),
                                 ),
@@ -13391,7 +13716,7 @@ mod tests {
                     WithDesc(Box::new(Input("[")), SpanDesc::ParenStart),
                     WithDesc(
                         Box::new(Input("m")),
-                        SpanDesc::NameDef(NameScopeDesc::Param, None),
+                        SpanDesc::NameDef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input(","),
                     WithDesc(
@@ -13405,7 +13730,7 @@ mod tests {
                         Box::new(Seq(vec![
                             WithDesc(
                                 Box::new(Input("m")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, None),
+                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                             ),
                             Input(" + "),
                             WithDesc(
@@ -13620,6 +13945,60 @@ mod tests {
                             WithSpan::new(
                                 Token(Ident("x".into(), Unquoted)),
                                 StrPosition::span_from_range(30..31),
+                            ),
+                        ],
+                    }),
+                })),
+            ),
+            (Input(";"), None),
+        ]);
+        assert_parameter_identifier_test_output(vec![
+            (
+                Seq(vec![
+                    WithDesc(
+                        Box::new(Input("f")),
+                        SpanDesc::NameDef(NameScopeDesc::Global, None),
+                    ),
+                    Input(" := λ _. x"),
+                ]),
+                Some(ParameterEvent::ParamGroup(Parameterized {
+                    parameterizations: Vec::new(),
+                    prefixes: Vec::new(),
+                    data: Some(ParamGroup {
+                        param_notations: vec![WithSpan::new(
+                            Notation {
+                                expr: Some(NotationExpr::Ident("f".into())),
+                                scope: NameScopeDesc::Global,
+                                kind: None,
+                            },
+                            StrPosition::span_from_range(15..16),
+                        )],
+                        data: vec![
+                            WithSpan::new(
+                                Token(Ident(":=".into(), Unquoted)),
+                                StrPosition::span_from_range(17..19),
+                            ),
+                            WithSpan::new(
+                                Mapping(super::Mapping {
+                                    kind: &TestPrefixMapping,
+                                    params: vec![MappingParam {
+                                        mappings: Vec::new(),
+                                        notation: WithSpan::new(
+                                            Notation {
+                                                expr: None,
+                                                scope: NameScopeDesc::Param,
+                                                kind: None,
+                                            },
+                                            StrPosition::span_from_range(23..24),
+                                        ),
+                                        data: Vec::new(),
+                                    }],
+                                }),
+                                StrPosition::span_from_range(20..25),
+                            ),
+                            WithSpan::new(
+                                Token(Ident("x".into(), Unquoted)),
+                                StrPosition::span_from_range(26..27),
                             ),
                         ],
                     }),
