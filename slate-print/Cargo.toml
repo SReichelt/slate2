@@ -1,0 +1,13 @@
+[package]
+name = "slate-print"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lang-def = { git = "https://github.com/SReichelt/lang-tools.git" }
+lang-tools-cli = { git = "https://github.com/SReichelt/lang-tools.git" }
+slate-lang-def = { path = "../slate-lang-def" }
+slate-dtt = { path = "../slate-dtt" }
+clap = { version = "4.5.19", features = ["derive"] }
+termcolor = "1.4.1"
+mimalloc = "0.1.43"

@@ -665,6 +665,9 @@ impl<'a> ParameterIdentifier<'a> {
                     if ch == ';' || Some(ch) == separator =>
                 {
                     let start_token = start_token.consume();
+                    if Some(ch) == separator {
+                        interface.span_desc(&start_token, SpanDesc::ParenMid);
+                    }
                     if !no_item(interface, Some(start_token.span().start)) && ch == ';' {
                         interface.error(
                             &start_token,
@@ -721,6 +724,7 @@ impl<'a> ParameterIdentifier<'a> {
                 *token,
                 TokenTree::Token(Token::ReservedChar(ch, _, _)) if Some(ch) == separator
             ) {
+                interface.span_desc(&token, SpanDesc::ParenMid);
                 break true;
             }
             at_expr_start = Self::token_tree_is_notation_delimiter(&token, param_kind).is_some()
@@ -860,6 +864,7 @@ impl<'a> ParameterIdentifier<'a> {
         let mut items = Vec::new();
         while let Some(token) = Self::parse_token_tree(interface, param_data_kind, false) {
             if Self::token_tree_is_reserved_char(&token, separator) {
+                interface.span_desc(&token, SpanDesc::ParenMid);
                 interface.error(
                     &token,
                     Some(ErrorKind::SyntaxError),
@@ -872,6 +877,7 @@ impl<'a> ParameterIdentifier<'a> {
             let mut extra_parts = Vec::new();
             while let Some(token) = Self::parse_token_tree(interface, param_data_kind, false) {
                 if Self::token_tree_is_reserved_char(&token, separator) {
+                    interface.span_desc(&token, SpanDesc::ParenMid);
                     parameterization_items = Self::parse_section_items(
                         interface,
                         parameterization_kind,
@@ -898,15 +904,18 @@ impl<'a> ParameterIdentifier<'a> {
                                 }
                                 extra_parts.push(extra_part_items);
                             } else {
-                                let Some(span) =
+                                let (token, span) =
                                     Self::skip_until_top_level_token(interface, |token| {
                                         matches!(
                                             token,
                                             TokenEvent::Token(Token::ReservedChar(ch, _, _))
                                                 if *ch == separator
                                         )
-                                    })
-                                else {
+                                    });
+                                if let Some(token) = token {
+                                    interface.span_desc(&token, SpanDesc::ParenMid);
+                                }
+                                let Some(span) = span else {
                                     break;
                                 };
                                 interface.error(
@@ -1443,32 +1452,6 @@ impl<'a> ParameterIdentifier<'a> {
         let last_token = tokens.last().unwrap();
         let mut span = (first_token..last_token).span();
 
-        if tokens.len() == 1
-            && matches!(
-                **first_token,
-                TokenTree::Token(Token::ReservedChar('_', _, _))
-            )
-        {
-            tokens.drain(..);
-            return WithSpan::new(
-                Notation {
-                    expr: None,
-                    scope,
-                    kind,
-                },
-                span,
-            );
-        }
-
-        interface.span_desc(
-            span.clone(),
-            if is_ref {
-                SpanDesc::NameRef(scope, kind)
-            } else {
-                SpanDesc::NameDef(scope, kind)
-            },
-        );
-
         if prefix_options.is_some() {
             let mut prev_is_ident = false;
             for token in tokens.iter() {
@@ -1491,7 +1474,16 @@ impl<'a> ParameterIdentifier<'a> {
             }
         }
 
-        let mut expr = Self::create_notation_expr(interface, tokens, notation_ctx);
+        let mut expr = if tokens.len() == 1
+            && matches!(
+                **first_token,
+                TokenTree::Token(Token::ReservedChar('_', _, _))
+            ) {
+            tokens.drain(..);
+            None
+        } else {
+            Self::create_notation_expr(interface, tokens, notation_ctx)
+        };
 
         if let Some(expr) = &mut expr {
             if let Some(prefix_options) = prefix_options {
@@ -1504,6 +1496,15 @@ impl<'a> ParameterIdentifier<'a> {
                     span.clone(),
                     Some(ErrorKind::SyntaxError),
                     format!("a notation cannot consist entirely of a parameter"),
+                );
+            } else {
+                interface.span_desc(
+                    span.clone(),
+                    if is_ref {
+                        SpanDesc::NameRef(scope, kind)
+                    } else {
+                        SpanDesc::NameDef(scope, kind)
+                    },
                 );
             }
         }
@@ -1748,26 +1749,18 @@ impl<'a> ParameterIdentifier<'a> {
         options: &NotationPrefixOptions,
         allow_single_param: bool,
     ) {
-        if let NotationExpr::Paren(paren, inner) = &**expr {
-            if *paren == options.paren && inner.len() == 1 {
-                let row = inner.first().unwrap();
-                if row.len() == 1 {
-                    if allow_single_param
-                        || !matches!(**row.first().unwrap(), NotationExpr::Param(_))
-                    {
-                        let NotationExpr::Paren(_, inner) =
-                            replace(&mut **expr, NotationExpr::Param(0))
-                        else {
-                            unreachable!()
-                        };
-                        *expr = inner
-                            .into_iter()
-                            .next()
-                            .unwrap()
-                            .into_iter()
-                            .next()
-                            .unwrap();
-                    }
+        if let NotationExpr::Paren(paren, rows) = &**expr {
+            if *paren == options.paren && rows.len() == 1 {
+                let cols = rows.first().unwrap();
+                if cols.len() == 1
+                    && (allow_single_param
+                        || !matches!(**cols.first().unwrap(), NotationExpr::Param(_)))
+                {
+                    let NotationExpr::Paren(_, rows) = replace(&mut **expr, NotationExpr::Param(0))
+                    else {
+                        unreachable!()
+                    };
+                    *expr = rows.into_iter().next().unwrap().into_iter().next().unwrap();
                 }
             }
         }
@@ -2087,12 +2080,12 @@ impl<'a> ParameterIdentifier<'a> {
     >(
         interface: &mut IF,
         mut pred: impl FnMut(&TokenEvent<'a>) -> bool,
-    ) -> Option<Range<Pos>> {
+    ) -> (Option<WithSpan<TokenEvent<'a>, Pos>>, Option<Range<Pos>>) {
         let input = interface.input();
         let mut span: Option<Range<Pos>> = None;
         while let Some(token) = input.next_if(|token| !matches!(token, TokenEvent::ParenEnd)) {
             if pred(&*token) {
-                break;
+                return (Some(token), span);
             }
             if let Some(span) = &mut span {
                 span.end = token.span().end;
@@ -2120,7 +2113,7 @@ impl<'a> ParameterIdentifier<'a> {
                 }
             }
         }
-        span
+        (None, span)
     }
 
     fn search_top_level_token<
@@ -4078,11 +4071,8 @@ mod tests {
                     Input(" "),
                     WithDiag(
                         Box::new(WithDesc(
-                            Box::new(WithDesc(
-                                Box::new(Input("b")),
-                                SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
-                            )),
-                            SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Function)),
+                            Box::new(Input("b")),
+                            SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                         )),
                         (
                             Error(Some(SyntaxError)),
@@ -11210,14 +11200,12 @@ mod tests {
                         SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input("."),
+                    WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
                     WithDesc(
-                        Box::new(Seq(vec![
-                            WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
-                            Input("y"),
-                            WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
-                        ])),
+                        Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Function)),
                     ),
+                    WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                     Input(" : U"),
                 ]),
                 Some(ParameterEvent::ParamGroup(Parameterized {
@@ -11295,14 +11283,12 @@ mod tests {
                         SpanDesc::NameRef(NameScopeDesc::Param, Some(NameKindDesc::Value)),
                     ),
                     Input("."),
+                    WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
                     WithDesc(
-                        Box::new(Seq(vec![
-                            WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
-                            Input("y z"),
-                            WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
-                        ])),
+                        Box::new(Input("y z")),
                         SpanDesc::NameDef(NameScopeDesc::Global, Some(NameKindDesc::Function)),
                     ),
+                    WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
                     Input(" : U"),
                 ]),
                 Some(ParameterEvent::ParamGroup(Parameterized {
@@ -11912,7 +11898,10 @@ mod tests {
                         Box::new(Input("x")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
-                    Input(" || "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
@@ -11999,7 +11988,11 @@ mod tests {
                         Box::new(Input("x")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
-                    Input(" | | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
@@ -12086,9 +12079,11 @@ mod tests {
                         Box::new(Input("x")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
-                    Input(" ||"),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
                     WithDiag(
-                        Box::new(Input("|")),
+                        Box::new(WithDesc(Box::new(Input("|")), SpanDesc::ParenMid)),
                         (Error(Some(SyntaxError)), "superfluous separator".into()),
                     ),
                     Input(" "),
@@ -12182,7 +12177,10 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
                     ),
-                    Input(" || "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Seq(vec![
                             WithDesc(Box::new(Input("|")), SpanDesc::ParenStart),
@@ -12297,12 +12295,15 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : T |"),
+                    Input(" : T "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
                 Some(ParameterEvent::ParamGroup(Parameterized {
@@ -12415,12 +12416,16 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : T ||"),
+                    Input(" : T "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                 ]),
                 Some(ParameterEvent::ParamGroup(Parameterized {
@@ -12533,12 +12538,17 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : T || "),
+                    Input(" : T "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("z")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
@@ -12695,17 +12705,28 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : T | a | b | "),
+                    Input(" : T "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" a "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" b "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDiag(
                         Box::new(Input("c")),
                         (Error(Some(SyntaxError)), "superfluous item part".into()),
                     ),
-                    Input(" || "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("z")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
@@ -12893,12 +12914,16 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("y")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : T | "),
+                    Input(" : T "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("z")),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Value)),
@@ -13277,12 +13302,17 @@ mod tests {
                         ])),
                         SpanDesc::NameRef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" ↦ i | "),
+                    Input(" ↦ i "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("i")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : I || "),
+                    Input(" : I "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Seq(vec![
                             Input("y_"),
@@ -13298,7 +13328,9 @@ mod tests {
                         ])),
                         SpanDesc::NameRef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" ↦ j k | "),
+                    Input(" ↦ j k "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("j")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
@@ -13308,7 +13340,11 @@ mod tests {
                         Box::new(Input("k")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
                     ),
-                    Input(" : K | a | b"),
+                    Input(" : K "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" a "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" b"),
                     WithDesc(Box::new(Input("}")), SpanDesc::ParenEnd),
                     Input(" | "),
                     WithDesc(Box::new(Input("{")), SpanDesc::ParenStart),
@@ -13689,7 +13725,10 @@ mod tests {
                         )),
                         SpanDesc::Number,
                     ),
-                    Input(" || "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Seq(vec![
                             Input("S"),
@@ -13702,7 +13741,9 @@ mod tests {
                         ])),
                         SpanDesc::NameDef(NameScopeDesc::Instance, Some(NameKindDesc::Function)),
                     ),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("n")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),
@@ -13751,7 +13792,10 @@ mod tests {
                         )),
                         SpanDesc::Number,
                     ),
-                    Input(" ↦ m || "),
+                    Input(" ↦ m "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Seq(vec![
                             Input("S"),
@@ -13768,7 +13812,9 @@ mod tests {
                     WithDesc(Box::new(Input("(")), SpanDesc::ParenStart),
                     Input("m + x"),
                     WithDesc(Box::new(Input(")")), SpanDesc::ParenEnd),
-                    Input(" | "),
+                    Input(" "),
+                    WithDesc(Box::new(Input("|")), SpanDesc::ParenMid),
+                    Input(" "),
                     WithDesc(
                         Box::new(Input("x")),
                         SpanDesc::NameDef(NameScopeDesc::Field, Some(NameKindDesc::Value)),

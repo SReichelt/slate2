@@ -100,7 +100,7 @@ impl ParenthesisMatcher {
             interface.error(
                 pos.clone(),
                 Some(ErrorKind::SyntaxError),
-                format!("unmatched parenthesis: `{expected}` expected"),
+                format!("unmatched parenthesis: expected `{expected}`"),
             );
             interface.out_with_desc(pos.clone(), TokenEvent::ParenEnd, SpanDesc::ParenEnd);
         }
@@ -486,7 +486,7 @@ mod tests {
                     Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
                         Error(Some(SyntaxError)),
-                        "unmatched parenthesis: `)` expected".into(),
+                        "unmatched parenthesis: expected `)`".into(),
                     ),
                 ),
                 Some(ParenEnd),
@@ -514,7 +514,7 @@ mod tests {
                     Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
                         Error(Some(SyntaxError)),
-                        "unmatched parenthesis: `)` expected".into(),
+                        "unmatched parenthesis: expected `)`".into(),
                     ),
                 ),
                 Some(ParenEnd),
@@ -553,7 +553,7 @@ mod tests {
                     Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
                         Error(Some(SyntaxError)),
-                        "unmatched parenthesis: `]` expected".into(),
+                        "unmatched parenthesis: expected `]`".into(),
                     ),
                 ),
                 Some(ParenEnd),
@@ -584,7 +584,7 @@ mod tests {
                     Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
                         Error(Some(SyntaxError)),
-                        "unmatched parenthesis: `|` expected".into(),
+                        "unmatched parenthesis: expected `|`".into(),
                     ),
                 ),
                 Some(ParenEnd),
@@ -685,7 +685,7 @@ mod tests {
                     Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
                         Error(Some(SyntaxError)),
-                        "unmatched parenthesis: `]` expected".into(),
+                        "unmatched parenthesis: expected `]`".into(),
                     ),
                 ),
                 Some(ParenEnd),
@@ -695,7 +695,7 @@ mod tests {
                     Box::new(WithDesc(Box::new(Empty), SpanDesc::ParenEnd)),
                     (
                         Error(Some(SyntaxError)),
-                        "unmatched parenthesis: `}` expected".into(),
+                        "unmatched parenthesis: expected `}`".into(),
                     ),
                 ),
                 Some(ParenEnd),

@@ -1,0 +1,8 @@
+[package]
+name = "slate-dtt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lang-def = { git = "https://github.com/SReichelt/lang-tools.git" }
+slate-lang-def = { path = "../slate-lang-def" }

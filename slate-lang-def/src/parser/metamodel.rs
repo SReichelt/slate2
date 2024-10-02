@@ -26,8 +26,6 @@ macro_rules! meta_model_part {
 }
 
 pub trait MetaModel: MetaModelPart {
-    fn name(&self) -> &str;
-
     /// The section which implicitly surrounds the entire document.
     fn top_level_section_kind(&self) -> &dyn SectionKind;
 }
@@ -119,10 +117,6 @@ pub mod testing {
     }
 
     impl MetaModel for TestMetaModel {
-        fn name(&self) -> &str {
-            "test"
-        }
-
         fn top_level_section_kind(&self) -> &dyn SectionKind {
             self
         }
