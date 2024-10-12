@@ -1,6 +1,10 @@
 use lang_def::parser::NameKindDesc;
 use slate_lang_def::parser::metamodel::*;
 
+mod context;
+mod expr;
+mod meta;
+
 #[derive(Debug)]
 pub struct DTTMetaModel;
 
