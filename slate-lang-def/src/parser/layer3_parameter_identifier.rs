@@ -28,7 +28,7 @@ pub enum ParameterEvent<'a, Pos: Position> {
 pub struct Parameterized<'a, Pos: Position, T> {
     pub parameterizations: Vec<WithSpan<Parameterization<'a, Pos>, Pos>>,
     pub prefixes: Vec<WithSpan<NotationExpr<'a, Pos>, Pos>>,
-    pub data: Option<T>, // `None` in case of some syntax errors
+    pub inner: Option<T>, // `None` in case of some syntax errors
 }
 
 impl<'a, Pos: Position, T: MemSerializable<Pos>> MemSerializable<Pos>
@@ -44,7 +44,7 @@ impl<'a, Pos: Position, T: MemSerializable<Pos>> MemSerializable<Pos>
         (
             self.parameterizations.serialize(relative_to),
             self.prefixes.serialize(relative_to),
-            self.data.serialize(relative_to),
+            self.inner.serialize(relative_to),
         )
     }
 
@@ -52,7 +52,7 @@ impl<'a, Pos: Position, T: MemSerializable<Pos>> MemSerializable<Pos>
         Parameterized {
             parameterizations: <_>::deserialize(&serialized.0, relative_to),
             prefixes: <_>::deserialize(&serialized.1, relative_to),
-            data: <_>::deserialize(&serialized.2, relative_to),
+            inner: <_>::deserialize(&serialized.2, relative_to),
         }
     }
 }
@@ -309,11 +309,6 @@ impl<'a, Pos> MemSerializable<Pos> for NotationInfo<'a> {
 // globals.
 pub type ParamIdx = isize;
 
-// Nonnegative values are De Bruijn levels, indexing into the flattened list of section items.
-// Negative values are De Bruijn indices, indexing into the ctx consisting of parameterizations
-// and mappings.
-pub type ParamRef = isize;
-
 #[derive(MemSerializable)]
 pub struct ParameterIdentifier<'a> {
     open_sections: Vec<OpenSection<'a>>,
@@ -405,7 +400,7 @@ impl<
                     ParameterEvent::ParamGroup(Parameterized {
                         parameterizations,
                         prefixes,
-                        data: None,
+                        inner: None,
                     }),
                 );
             }
@@ -426,14 +421,14 @@ impl<
                 ParameterEvent::SectionStart(Parameterized {
                     parameterizations,
                     prefixes,
-                    data: Some(kind),
+                    inner: Some(kind),
                 })
             }
             SectionItemHeader::ParamGroup(param_group) => {
                 ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes,
-                    data: Some(param_group),
+                    inner: Some(param_group),
                 })
             }
         };
@@ -557,7 +552,7 @@ impl<'a> ParameterIdentifier<'a> {
                 items.push(Parameterized {
                     parameterizations,
                     prefixes,
-                    data: item,
+                    inner: item,
                 });
             }
             if finished {
@@ -2040,7 +2035,7 @@ impl<'a> ParameterIdentifier<'a> {
     ) {
         for item in section_items.iter().rev() {
             parameterizations.push(&item.parameterizations);
-            if let Some(data) = &item.data {
+            if let Some(data) = &item.inner {
                 match data {
                     SectionItem::Section(section) => {
                         Self::for_each_param_group_rev(parameterizations, &section.items, f)
@@ -2544,7 +2539,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: Vec::new(),
                         data: vec![WithSpan::new(
                             Token(Ident("x".into(), Unquoted)),
@@ -2574,7 +2569,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: Vec::new(),
                         data: vec![WithSpan::new(
                             Token(Ident("x".into(), Unquoted)),
@@ -2597,7 +2592,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -2633,7 +2628,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -2671,7 +2666,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: None,
@@ -2716,7 +2711,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -2744,7 +2739,7 @@ mod tests {
                         NotationExpr::Ident("x".into()),
                         StrPosition::span_from_range(15..16),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: Vec::new(),
                         data: vec![WithSpan::new(
                             Token(Ident("T".into(), Unquoted)),
@@ -2771,7 +2766,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -2821,7 +2816,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Paren(
@@ -2871,7 +2866,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -2911,7 +2906,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Paren(
@@ -2966,7 +2961,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -3000,7 +2995,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -3036,7 +3031,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3081,7 +3076,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3139,7 +3134,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: Vec::new(),
                         data: vec![
                             WithSpan::new(
@@ -3208,7 +3203,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3261,7 +3256,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3311,7 +3306,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3373,7 +3368,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3439,7 +3434,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3506,7 +3501,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3572,7 +3567,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3634,7 +3629,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3696,7 +3691,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -3752,7 +3747,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![
                             WithSpan::new(
                                 Notation {
@@ -3808,7 +3803,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![
                             WithSpan::new(
                                 Notation {
@@ -3864,7 +3859,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![
                             WithSpan::new(
                                 Notation {
@@ -3918,7 +3913,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -3957,7 +3952,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("42".into())),
@@ -4009,7 +4004,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("b".into())),
@@ -4034,7 +4029,7 @@ mod tests {
                         StrPosition::span_from_range(15..22),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -4088,7 +4083,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("b".into())),
@@ -4113,7 +4108,7 @@ mod tests {
                         StrPosition::span_from_range(15..22),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Param(-1)),
@@ -4169,7 +4164,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("b".into())),
@@ -4194,7 +4189,7 @@ mod tests {
                         StrPosition::span_from_range(15..22),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -4265,7 +4260,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Seq(vec![
@@ -4299,7 +4294,7 @@ mod tests {
                         StrPosition::span_from_range(15..24),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -4419,7 +4414,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![
                                         WithSpan::new(
                                             Notation {
@@ -4471,7 +4466,7 @@ mod tests {
                         StrPosition::span_from_range(15..30),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -4593,7 +4588,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![
                                         WithSpan::new(
                                             Notation {
@@ -4628,7 +4623,7 @@ mod tests {
                         StrPosition::span_from_range(15..24),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -4705,7 +4700,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("b".into())),
@@ -4729,7 +4724,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -4755,7 +4750,7 @@ mod tests {
                         StrPosition::span_from_range(15..29),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -4835,7 +4830,7 @@ mod tests {
                                 items: vec![Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("b".into())),
@@ -4865,7 +4860,7 @@ mod tests {
                                 items: vec![Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -4891,7 +4886,7 @@ mod tests {
                         ),
                     ],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -4963,7 +4958,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![
                                         WithSpan::new(
                                             Notation {
@@ -5016,7 +5011,7 @@ mod tests {
                         StrPosition::span_from_range(15..29),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -5094,7 +5089,7 @@ mod tests {
                                         items: vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("d".into())),
@@ -5119,7 +5114,7 @@ mod tests {
                                     StrPosition::span_from_range(16..23),
                                 )],
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![
                                         WithSpan::new(
                                             Notation {
@@ -5154,7 +5149,7 @@ mod tests {
                         StrPosition::span_from_range(15..32),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -5220,7 +5215,7 @@ mod tests {
                                             items: vec![Parameterized {
                                                 parameterizations: Vec::new(),
                                                 prefixes: Vec::new(),
-                                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                     param_notations: vec![WithSpan::new(
                                                         Notation {
                                                             expr: Some(NotationExpr::Ident(
@@ -5247,7 +5242,7 @@ mod tests {
                                         StrPosition::span_from_range(16..23),
                                     )],
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("b".into())),
@@ -5271,7 +5266,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -5297,7 +5292,7 @@ mod tests {
                         StrPosition::span_from_range(15..37),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -5341,7 +5336,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -5361,7 +5356,7 @@ mod tests {
                                     items: vec![Parameterized {
                                         parameterizations: Vec::new(),
                                         prefixes: Vec::new(),
-                                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                                             param_notations: vec![WithSpan::new(
                                                 Notation {
                                                     expr: Some(NotationExpr::Ident("b".into())),
@@ -5423,7 +5418,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -5443,7 +5438,7 @@ mod tests {
                                     items: vec![Parameterized {
                                         parameterizations: Vec::new(),
                                         prefixes: Vec::new(),
-                                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                                             param_notations: vec![WithSpan::new(
                                                 Notation {
                                                     expr: Some(NotationExpr::Ident("c".into())),
@@ -5473,7 +5468,7 @@ mod tests {
                                     items: vec![Parameterized {
                                         parameterizations: Vec::new(),
                                         prefixes: Vec::new(),
-                                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                                             param_notations: vec![WithSpan::new(
                                                 Notation {
                                                     expr: Some(NotationExpr::Ident("b".into())),
@@ -5541,7 +5536,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -5573,7 +5568,7 @@ mod tests {
                                                 items: vec![Parameterized {
                                                     parameterizations: Vec::new(),
                                                     prefixes: Vec::new(),
-                                                    data: Some(SectionItem::ParamGroup(
+                                                    inner: Some(SectionItem::ParamGroup(
                                                         ParamGroup {
                                                             param_notations: vec![WithSpan::new(
                                                                 Notation {
@@ -5621,7 +5616,7 @@ mod tests {
                                                 items: vec![Parameterized {
                                                     parameterizations: Vec::new(),
                                                     prefixes: Vec::new(),
-                                                    data: Some(SectionItem::ParamGroup(
+                                                    inner: Some(SectionItem::ParamGroup(
                                                         ParamGroup {
                                                             param_notations: vec![WithSpan::new(
                                                                 Notation {
@@ -5701,7 +5696,7 @@ mod tests {
                 items: vec![Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("b".into())),
@@ -5751,7 +5746,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -5788,7 +5783,7 @@ mod tests {
                 items: vec![Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("b".into())),
@@ -5843,7 +5838,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -5901,7 +5896,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -5926,7 +5921,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -6023,7 +6018,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -6067,7 +6062,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -6092,7 +6087,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -6202,7 +6197,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -6246,7 +6241,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -6271,7 +6266,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -6376,7 +6371,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -6421,7 +6416,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -6445,7 +6440,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("d".into())),
@@ -6471,7 +6466,7 @@ mod tests {
                         StrPosition::span_from_range(16..30),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -6594,7 +6589,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -6639,7 +6634,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -6663,7 +6658,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("d".into())),
@@ -6689,7 +6684,7 @@ mod tests {
                         StrPosition::span_from_range(16..30),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -6812,7 +6807,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -6898,7 +6893,7 @@ mod tests {
                                     Parameterized {
                                         parameterizations: Vec::new(),
                                         prefixes: Vec::new(),
-                                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                                             param_notations: vec![WithSpan::new(
                                                 Notation {
                                                     expr: Some(NotationExpr::Ident("c".into())),
@@ -6922,7 +6917,7 @@ mod tests {
                                     Parameterized {
                                         parameterizations: Vec::new(),
                                         prefixes: Vec::new(),
-                                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                                             param_notations: vec![WithSpan::new(
                                                 Notation {
                                                     expr: Some(NotationExpr::Ident("d".into())),
@@ -6948,7 +6943,7 @@ mod tests {
                             StrPosition::span_from_range(16..30),
                         )],
                         prefixes: Vec::new(),
-                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                             param_notations: vec![WithSpan::new(
                                 Notation {
                                     expr: Some(NotationExpr::Seq(vec![
@@ -6997,7 +6992,7 @@ mod tests {
                                 items: vec![Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("d".into())),
@@ -7022,7 +7017,7 @@ mod tests {
                             StrPosition::span_from_range(43..50),
                         )],
                         prefixes: Vec::new(),
-                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                             param_notations: vec![WithSpan::new(
                                 Notation {
                                     expr: Some(NotationExpr::Seq(vec![
@@ -7137,7 +7132,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Mapping(Box::new(MappingNotationExpr {
@@ -7203,7 +7198,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -7228,7 +7223,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -7327,7 +7322,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -7389,7 +7384,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -7413,7 +7408,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("d".into())),
@@ -7439,7 +7434,7 @@ mod tests {
                         StrPosition::span_from_range(16..30),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -7566,7 +7561,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -7638,7 +7633,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -7662,7 +7657,7 @@ mod tests {
                                 Parameterized {
                                     parameterizations: Vec::new(),
                                     prefixes: Vec::new(),
-                                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                                         param_notations: vec![WithSpan::new(
                                             Notation {
                                                 expr: Some(NotationExpr::Ident("d".into())),
@@ -7688,7 +7683,7 @@ mod tests {
                         StrPosition::span_from_range(16..30),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -7856,7 +7851,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -7883,7 +7878,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -7908,7 +7903,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::Section(Section {
+                    inner: Some(SectionItem::Section(Section {
                         kind: &TestMetaModel,
                         items: vec![
                             Parameterized {
@@ -7918,7 +7913,7 @@ mod tests {
                                         items: vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("d".into())),
@@ -7943,7 +7938,7 @@ mod tests {
                                     StrPosition::span_from_range(26..33),
                                 )],
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Seq(vec![
@@ -7992,7 +7987,7 @@ mod tests {
                             Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Seq(vec![
@@ -8212,7 +8207,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -8239,7 +8234,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("d".into())),
@@ -8264,7 +8259,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![
                             WithSpan::new(
                                 Notation {
@@ -8471,7 +8466,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -8498,7 +8493,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -8523,7 +8518,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -8658,7 +8653,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -8685,7 +8680,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -8710,7 +8705,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -8866,7 +8861,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -8893,7 +8888,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -8918,7 +8913,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -9074,7 +9069,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -9101,7 +9096,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -9126,7 +9121,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -9233,7 +9228,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -9294,7 +9289,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("c".into())),
@@ -9319,7 +9314,7 @@ mod tests {
                         StrPosition::span_from_range(16..23),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -9496,7 +9491,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -9527,7 +9522,7 @@ mod tests {
                                         items: vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("e".into())),
@@ -9552,7 +9547,7 @@ mod tests {
                                     StrPosition::span_from_range(17..24),
                                 )],
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Seq(vec![
@@ -9592,7 +9587,7 @@ mod tests {
                         StrPosition::span_from_range(16..34),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(SectionItem::ParamGroup(ParamGroup {
+                    inner: Some(SectionItem::ParamGroup(ParamGroup {
                         param_notations: vec![
                             WithSpan::new(
                                 Notation {
@@ -9935,7 +9930,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations,
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations,
                         data: vec![
                             WithSpan::new(
@@ -9962,7 +9957,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -9976,7 +9971,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -9997,7 +9992,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10016,7 +10011,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -10050,7 +10045,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10065,7 +10060,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -10099,7 +10094,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10114,7 +10109,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -10148,7 +10143,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -10182,7 +10177,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10197,7 +10192,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("x".into())),
@@ -10225,7 +10220,7 @@ mod tests {
                 Some(ParameterEvent::SectionStart(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10240,7 +10235,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -10298,7 +10293,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![
                                         WithSpan::new(
                                             Notation {
@@ -10333,7 +10328,7 @@ mod tests {
                         StrPosition::span_from_range(15..24),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10354,7 +10349,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -10421,7 +10416,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: Vec::new(),
                                     data: vec![WithSpan::new(
                                         Token(Ident("c".into(), Unquoted)),
@@ -10433,7 +10428,7 @@ mod tests {
                         StrPosition::span_from_range(36..39),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -10501,7 +10496,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -10579,7 +10574,7 @@ mod tests {
                                         items: vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("a".into())),
@@ -10604,12 +10599,12 @@ mod tests {
                                     StrPosition::span_from_range(16..23),
                                 )],
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::Section(Section {
+                                inner: Some(SectionItem::Section(Section {
                                     kind: &TestMetaModel,
                                     items: vec![Parameterized {
                                         parameterizations: Vec::new(),
                                         prefixes: Vec::new(),
-                                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                                             param_notations: vec![WithSpan::new(
                                                 Notation {
                                                     expr: Some(NotationExpr::Seq(vec![
@@ -10649,7 +10644,7 @@ mod tests {
                         StrPosition::span_from_range(15..37),
                     )],
                     prefixes: Vec::new(),
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10686,7 +10681,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -10755,7 +10750,7 @@ mod tests {
                         NotationExpr::Ident("x".into()),
                         StrPosition::span_from_range(15..16),
                     )],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -10779,7 +10774,7 @@ mod tests {
                         NotationExpr::Ident("x".into()),
                         StrPosition::span_from_range(15..16),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -10819,7 +10814,7 @@ mod tests {
                             StrPosition::span_from_range(17..18),
                         ),
                     ],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -10837,7 +10832,7 @@ mod tests {
                         NotationExpr::Ident("x".into()),
                         StrPosition::span_from_range(15..16),
                     )],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" "), None),
@@ -10852,7 +10847,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -10890,7 +10885,7 @@ mod tests {
                         NotationExpr::Ident("x".into()),
                         StrPosition::span_from_range(15..16),
                     )],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (Input(" y."), None),
@@ -10908,7 +10903,7 @@ mod tests {
                         NotationExpr::Ident("y".into()),
                         StrPosition::span_from_range(19..20),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("z".into())),
@@ -10962,7 +10957,7 @@ mod tests {
                         ]),
                         StrPosition::span_from_range(16..21),
                     )],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -10995,7 +10990,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11023,7 +11018,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -11058,7 +11053,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Seq(vec![
@@ -11095,7 +11090,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(26..29),
                     )],
-                    data: Some(&TestMetaModel),
+                    inner: Some(&TestMetaModel),
                 })),
             ),
             (
@@ -11132,7 +11127,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11160,7 +11155,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -11215,7 +11210,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11243,7 +11238,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("y".into())),
@@ -11298,7 +11293,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11326,7 +11321,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -11400,7 +11395,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![
                                         WithSpan::new(
                                             Notation {
@@ -11438,7 +11433,7 @@ mod tests {
                         NotationExpr::Param(-2),
                         StrPosition::span_from_range(25..26),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Paren(
@@ -11502,7 +11497,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11530,7 +11525,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -11606,7 +11601,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11634,7 +11629,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Seq(vec![
@@ -11716,7 +11711,7 @@ mod tests {
                             items: vec![Parameterized {
                                 parameterizations: Vec::new(),
                                 prefixes: Vec::new(),
-                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                     param_notations: vec![WithSpan::new(
                                         Notation {
                                             expr: Some(NotationExpr::Ident("x".into())),
@@ -11744,7 +11739,7 @@ mod tests {
                         NotationExpr::Param(-1),
                         StrPosition::span_from_range(23..24),
                     )],
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![
                             WithSpan::new(
                                 Notation {
@@ -11796,7 +11791,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -11841,7 +11836,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -11911,7 +11906,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12002,7 +11997,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12096,7 +12091,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12194,7 +12189,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12309,7 +12304,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12332,7 +12327,7 @@ mod tests {
                                             items: vec![Parameterized {
                                                 parameterizations: Vec::new(),
                                                 prefixes: Vec::new(),
-                                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                     param_notations: vec![WithSpan::new(
                                                         Notation {
                                                             expr: Some(NotationExpr::Ident(
@@ -12431,7 +12426,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12454,7 +12449,7 @@ mod tests {
                                             items: vec![Parameterized {
                                                 parameterizations: Vec::new(),
                                                 prefixes: Vec::new(),
-                                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                     param_notations: vec![WithSpan::new(
                                                         Notation {
                                                             expr: Some(NotationExpr::Ident(
@@ -12558,7 +12553,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12582,7 +12577,7 @@ mod tests {
                                                 items: vec![Parameterized {
                                                     parameterizations: Vec::new(),
                                                     prefixes: Vec::new(),
-                                                    data: Some(SectionItem::ParamGroup(
+                                                    inner: Some(SectionItem::ParamGroup(
                                                         ParamGroup {
                                                             param_notations: vec![WithSpan::new(
                                                                 Notation {
@@ -12736,7 +12731,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12760,7 +12755,7 @@ mod tests {
                                                 items: vec![Parameterized {
                                                     parameterizations: Vec::new(),
                                                     prefixes: Vec::new(),
-                                                    data: Some(SectionItem::ParamGroup(
+                                                    inner: Some(SectionItem::ParamGroup(
                                                         ParamGroup {
                                                             param_notations: vec![WithSpan::new(
                                                                 Notation {
@@ -12836,7 +12831,7 @@ mod tests {
                                                 vec![Parameterized {
                                                     parameterizations: Vec::new(),
                                                     prefixes: Vec::new(),
-                                                    data: Some(SectionItem::ParamGroup(
+                                                    inner: Some(SectionItem::ParamGroup(
                                                         ParamGroup {
                                                             param_notations: Vec::new(),
                                                             data: vec![WithSpan::new(
@@ -12851,7 +12846,7 @@ mod tests {
                                                 vec![Parameterized {
                                                     parameterizations: Vec::new(),
                                                     prefixes: Vec::new(),
-                                                    data: Some(SectionItem::ParamGroup(
+                                                    inner: Some(SectionItem::ParamGroup(
                                                         ParamGroup {
                                                             param_notations: Vec::new(),
                                                             data: vec![WithSpan::new(
@@ -12947,7 +12942,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("T".into())),
@@ -12970,7 +12965,7 @@ mod tests {
                                             items: vec![Parameterized {
                                                 parameterizations: Vec::new(),
                                                 prefixes: Vec::new(),
-                                                data: Some(SectionItem::ParamGroup(ParamGroup {
+                                                inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                     param_notations: vec![WithSpan::new(
                                                         Notation {
                                                             expr: Some(NotationExpr::Ident(
@@ -13025,7 +13020,7 @@ mod tests {
                                         extra_parts: vec![vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("z".into())),
@@ -13083,7 +13078,7 @@ mod tests {
                     items: vec![Parameterized {
                         parameterizations: Vec::new(),
                         prefixes: Vec::new(),
-                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                             param_notations: vec![WithSpan::new(
                                 Notation {
                                     expr: Some(NotationExpr::Ident("i".into())),
@@ -13147,7 +13142,7 @@ mod tests {
                         Parameterized {
                             parameterizations: Vec::new(),
                             prefixes: Vec::new(),
-                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                 param_notations: vec![WithSpan::new(
                                     Notation {
                                         expr: Some(NotationExpr::Ident("j".into())),
@@ -13171,7 +13166,7 @@ mod tests {
                         Parameterized {
                             parameterizations: Vec::new(),
                             prefixes: Vec::new(),
-                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                 param_notations: vec![WithSpan::new(
                                     Notation {
                                         expr: Some(NotationExpr::Ident("k".into())),
@@ -13243,7 +13238,7 @@ mod tests {
                     vec![Parameterized {
                         parameterizations: Vec::new(),
                         prefixes: Vec::new(),
-                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                             param_notations: Vec::new(),
                             data: vec![WithSpan::new(
                                 Token(Ident("a".into(), Unquoted)),
@@ -13254,7 +13249,7 @@ mod tests {
                     vec![Parameterized {
                         parameterizations: Vec::new(),
                         prefixes: Vec::new(),
-                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                             param_notations: Vec::new(),
                             data: vec![WithSpan::new(
                                 Token(Ident("b".into(), Unquoted)),
@@ -13357,7 +13352,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("c".into())),
@@ -13398,7 +13393,7 @@ mod tests {
         let type_output = ParameterEvent::ParamGroup(Parameterized {
             parameterizations: Vec::new(),
             prefixes: Vec::new(),
-            data: Some(ParamGroup {
+            inner: Some(ParamGroup {
                 param_notations: vec![WithSpan::new(
                     Notation {
                         expr: Some(NotationExpr::Ident("ℕ".into())),
@@ -13440,7 +13435,7 @@ mod tests {
                                         items: vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("n".into())),
@@ -13506,7 +13501,7 @@ mod tests {
                     items: vec![Parameterized {
                         parameterizations: Vec::new(),
                         prefixes: Vec::new(),
-                        data: Some(SectionItem::ParamGroup(ParamGroup {
+                        inner: Some(SectionItem::ParamGroup(ParamGroup {
                             param_notations: vec![
                                 WithSpan::new(
                                     Notation {
@@ -13541,7 +13536,7 @@ mod tests {
                 StrPosition::span_from_range(45..56),
             )],
             prefixes: Vec::new(),
-            data: Some(ParamGroup {
+            inner: Some(ParamGroup {
                 param_notations: vec![WithSpan::new(
                     Notation {
                         expr: Some(NotationExpr::Seq(vec![
@@ -13621,7 +13616,7 @@ mod tests {
                                         items: vec![Parameterized {
                                             parameterizations: Vec::new(),
                                             prefixes: Vec::new(),
-                                            data: Some(SectionItem::ParamGroup(ParamGroup {
+                                            inner: Some(SectionItem::ParamGroup(ParamGroup {
                                                 param_notations: vec![WithSpan::new(
                                                     Notation {
                                                         expr: Some(NotationExpr::Ident("x".into())),
@@ -13842,7 +13837,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -13890,7 +13885,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -13949,7 +13944,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14012,7 +14007,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14079,7 +14074,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14181,7 +14176,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14259,7 +14254,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14341,7 +14336,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14419,7 +14414,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14515,7 +14510,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14581,7 +14576,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14663,7 +14658,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -14823,7 +14818,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15180,7 +15175,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
@@ -15229,7 +15224,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15287,7 +15282,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15358,7 +15353,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15440,7 +15435,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15514,7 +15509,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15626,7 +15621,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15685,7 +15680,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15769,7 +15764,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15875,7 +15870,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -15970,7 +15965,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -16068,7 +16063,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -16163,7 +16158,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -16281,7 +16276,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -16379,7 +16374,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -16607,7 +16602,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -16787,7 +16782,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("f".into())),
@@ -17053,7 +17048,7 @@ mod tests {
                 Some(ParameterEvent::ParamGroup(Parameterized {
                     parameterizations: Vec::new(),
                     prefixes: Vec::new(),
-                    data: Some(ParamGroup {
+                    inner: Some(ParamGroup {
                         param_notations: vec![WithSpan::new(
                             Notation {
                                 expr: Some(NotationExpr::Ident("a".into())),
