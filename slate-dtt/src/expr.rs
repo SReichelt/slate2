@@ -7,6 +7,56 @@
 // expected data types, but not on well-typedness of terms in general. To interpret a given term, it
 // is often necessary to know its type.
 
+// Some thoughts on how to implement equality:
+//
+// Probably the most central building block of the entire proof assistant implementation is the
+// substitution mechanism, which can be thought of as an implementation of meta-level functions,
+// i.e. it is the mechanism "below" HOAS. We require these functions to respect object-level
+// equality/equivalence (where equality may be dependent over an equivalence!), and in fact the
+// `«_»` mechanism makes this requirement explicit at the object level.
+//
+// So ultimately we need an extended substitution mechanism which, for each regular type or term
+// argument, alternatively accepts a pair of such arguments together with an appropriate equality
+// term (i.e. an "interval", basically), and outputs the same kind of triple of the resulting
+// object, whatever that means for that type of object. (The equality in the result should probably
+// always be a term, not a Rust object, as we may need to perform the same kind of substitution on
+// it in a recursive fashion.)
+//
+// One interesting aspect of this mechanism is that substitution of the two endpoints happens
+// during type reduction, whereas substitution of the equality happens during term reduction.
+// Therefore, it would not make sense to combine these substitutions, and in fact the substitution
+// of the endpoints can use the existing mechanism unmodified.
+//
+// Regarding the different kinds of expressions:
+//
+// * Variable references need to support the `«_»` mechanism (also recursively, probably), and this
+//   mechanism is also used recusively to implement equality substitution.
+//   Parameterized arguments are an interesting topic, as the parameter type can be different for
+//   the two endpoints of an input equality/equivalence. In such a case, we probably want to resort
+//   to `%any` or `%Any`, respectively, to convert that input equality/equivalence back to a single
+//   instance/type.
+//
+// * Match expressions already contain the necessary equality mappings, but we need to construct
+//   them automatically if they are not user-defined.
+//   We have to be careful not to assume that applying `refl` will always result literally in
+//   `refl`.
+//
+// * For a data type definition, we need to construct an instance of the corresponding equivalence.
+//   The resulting functions match on their arguments and produce an instance of the same
+//   constructor in the other data type.
+//
+// * Equality types are interesting because it seems that substituting in these types is really what
+//   defines the axioms of equality.
+
+// Some thoughts on universes:
+//
+// For ergonomic reasons, we probably want to keep using `%Type` even in constructor arguments.
+// We could say that this makes data types universe-polymorphic, but we need to figure out a good
+// way to specify universes explicitly when we want to talk about relationships between them (e.g.
+// an ordinal of all ordinals in a specific universe). One way to solve this would be via a cast of
+// the data type into a universe (e.g. going from `Ord %Type` to `Ord : U`). This would cause the
+// target universe to restrict which instances of the data type are valid at that point.
+
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Formatter},
@@ -510,23 +560,20 @@ impl Debug for DataType {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Ctor {
     pub ident: Ident,
-    pub ctor: Parameterized<()>,
+    pub params: Vec<Param>,
 }
 
 impl Ctor {
     pub const fn new(ident: Ident, params: Vec<Param>) -> Self {
-        Ctor {
-            ident,
-            ctor: Parameterized { params, inner: () },
-        }
+        Ctor { ident, params }
     }
 }
 
 impl Debug for Ctor {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.ident.fmt(f)?;
-        Param::dbg_fmt_args(&self.ctor.params, f)?;
-        let mut param_iter = self.ctor.params.iter();
+        Param::dbg_fmt_args(&self.params, f)?;
+        let mut param_iter = self.params.iter();
         if let Some(param) = param_iter.next() {
             f.write_str(" | ")?;
             param.fmt(f)?;

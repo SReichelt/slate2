@@ -38,9 +38,10 @@ pub struct MetaGlobals {
     pub sum_ty_idx: ParamIdx,
 }
 
-// Quoted types and terms are both just terms, but in our code we want to see which is which.
-pub type QuotedTypeExpr = TermExpr;
-pub type QuotedTermExpr = TermExpr;
+// Quoted types and terms are both just terms, but in our code we want to see which is which. Note
+// that quoted type expressions are also quoted term expressions of type `Type`.
+pub type QuotedExpr = TermExpr;
+pub type QuotedTypeExpr = QuotedExpr;
 
 #[derive(Clone)]
 pub enum QuotedType {
@@ -192,7 +193,7 @@ impl MappedTypeArgs {
 pub struct QuotedLetType {
     pub param_ident: Ident,
     pub param_ty: QuotedType,
-    pub def_expr: QuotedTermExpr,
+    pub def_expr: QuotedExpr,
     pub inner: QuotedType,
 }
 
@@ -257,7 +258,7 @@ impl MetaGlobals {
         TypeExpr::var(self.top_ty_idx)
     }
 
-    pub fn inst_ctor_top(&self) -> TermExpr {
+    pub fn inst_ctor_top(&self) -> QuotedExpr {
         TermExpr::ctor(0, Vec::new())
     }
 
@@ -269,8 +270,8 @@ impl MetaGlobals {
         &self,
         param_ident: Ident,
         source_ty: QuotedType,
-        target_expr: QuotedTermExpr,
-    ) -> TermExpr {
+        target_expr: QuotedExpr,
+    ) -> QuotedExpr {
         TermExpr::ctor(
             0,
             vec![Arg {
@@ -282,31 +283,71 @@ impl MetaGlobals {
         )
     }
 
+    pub fn inst_proj_pi(
+        &self,
+        ty: QuotedType,
+        pi_expr: QuotedExpr,
+        arg_expr: QuotedExpr,
+    ) -> QuotedExpr {
+        let QuotedType::Pi(args) = ty else {
+            panic!("projection does not match constructor")
+        };
+        let source_ty = args.source_ty.into_inst_ty(self);
+        TermExpr::fun(
+            self.pi_app_term_idx,
+            vec![
+                Arg::ty(source_ty.clone()),
+                Arg {
+                    value: Some(Parameterized {
+                        params: vec![Param::term(args.param_ident, source_ty)],
+                        inner: ArgValue::Type(args.target_ty.into_inst_ty(self)),
+                    }),
+                },
+                Arg::term(pi_expr),
+                Arg::term(arg_expr),
+            ],
+        )
+    }
+
     pub fn inst_ty_sigma(&self, args: MappedTypeArgs) -> TypeExpr {
         TypeExpr::fun(self.sigma_ty_idx, args.into_inst_ty_args(self))
     }
 
-    pub fn inst_ctor_sigma(
-        &self,
-        left_expr: QuotedTermExpr,
-        right_expr: QuotedTermExpr,
-    ) -> TermExpr {
+    pub fn inst_ctor_sigma(&self, left_expr: QuotedExpr, right_expr: QuotedExpr) -> QuotedExpr {
         TermExpr::ctor(0, vec![Arg::term(left_expr), Arg::term(right_expr)])
+    }
+
+    pub fn inst_proj_sigma_left(&self, ty: QuotedType, sigma_expr: QuotedExpr) -> QuotedExpr {
+        self.inst_proj_tuple(ty, sigma_expr, 0)
+    }
+
+    pub fn inst_proj_sigma_right(&self, ty: QuotedType, sigma_expr: QuotedExpr) -> QuotedExpr {
+        self.inst_proj_tuple(ty, sigma_expr, 1)
+    }
+
+    fn inst_proj_tuple(&self, ty: QuotedType, expr: QuotedExpr, idx: usize) -> QuotedExpr {
+        TermExpr::Base(BaseExpr::Proj(Box::new(ProjExpr {
+            match_term: TypedExpr {
+                ty: ty.into_inst_ty(self),
+                value: expr,
+            },
+            proj: VarExpr::new(idx as ParamIdx),
+        })))
     }
 
     pub fn inst_ty_sum(&self, args: ComposedTypeArgs) -> TypeExpr {
         TypeExpr::fun(self.sum_ty_idx, args.into_inst_ty_args(self))
     }
 
-    pub fn inst_ctor_sum_left(&self, left_expr: QuotedTermExpr) -> TermExpr {
+    pub fn inst_ctor_sum_left(&self, left_expr: QuotedExpr) -> QuotedExpr {
         TermExpr::ctor(0, vec![Arg::term(left_expr)])
     }
 
-    pub fn inst_ctor_sum_right(&self, right_expr: QuotedTermExpr) -> TermExpr {
+    pub fn inst_ctor_sum_right(&self, right_expr: QuotedExpr) -> QuotedExpr {
         TermExpr::ctor(1, vec![Arg::term(right_expr)])
     }
 
-    fn let_param(&self, ident: Ident, ty: QuotedType, def_expr: QuotedTermExpr) -> Param {
+    fn let_param(&self, ident: Ident, ty: QuotedType, def_expr: QuotedExpr) -> Param {
         Param {
             ident,
             content: Parameterized::new(ParamContent::Term {
@@ -320,8 +361,8 @@ impl MetaGlobals {
         &self,
         param_ident: Ident,
         quoted_param: QuotedParamContent,
-        target_expr: QuotedTermExpr,
-    ) -> QuotedTermExpr {
+        target_expr: QuotedExpr,
+    ) -> QuotedExpr {
         if let Some(def_expr) = quoted_param.def_expr {
             TermExpr::Base(BaseExpr::Let(Box::new(Parameterized {
                 params: vec![self.let_param(param_ident, quoted_param.ty, def_expr)],
@@ -348,7 +389,7 @@ impl MetaGlobals {
         }
     }
 
-    fn quote_term(term: TermExpr) -> QuotedTermExpr {
+    fn quote_term(term: TermExpr) -> QuotedExpr {
         // Note that this should cause references to earlier parameters as well as parameterizations
         // to be treated correctly as antiquotations, whereas we want to quote everything else
         // verbatim.
@@ -414,7 +455,7 @@ impl MetaGlobals {
 
     fn quote_ctor(&self, ctor: Ctor) -> QuotedType {
         let mut quoted = None;
-        for param in ctor.ctor.params.into_iter().rev() {
+        for param in ctor.params.into_iter().rev() {
             let quoted_param = self.quote_param_type(param.content);
             if let Some(def_expr) = quoted_param.def_expr {
                 if let Some(inner) = quoted {
@@ -437,7 +478,7 @@ impl MetaGlobals {
         quoted.unwrap_or(QuotedType::Top)
     }
 
-    fn quote_arg_value(&self, arg_value: Parameterized<ArgValue>) -> QuotedTermExpr {
+    fn quote_arg_value(&self, arg_value: Parameterized<ArgValue>) -> QuotedExpr {
         let mut quoted = match arg_value.inner {
             ArgValue::Type(ty) => Self::quote_type(ty),
             ArgValue::Term(term) => Self::quote_term(term),
@@ -449,7 +490,7 @@ impl MetaGlobals {
         quoted
     }
 
-    pub fn quote_ctor_expr(&self, mut ctor_expr: VarExpr, ctors_len: usize) -> QuotedTermExpr {
+    pub fn quote_ctor_term(&self, mut ctor_expr: VarExpr, ctors_len: usize) -> QuotedExpr {
         let mut quoted = self.quote_ctor_args(ctor_expr.args);
         if ctor_expr.idx + 1 < ctors_len as ParamIdx {
             // For every ctor except the last, the innermost term is wrapped in the "left" sum ctor.
@@ -463,7 +504,7 @@ impl MetaGlobals {
         quoted
     }
 
-    fn quote_ctor_args(&self, args: Vec<Arg>) -> QuotedTermExpr {
+    fn quote_ctor_args(&self, args: Vec<Arg>) -> QuotedExpr {
         let mut arg_iter = args.into_iter().rev().filter_map(|arg| arg.value);
         if let Some(arg_value) = arg_iter.next() {
             let mut quoted = self.quote_arg_value(arg_value);
@@ -475,12 +516,60 @@ impl MetaGlobals {
             self.inst_ctor_top()
         }
     }
+
+    pub fn quote_proj_term(&self, ctor: Ctor, term: TermExpr, mut proj: VarExpr) -> QuotedExpr {
+        let is_inner = proj.idx + 1 < ctor.params.len() as ParamIdx;
+        let mut quoted_ty = self.quote_ctor(ctor);
+        let mut quoted = Self::quote_term(term);
+        while proj.idx > 0 {
+            if let QuotedType::Let(let_ty) = quoted_ty {
+                // TODO: Need to substitute `def_expr` in the type.
+                // Moreover, what about the case where the projection actually refers to a
+                // definition param?
+                todo!();
+            } else {
+                // For every param we skip, we have to add a "right" sigma projection.
+                let QuotedType::Sigma(args) = &quoted_ty else {
+                    panic!("projection does not match constructor")
+                };
+                // TODO: We actually need to substitute the left projection into `target_ty` here.
+                let right_ty = args.target_ty.clone();
+                quoted = self.inst_proj_sigma_right(quoted_ty, quoted);
+                quoted_ty = right_ty;
+            }
+            proj.idx -= 1;
+        }
+        if is_inner {
+            // For every param except the last, a "left" sigma projection is applied at the end.
+            let QuotedType::Sigma(args) = &quoted_ty else {
+                panic!("projection does not match constructor")
+            };
+            let left_ty = args.source_ty.clone();
+            quoted = self.inst_proj_sigma_left(quoted_ty, quoted);
+            quoted_ty = left_ty;
+        }
+        for arg in proj.args {
+            if let Some(arg_value) = arg.value {
+                let QuotedType::Pi(args) = &quoted_ty else {
+                    panic!("projection does not match constructor")
+                };
+                let quoted_arg_value = self.quote_arg_value(arg_value);
+                // TODO: Substitute `quoted_arg_value` into `target_ty`.
+                let target_ty = args.target_ty.clone();
+                quoted = self.inst_proj_pi(quoted_ty, quoted, quoted_arg_value);
+                quoted_ty = target_ty;
+            } else {
+                todo!()
+            }
+        }
+        quoted
+    }
 }
 
 #[derive(Clone)]
 struct QuotedParamContent {
     pub ty: QuotedType,
-    pub def_expr: Option<QuotedTermExpr>,
+    pub def_expr: Option<QuotedExpr>,
 }
 
 pub mod testing {
@@ -905,9 +994,9 @@ mod tests {
         );
     }
 
-    fn assert_quote_ctor_expr(ctor_expr: VarExpr, ctors_len: usize, expected_expr: QuotedTermExpr) {
+    fn assert_quote_ctor_term(ctor_expr: VarExpr, ctors_len: usize, expected_expr: QuotedExpr) {
         let input_dbg = format!("_.{ctor_expr:?} ({ctors_len} ctor(s))");
-        let result_expr = TEST_META_GLOBALS.quote_ctor_expr(ctor_expr, ctors_len);
+        let result_expr = TEST_META_GLOBALS.quote_ctor_term(ctor_expr, ctors_len);
         println!("{input_dbg} -> {result_expr:?}");
         assert_eq!(
             result_expr, expected_expr,
@@ -918,7 +1007,7 @@ mod tests {
     #[test]
     fn quote_ctor_exprs() {
         // `c` in `{ c }` (`⊤`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: Vec::new(),
@@ -928,7 +1017,7 @@ mod tests {
         );
 
         // `c` in `{ c | d }` (`⊤ ⊕ ⊤`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: Vec::new(),
@@ -938,7 +1027,7 @@ mod tests {
         );
 
         // `d` in `{ c | d }` (`⊤ ⊕ ⊤`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 1,
                 args: Vec::new(),
@@ -948,7 +1037,7 @@ mod tests {
         );
 
         // `c` in `{ c | d | e }` (`⊤ ⊕ (⊤ ⊕ ⊤)`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: Vec::new(),
@@ -958,7 +1047,7 @@ mod tests {
         );
 
         // `d` in `{ c | d | e }` (`⊤ ⊕ (⊤ ⊕ ⊤)`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 1,
                 args: Vec::new(),
@@ -970,7 +1059,7 @@ mod tests {
         );
 
         // `e` in `{ c | d | e }` (`⊤ ⊕ (⊤ ⊕ ⊤)`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 2,
                 args: Vec::new(),
@@ -982,7 +1071,7 @@ mod tests {
         );
 
         // `c(#42)` in `{ c(A) | A %Type }` (`Type`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: vec![Arg::ty(TypeExpr::var(42))],
@@ -992,7 +1081,7 @@ mod tests {
         );
 
         // `c(#42, #23)` in `{ c(A, B) | A,B %Type }` (`Type × Type`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: vec![Arg::ty(TypeExpr::var(42)), Arg::ty(TypeExpr::var(23))],
@@ -1005,7 +1094,7 @@ mod tests {
         );
 
         // `c(#42, #23, #43)` in `{ c(A, B, C) | A,B,C %Type }` (`Type × (Type × Type)`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: vec![
@@ -1024,9 +1113,9 @@ mod tests {
             ),
         );
 
-        // `c(#42, a ↦ a)` in `{ c(A, a ↦ b_a) | A %Type; [a : A] b_a : A }`
+        // `c(#42, a ↦ a)` in `{ c(A, a ↦ b(a)) | A %Type; [a : A] b(a) : A }`
         //                    (`∑ A : Type. A.Inst → A.Inst`)
-        assert_quote_ctor_expr(
+        assert_quote_ctor_term(
             VarExpr {
                 idx: 0,
                 args: vec![
@@ -1047,6 +1136,190 @@ mod tests {
                     QuotedType::var(42),
                     TermExpr::var(-1),
                 ),
+            ),
+        );
+    }
+
+    fn assert_quote_proj_term(
+        ctor: Ctor,
+        term: TermExpr,
+        proj: VarExpr,
+        expected_expr: QuotedExpr,
+    ) {
+        let params_len = ctor.params.len();
+        let input_dbg = format!("{term:?}.{proj:?} ({params_len} param(s))");
+        let result_expr = TEST_META_GLOBALS.quote_proj_term(ctor, term, proj);
+        println!("{input_dbg} -> {result_expr:?}");
+        assert_eq!(
+            result_expr, expected_expr,
+            "quoting {input_dbg} did not yield expected result"
+        )
+    }
+
+    #[test]
+    fn quote_proj_terms() {
+        // `#42.A` for `#42 : { c(A) | A %Type }` (`Type`)
+        assert_quote_proj_term(
+            Ctor::new(Ident::new("c"), vec![Param::ty(Ident::new("A"))]),
+            TermExpr::var(42),
+            VarExpr::new(0),
+            TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+        );
+
+        // `#42.A` for `#42 : { c(A, B) | A,B %Type }` (`Type × Type`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
+            ),
+            TermExpr::var(42),
+            VarExpr::new(0),
+            TEST_META_GLOBALS.inst_proj_sigma_left(
+                QuotedType::sigma(Ident::new("A"), QuotedType::Type, QuotedType::Type),
+                TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+            ),
+        );
+
+        // `#42.B` for `#42 : { c(A, B) | A,B %Type }` (`Type × Type`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
+            ),
+            TermExpr::var(42),
+            VarExpr::new(1),
+            TEST_META_GLOBALS.inst_proj_sigma_right(
+                QuotedType::sigma(Ident::new("A"), QuotedType::Type, QuotedType::Type),
+                TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+            ),
+        );
+
+        // `#42.A` for `#42 : { c(A, B, C) | A,B,C %Type }` (`Type × (Type × Type)`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![
+                    Param::ty(Ident::new("A")),
+                    Param::ty(Ident::new("B")),
+                    Param::ty(Ident::new("C")),
+                ],
+            ),
+            TermExpr::var(42),
+            VarExpr::new(0),
+            TEST_META_GLOBALS.inst_proj_sigma_left(
+                QuotedType::sigma(
+                    Ident::new("A"),
+                    QuotedType::Type,
+                    QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                ),
+                TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+            ),
+        );
+
+        // `#42.B` for `#42 : { c(A, B, C) | A,B,C %Type }` (`Type × (Type × Type)`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![
+                    Param::ty(Ident::new("A")),
+                    Param::ty(Ident::new("B")),
+                    Param::ty(Ident::new("C")),
+                ],
+            ),
+            TermExpr::var(42),
+            VarExpr::new(1),
+            TEST_META_GLOBALS.inst_proj_sigma_left(
+                QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                TEST_META_GLOBALS.inst_proj_sigma_right(
+                    QuotedType::sigma(
+                        Ident::new("A"),
+                        QuotedType::Type,
+                        QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                    ),
+                    TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+                ),
+            ),
+        );
+
+        // `#42.C` for `#42 : { c(A, B, C) | A,B,C %Type }` (`Type × (Type × Type)`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![
+                    Param::ty(Ident::new("A")),
+                    Param::ty(Ident::new("B")),
+                    Param::ty(Ident::new("C")),
+                ],
+            ),
+            TermExpr::var(42),
+            VarExpr::new(2),
+            TEST_META_GLOBALS.inst_proj_sigma_right(
+                QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                TEST_META_GLOBALS.inst_proj_sigma_right(
+                    QuotedType::sigma(
+                        Ident::new("A"),
+                        QuotedType::Type,
+                        QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                    ),
+                    TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+                ),
+            ),
+        );
+
+        // `#42.B(#23)` for `#42 : { c(A ↦ B(A)) | [A %Type] B(A) %Type }` (`Type → Type`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![Param {
+                    ident: Ident::new("B"),
+                    content: Parameterized {
+                        params: vec![Param::ty(Ident::new("A"))],
+                        inner: ParamContent::ty(),
+                    },
+                }],
+            ),
+            TermExpr::var(42),
+            VarExpr {
+                idx: 0,
+                args: vec![Arg::ty(TypeExpr::var(23))],
+            },
+            TEST_META_GLOBALS.inst_proj_pi(
+                QuotedType::pi(Ident::new("A"), QuotedType::Type, QuotedType::Type),
+                TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+                TermExpr::QuotedType(Box::new(TypeExpr::var(23))),
+            ),
+        );
+
+        // `#42.C(#23, #24)` for `#42 : { c((A, B) ↦ C(A, B)) | [A,B %Type] C(A, B) %Type }`
+        //                       (`Type → Type`)
+        assert_quote_proj_term(
+            Ctor::new(
+                Ident::new("c"),
+                vec![Param {
+                    ident: Ident::new("C"),
+                    content: Parameterized {
+                        params: vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
+                        inner: ParamContent::ty(),
+                    },
+                }],
+            ),
+            TermExpr::var(42),
+            VarExpr {
+                idx: 0,
+                args: vec![Arg::ty(TypeExpr::var(23)), Arg::ty(TypeExpr::var(24))],
+            },
+            TEST_META_GLOBALS.inst_proj_pi(
+                QuotedType::pi(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                TEST_META_GLOBALS.inst_proj_pi(
+                    QuotedType::pi(
+                        Ident::new("A"),
+                        QuotedType::Type,
+                        QuotedType::pi(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                    ),
+                    TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
+                    TermExpr::QuotedType(Box::new(TypeExpr::var(23))),
+                ),
+                TermExpr::QuotedType(Box::new(TypeExpr::var(24))),
             ),
         );
     }
