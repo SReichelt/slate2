@@ -60,7 +60,7 @@
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Formatter},
-    mem::replace,
+    mem::{replace, take},
 };
 
 use slate_lang_def::parser::layer3_parameter_identifier::ParamIdx;
@@ -127,6 +127,34 @@ impl<T: Debug> Debug for Parameterized<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Param::dbg_fmt_params(&self.params, f)?;
         self.inner.fmt(f)
+    }
+}
+
+impl<T: ContextObject<Owned = T> + Clone> ContextObject for Parameterized<T> {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        if weaken_by != 0 {
+            self.params.weaken(offset, weaken_by);
+            self.inner.weaken(offset + self.params.len(), weaken_by);
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> <Self as ToOwned>::Owned {
+        Parameterized {
+            params: self.params.weakened(offset, weaken_by),
+            inner: self.inner.weakened(offset + self.params.len(), weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.params
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.inner
+            .subst_impl(offset + self.params.len(), params, args);
     }
 }
 
@@ -215,6 +243,67 @@ impl Debug for Param {
     }
 }
 
+impl ContextObject for Param {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.content.weaken(offset, weaken_by)
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        Param {
+            ident: self.ident.clone(),
+            content: self.content.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.content.subst_impl(offset, params, args)
+    }
+}
+
+impl ContextObject for [Param] {
+    fn weaken(&mut self, mut offset: CtxOffset, weaken_by: CtxOffset) {
+        for param in self {
+            param.weaken(offset, weaken_by);
+            offset += 1;
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self::Owned {
+        self.iter()
+            .enumerate()
+            .map(|(idx, param)| param.weakened(offset + idx, weaken_by))
+            .collect()
+    }
+
+    fn subst_impl(
+        &mut self,
+        mut offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        let mut iter = self.iter_mut();
+        if let Some(next_param) = iter.next() {
+            let mut param = next_param;
+            loop {
+                if let Some(next_param) = iter.next() {
+                    param.subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+                    offset += 1;
+                    param = next_param;
+                } else {
+                    // Optimization: move instead of borrowing.
+                    param.subst_impl(offset, params, args);
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum ParamContent {
     Type { def: Option<TypeExpr> },
@@ -258,6 +347,45 @@ impl Debug for ParamContent {
             }
         }
         Ok(())
+    }
+}
+
+impl ContextObject for ParamContent {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        match self {
+            ParamContent::Type { def } => def.weaken(offset, weaken_by),
+            ParamContent::Term { ty, def } => {
+                ty.weaken(offset, weaken_by);
+                def.weaken(offset, weaken_by);
+            }
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        match self {
+            ParamContent::Type { def } => ParamContent::Type {
+                def: def.weakened(offset, weaken_by),
+            },
+            ParamContent::Term { ty, def } => ParamContent::Term {
+                ty: ty.weakened(offset, weaken_by),
+                def: def.weakened(offset, weaken_by),
+            },
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        match self {
+            ParamContent::Type { def } => def.subst_impl(offset, params, args),
+            ParamContent::Term { ty, def } => {
+                def.subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+                ty.subst_impl(offset, params, args);
+            }
+        }
     }
 }
 
@@ -326,6 +454,63 @@ impl Debug for Arg {
     }
 }
 
+impl ContextObject for Arg {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.value.weaken(offset, weaken_by)
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        Arg {
+            value: self.value.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.value.subst_impl(offset, params, args)
+    }
+}
+
+impl ContextObject for [Arg] {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        for arg in self {
+            arg.weaken(offset, weaken_by);
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self::Owned {
+        self.iter()
+            .map(|arg| arg.weakened(offset, weaken_by))
+            .collect()
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        let mut iter = self.iter_mut();
+        if let Some(next_arg) = iter.next() {
+            let mut arg = next_arg;
+            loop {
+                if let Some(next_arg) = iter.next() {
+                    arg.subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+                    arg = next_arg;
+                } else {
+                    // Optimization: move instead of borrowing.
+                    arg.subst_impl(offset, params, args);
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum ArgValue {
     Type(TypeExpr),
@@ -341,8 +526,52 @@ impl Debug for ArgValue {
     }
 }
 
+impl ContextObject for ArgValue {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        match self {
+            ArgValue::Type(type_expr) => type_expr.weaken(offset, weaken_by),
+            ArgValue::Term(term_expr) => term_expr.weaken(offset, weaken_by),
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        match self {
+            ArgValue::Type(type_expr) => ArgValue::Type(type_expr.weakened(offset, weaken_by)),
+            ArgValue::Term(term_expr) => ArgValue::Term(term_expr.weakened(offset, weaken_by)),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        match self {
+            ArgValue::Type(type_expr) => type_expr.subst_impl(offset, params, args),
+            ArgValue::Term(term_expr) => term_expr.subst_impl(offset, params, args),
+        }
+    }
+}
+
+pub trait Expr: Clone + PartialEq + Eq + Debug + ContextObject<Owned = Self> {
+    type Ty: Expr;
+
+    fn has_content() -> bool {
+        true
+    }
+}
+
+impl Expr for () {
+    type Ty = ();
+
+    fn has_content() -> bool {
+        false
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
-pub enum BaseExpr<T, Ty> {
+pub enum BaseExpr<T: Expr> {
     // A placeholder or error expression that should be propagated as far as possible in order to
     // produce more useful diagnostics.
     Placeholder,
@@ -354,19 +583,19 @@ pub enum BaseExpr<T, Ty> {
     Let(Box<Parameterized<T>>),
 
     // Matching on a term.
-    Match(Box<MatchExpr<T, Ty>>),
+    Match(Box<MatchExpr<T>>),
 
     // Projection, which is essentially a shorthand for matching on a single constructor.
     Proj(Box<ProjExpr>),
 }
 
-impl<T, Ty> Default for BaseExpr<T, Ty> {
+impl<T: Expr> Default for BaseExpr<T> {
     fn default() -> Self {
         BaseExpr::Placeholder
     }
 }
 
-impl<T: Debug, Ty: Debug> Debug for BaseExpr<T, Ty> {
+impl<T: Expr> Debug for BaseExpr<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             BaseExpr::Placeholder => f.write_str("_"),
@@ -375,6 +604,51 @@ impl<T: Debug, Ty: Debug> Debug for BaseExpr<T, Ty> {
             BaseExpr::Match(match_expr) => match_expr.fmt(f),
             BaseExpr::Proj(proj_expr) => proj_expr.fmt(f),
         }
+    }
+}
+
+impl<T: Expr> BaseExpr<T> {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        match self {
+            BaseExpr::Placeholder => {}
+            BaseExpr::Var(var_expr) => var_expr.weaken(offset, weaken_by),
+            BaseExpr::Let(let_expr) => let_expr.weaken(offset, weaken_by),
+            BaseExpr::Match(match_expr) => match_expr.weaken(offset, weaken_by),
+            BaseExpr::Proj(proj_expr) => proj_expr.weaken(offset, weaken_by),
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        match self {
+            BaseExpr::Placeholder => BaseExpr::Placeholder,
+            BaseExpr::Var(var_expr) => BaseExpr::Var(var_expr.weakened(offset, weaken_by)),
+            BaseExpr::Let(let_expr) => {
+                BaseExpr::Let(Box::new(let_expr.weakened(offset, weaken_by)))
+            }
+            BaseExpr::Match(match_expr) => {
+                BaseExpr::Match(Box::new(match_expr.weakened(offset, weaken_by)))
+            }
+            BaseExpr::Proj(proj_expr) => {
+                BaseExpr::Proj(Box::new(proj_expr.weakened(offset, weaken_by)))
+            }
+        }
+    }
+
+    #[must_use]
+    fn try_subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) -> Option<&mut VarExpr> {
+        match self {
+            BaseExpr::Placeholder => {}
+            BaseExpr::Var(var_expr) => return var_expr.try_subst_impl(offset, params, args),
+            BaseExpr::Let(let_expr) => let_expr.subst_impl(offset, params, args),
+            BaseExpr::Match(match_expr) => match_expr.subst_impl(offset, params, args),
+            BaseExpr::Proj(proj_expr) => proj_expr.subst_impl(offset, params, args),
+        }
+        None
     }
 }
 
@@ -404,15 +678,56 @@ impl Debug for VarExpr {
     }
 }
 
+impl VarExpr {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        Self::weaken_idx(&mut self.idx, offset, weaken_by);
+        self.args.weaken(offset, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        let mut idx = self.idx;
+        Self::weaken_idx(&mut idx, offset, weaken_by);
+        VarExpr {
+            idx,
+            args: self.args.weakened(offset, weaken_by),
+        }
+    }
+
+    fn weaken_idx(idx: &mut ParamIdx, offset: CtxOffset, weaken_by: CtxOffset) {
+        if *idx < -(offset as ParamIdx) {
+            *idx -= weaken_by as ParamIdx;
+        }
+    }
+
+    #[must_use]
+    fn try_subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) -> Option<&mut Self> {
+        let params_len = params.len();
+        self.args.subst_impl(offset, params, args);
+        if self.idx < -(offset as ParamIdx) {
+            if self.idx < -((offset + params_len) as ParamIdx) {
+                self.idx += params_len as ParamIdx;
+            } else {
+                return Some(self);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
-pub struct TypedExpr<T, Ty> {
-    pub ty: Ty,
+pub struct TypedExpr<T: Expr> {
+    pub ty: T::Ty,
     pub value: T,
 }
 
-impl<T: Debug, Ty: Debug> Debug for TypedExpr<T, Ty> {
+impl<T: Expr> Debug for TypedExpr<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if size_of::<Ty>() > 0 {
+        if T::Ty::has_content() {
             f.write_str("(")?;
             self.value.fmt(f)?;
             f.write_str(" : ")?;
@@ -424,16 +739,41 @@ impl<T: Debug, Ty: Debug> Debug for TypedExpr<T, Ty> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct MatchExpr<T, Ty> {
-    // The term to match on, whose type must reduce to a data type definition.
-    pub match_term: TypedExpr<TermExpr, TypeExpr>,
+impl<T: Expr> ContextObject for TypedExpr<T> {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.ty.weaken(offset, weaken_by);
+        self.value.weaken(offset, weaken_by);
+    }
 
-    // Exactly one arm for each constructor of the data type, in order.
-    pub arms: Vec<MatchArm<T, Ty>>,
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        TypedExpr {
+            ty: self.ty.weakened(offset, weaken_by),
+            value: self.value.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.ty
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.value.subst_impl(offset, params, args);
+    }
 }
 
-impl<T: Debug, Ty: Debug> Debug for MatchExpr<T, Ty> {
+#[derive(Clone, PartialEq, Eq)]
+pub struct MatchExpr<T: Expr> {
+    // The term to match on, whose type must reduce to a data type definition.
+    pub match_term: TypedExpr<TermExpr>,
+
+    // Exactly one arm for each constructor of the data type, in order.
+    pub arms: Vec<MatchArm<T>>,
+}
+
+impl<T: Expr> Debug for MatchExpr<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.match_term.fmt(f)?;
         f.write_str(".{")?;
@@ -449,26 +789,58 @@ impl<T: Debug, Ty: Debug> Debug for MatchExpr<T, Ty> {
     }
 }
 
+impl<T: Expr> ContextObject for MatchExpr<T> {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.match_term.weaken(offset, weaken_by);
+        for arm in &mut self.arms {
+            arm.weaken(offset, weaken_by);
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        MatchExpr {
+            match_term: self.match_term.weakened(offset, weaken_by),
+            arms: self
+                .arms
+                .iter()
+                .map(|arm| arm.weakened(offset, weaken_by))
+                .collect(),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        for arm in &mut self.arms {
+            arm.subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        }
+        self.match_term.subst_impl(offset, params, args);
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
-pub struct MatchArm<T, Ty> {
+pub struct MatchArm<T: Expr> {
     // A type expression within the context of one parameter of type `match_term.ty`. When that
     // parameter is substituted with `match_term.value`, the result must be the type of the match
     // expression. The type of `value`, then, is given by simultaneously weakening `motive`
     // according to the constructor parameters and substituting the implicit parameter with the
     // resulting constructor term.
-    pub motive: Ty,
+    pub motive: T::Ty,
 
     // The value when matching against one particular constructor. Must be parameterized
     // equivalently to the constructor.
     pub value: Parameterized<T>,
 }
 
-impl<T: Debug, Ty: Debug> Debug for MatchArm<T, Ty> {
+impl<T: Expr> Debug for MatchArm<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Param::dbg_fmt_args(&self.value.params, f)?;
         f.write_str(" ↦ ")?;
         self.value.inner.fmt(f)?;
-        if size_of::<Ty>() > 0 {
+        if T::Ty::has_content() {
             f.write_str(" : [")?;
             self.motive.fmt(f)?;
             f.write_str("]")?;
@@ -486,11 +858,36 @@ impl<T: Debug, Ty: Debug> Debug for MatchArm<T, Ty> {
     }
 }
 
+impl<T: Expr> ContextObject for MatchArm<T> {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.motive.weaken(offset + 1, weaken_by);
+        self.value.weaken(offset, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        MatchArm {
+            motive: self.motive.weakened(offset + 1, weaken_by),
+            value: self.value.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.motive
+            .subst_impl(offset + 1, params.as_borrowed(), args.as_borrowed());
+        self.value.subst_impl(offset, params, args);
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProjExpr {
     // The term to match on, whose type must reduce to a data type definition with exactly one
     // constructor and no custom equality definition.
-    pub match_term: TypedExpr<TermExpr, TypeExpr>,
+    pub match_term: TypedExpr<TermExpr>,
 
     // A reference to a constructor parameter with arguments.
     pub proj: VarExpr,
@@ -504,9 +901,37 @@ impl Debug for ProjExpr {
     }
 }
 
+impl ContextObject for ProjExpr {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.match_term.weaken(offset, weaken_by);
+        self.proj.args.weaken(offset, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        ProjExpr {
+            match_term: self.match_term.weakened(offset, weaken_by),
+            proj: VarExpr {
+                idx: self.proj.idx,
+                args: self.proj.args.weakened(offset, weaken_by),
+            },
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.match_term
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.proj.args.subst_impl(offset, params, args);
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum TypeExpr {
-    Base(BaseExpr<TypeExpr, ()>),
+    Base(BaseExpr<TypeExpr>),
 
     // Data type definition.
     Data(DataType),
@@ -537,6 +962,85 @@ impl Debug for TypeExpr {
     }
 }
 
+impl ContextObject for TypeExpr {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        match self {
+            TypeExpr::Base(base_expr) => base_expr.weaken(offset, weaken_by),
+            TypeExpr::Data(data_type) => data_type.weaken(offset, weaken_by),
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        match self {
+            TypeExpr::Base(base_expr) => TypeExpr::Base(base_expr.weakened(offset, weaken_by)),
+            TypeExpr::Data(data_type) => TypeExpr::Data(data_type.weakened(offset, weaken_by)),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        match self {
+            TypeExpr::Base(base_expr) => {
+                if let Some(var_expr) =
+                    base_expr.try_subst_impl(offset, params.as_borrowed(), args.as_borrowed())
+                {
+                    let idx = (var_expr.idx + ((offset + params.len()) as ParamIdx)) as usize;
+                    let (prev_args, arg) = args.project_idx(idx);
+                    if let Some(mut arg_value) = arg
+                        .project(|arg| match arg {
+                            Cow::Borrowed(arg) => Cow::Borrowed(&arg.value),
+                            Cow::Owned(arg) => Cow::Owned(arg.value),
+                        })
+                        .as_option()
+                    {
+                        arg_value.weaken(offset);
+                        let ArgValue::Type(ty) =
+                            ArgValue::subst(arg_value, CtxCow::Owned(take(&mut var_expr.args)))
+                                .into_owned()
+                        else {
+                            panic!("expected type argument");
+                        };
+                        *self = ty;
+                    } else {
+                        let (prev_params, mut param) = match params {
+                            CtxCow::Borrowed(params) => (
+                                CtxCow::Borrowed(CtxRef {
+                                    value: &params.value[..idx],
+                                    weaken_by: params.weaken_by,
+                                }),
+                                params.value[idx].weakened(idx, params.weaken_by),
+                            ),
+                            CtxCow::Owned(mut params) => {
+                                params.truncate(idx + 1);
+                                let param = params.pop().unwrap();
+                                (CtxCow::Owned(params), param)
+                            }
+                        };
+                        param.subst_impl(0, prev_params, prev_args);
+                        let ParamContent::Type { def: Some(def) } = ParamContent::subst(
+                            CtxCow::Owned(param.content),
+                            CtxCow::Owned(take(&mut var_expr.args)),
+                        )
+                        .into_owned() else {
+                            panic!("expected type definition");
+                        };
+                        *self = def;
+                    }
+                }
+            }
+            TypeExpr::Data(data_type) => data_type.subst_impl(offset, params, args),
+        }
+    }
+}
+
+impl Expr for TypeExpr {
+    type Ty = ();
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct DataType {
     pub ctors: Vec<Ctor>,
@@ -554,6 +1058,46 @@ impl Debug for DataType {
             write!(f, " ")?;
         }
         f.write_str("}")
+    }
+}
+
+impl ContextObject for DataType {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        for ctor in &mut self.ctors {
+            ctor.weaken(offset, weaken_by);
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        DataType {
+            ctors: self
+                .ctors
+                .iter()
+                .map(|ctor| ctor.weakened(offset, weaken_by))
+                .collect(),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        let mut iter = self.ctors.iter_mut();
+        if let Some(next_ctor) = iter.next() {
+            let mut ctor = next_ctor;
+            loop {
+                if let Some(next_ctor) = iter.next() {
+                    ctor.subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+                    ctor = next_ctor;
+                } else {
+                    // Optimization: move instead of borrowing.
+                    ctor.subst_impl(offset, params, args);
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -586,16 +1130,38 @@ impl Debug for Ctor {
     }
 }
 
+impl ContextObject for Ctor {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.params.weaken(offset, weaken_by)
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        Ctor {
+            ident: self.ident.clone(),
+            params: self.params.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.params.subst_impl(offset, params, args)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum TermExpr {
-    Base(BaseExpr<TermExpr, TypeExpr>),
+    Base(BaseExpr<TermExpr>),
 
     // Constructor reference, where the constructor is treated like a global variable within the
     // context of the expression type.
     Ctor(VarExpr),
 
     // An explicit cast to a compatible type.
-    Cast(Box<TypedExpr<TermExpr, TypeExpr>>),
+    Cast(Box<TypedExpr<TermExpr>>),
 
     // A quoted type expression. As noted in the introduction, the parser simply produces an
     // expression in the outer context, and client code must reinterpret it in a quoted context, by
@@ -656,25 +1222,30 @@ impl Debug for TermExpr {
     }
 }
 
-pub type Result<T> = std::result::Result<T, String>; // TODO: result enum
-
-impl ContextObject for Param {
-    fn weaken(&mut self, offset: usize) {
+impl ContextObject for TermExpr {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
         todo!()
     }
 
-    fn weakened(&self, offset: usize) -> Self {
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
         todo!()
     }
 
-    fn map_subst<'a, Src: ToOwned>(
-        src: CtxCow<'a, Parameterized<Src>>,
-        project: impl FnOnce(Cow<'a, Src>) -> CtxCow<'a, Self>,
-        args: CtxCow<'a, [Arg]>,
-    ) -> CtxCow<'a, Self> {
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
         todo!()
     }
 }
+
+impl Expr for TermExpr {
+    type Ty = TypeExpr;
+}
+
+pub type Result<T> = std::result::Result<T, String>; // TODO: result enum
 
 impl TypeExpr {
     pub fn reduce_head<'a>(&mut self, ctx: &Context<'a>) -> Result<bool> {
@@ -686,24 +1257,6 @@ impl TypeExpr {
     }
 
     fn reduce_head_once<'a>(&mut self, ctx: &Context<'a>) -> Result<bool> {
-        todo!()
-    }
-}
-
-impl ContextObject for TypeExpr {
-    fn weaken(&mut self, offset: usize) {
-        todo!()
-    }
-
-    fn weakened(&self, offset: usize) -> Self {
-        todo!()
-    }
-
-    fn map_subst<'a, Src: ToOwned>(
-        src: CtxCow<'a, Parameterized<Src>>,
-        project: impl FnOnce(Cow<'a, Src>) -> CtxCow<'a, Self>,
-        args: CtxCow<'a, [Arg]>,
-    ) -> CtxCow<'a, Self> {
         todo!()
     }
 }
@@ -738,13 +1291,13 @@ impl TermExpr {
                                 let ParamContent::Term { def: Some(def), .. } = content else {
                                     unreachable!()
                                 };
-                                CtxCow::borrowed(def)
+                                Cow::Borrowed(def)
                             }
                             Cow::Owned(content) => {
                                 let ParamContent::Term { def: Some(def), .. } = content else {
                                     unreachable!()
                                 };
-                                CtxCow::owned(def)
+                                Cow::Owned(def)
                             }
                         },
                         CtxCow::borrowed(&var_expr.args),
@@ -814,20 +1367,294 @@ impl TermExpr {
     }
 }
 
-impl ContextObject for TermExpr {
-    fn weaken(&mut self, offset: usize) {
-        todo!()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subst_ty_plain() {
+        let input = Parameterized {
+            params: vec![Param::ty(Ident::new("A"))],
+            inner: TypeExpr::fun(-2, vec![Arg::ty(TypeExpr::var(-1))]),
+        };
+        let output = TypeExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![Arg::ty(TypeExpr::var(-42))]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TypeExpr::fun(-1, vec![Arg::ty(TypeExpr::var(-42))])
+        );
     }
 
-    fn weakened(&self, offset: usize) -> Self {
-        todo!()
+    #[test]
+    fn subst_ty_fun_and_args() {
+        let input = Parameterized {
+            params: vec![
+                Param {
+                    ident: Ident::new("F"),
+                    content: Parameterized {
+                        params: vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
+                        inner: ParamContent::ty(),
+                    },
+                },
+                Param::ty(Ident::new("C")),
+            ],
+            inner: TypeExpr::fun(
+                -2,
+                vec![
+                    Arg::ty(TypeExpr::fun(
+                        -2,
+                        vec![Arg::ty(TypeExpr::var(-23)), Arg::ty(TypeExpr::var(-1))],
+                    )),
+                    Arg::ty(TypeExpr::var(-1)),
+                ],
+            ),
+        };
+        let output = TypeExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![
+                Arg {
+                    value: Some(Parameterized {
+                        params: vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
+                        inner: ArgValue::Type(TypeExpr::fun(
+                            -37,
+                            vec![Arg::ty(TypeExpr::var(-1)), Arg::ty(TypeExpr::var(-2))],
+                        )),
+                    }),
+                },
+                Arg::ty(TypeExpr::var(-42)),
+            ]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TypeExpr::fun(
+                -35,
+                vec![
+                    Arg::ty(TypeExpr::var(-42)),
+                    Arg::ty(TypeExpr::fun(
+                        -35,
+                        vec![Arg::ty(TypeExpr::var(-42)), Arg::ty(TypeExpr::var(-21))]
+                    )),
+                ]
+            )
+        );
     }
 
-    fn map_subst<'a, Src: ToOwned>(
-        src: CtxCow<'a, Parameterized<Src>>,
-        project: impl FnOnce(Cow<'a, Src>) -> CtxCow<'a, Self>,
-        args: CtxCow<'a, [Arg]>,
-    ) -> CtxCow<'a, Self> {
-        todo!()
+    #[test]
+    fn subst_ty_higher_order() {
+        let input = Parameterized {
+            params: vec![Param {
+                ident: Ident::new("F"),
+                content: Parameterized {
+                    params: vec![
+                        Param::ty(Ident::new("A")),
+                        Param {
+                            ident: Ident::new("G"),
+                            content: Parameterized {
+                                params: vec![
+                                    Param::ty(Ident::new("B")),
+                                    Param::ty(Ident::new("C")),
+                                ],
+                                inner: ParamContent::ty(),
+                            },
+                        },
+                    ],
+                    inner: ParamContent::ty(),
+                },
+            }],
+            inner: TypeExpr::fun(
+                -1,
+                vec![
+                    Arg::ty(TypeExpr::var(-24)),
+                    Arg {
+                        value: Some(Parameterized {
+                            params: vec![Param::ty(Ident::new("B")), Param::ty(Ident::new("C"))],
+                            inner: ArgValue::Type(TypeExpr::fun(
+                                -45,
+                                vec![
+                                    Arg::ty(TypeExpr::var(-1)),
+                                    Arg::ty(TypeExpr::fun(
+                                        -3,
+                                        vec![
+                                            Arg::ty(TypeExpr::var(-26)),
+                                            Arg {
+                                                value: Some(Parameterized {
+                                                    params: vec![
+                                                        Param::ty(Ident::new("C")),
+                                                        Param::ty(Ident::new("B")),
+                                                    ],
+                                                    inner: ArgValue::Type(TypeExpr::fun(
+                                                        -47,
+                                                        vec![
+                                                            Arg::ty(TypeExpr::var(-1)),
+                                                            Arg::ty(TypeExpr::var(-2)),
+                                                        ],
+                                                    )),
+                                                }),
+                                            },
+                                        ],
+                                    )),
+                                ],
+                            )),
+                        }),
+                    },
+                ],
+            ),
+        };
+        let output = TypeExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![Arg {
+                value: Some(Parameterized {
+                    params: vec![
+                        Param::ty(Ident::new("A")),
+                        Param {
+                            ident: Ident::new("G"),
+                            content: Parameterized {
+                                params: vec![
+                                    Param::ty(Ident::new("B")),
+                                    Param::ty(Ident::new("C")),
+                                ],
+                                inner: ParamContent::ty(),
+                            },
+                        },
+                    ],
+                    inner: ArgValue::Type(TypeExpr::fun(
+                        -1,
+                        vec![Arg::ty(TypeExpr::var(-2)), Arg::ty(TypeExpr::var(-37))],
+                    )),
+                }),
+            }]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TypeExpr::fun(
+                -42,
+                vec![
+                    Arg::ty(TypeExpr::var(-35)),
+                    Arg::ty(TypeExpr::fun(
+                        -42,
+                        vec![Arg::ty(TypeExpr::var(-35)), Arg::ty(TypeExpr::var(-23))]
+                    )),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn subst_ty_def() {
+        let input = Parameterized {
+            params: vec![
+                Param::ty(Ident::new("A")),
+                Param {
+                    ident: Ident::new("F"),
+                    content: Parameterized {
+                        params: vec![Param::ty(Ident::new("B")), Param::ty(Ident::new("C"))],
+                        inner: ParamContent::ty(),
+                    },
+                },
+                Param {
+                    ident: Ident::new("D"),
+                    content: Parameterized::new(ParamContent::Type {
+                        def: Some(TypeExpr::fun(
+                            -1,
+                            vec![Arg::ty(TypeExpr::var(-2)), Arg::ty(TypeExpr::var(-2))],
+                        )),
+                    }),
+                },
+                Param::ty(Ident::new("E")),
+            ],
+            inner: TypeExpr::fun(
+                -3,
+                vec![Arg::ty(TypeExpr::var(-2)), Arg::ty(TypeExpr::var(-1))],
+            ),
+        };
+        let output = TypeExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![
+                Arg::ty(TypeExpr::var(-42)),
+                Arg {
+                    value: Some(Parameterized {
+                        params: vec![Param::ty(Ident::new("B")), Param::ty(Ident::new("C"))],
+                        inner: ArgValue::Type(TypeExpr::fun(
+                            -25,
+                            vec![Arg::ty(TypeExpr::var(-2)), Arg::ty(TypeExpr::var(-1))],
+                        )),
+                    }),
+                },
+                Arg::def(),
+                Arg::ty(TypeExpr::var(-35)),
+            ]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TypeExpr::fun(
+                -23,
+                vec![
+                    Arg::ty(TypeExpr::fun(
+                        -23,
+                        vec![Arg::ty(TypeExpr::var(-42)), Arg::ty(TypeExpr::var(-42))]
+                    )),
+                    Arg::ty(TypeExpr::var(-35)),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn subst_ty_fun_def() {
+        let input = Parameterized {
+            params: vec![
+                Param::ty(Ident::new("A")),
+                Param {
+                    ident: Ident::new("F"),
+                    content: Parameterized {
+                        params: vec![Param::ty(Ident::new("B")), Param::ty(Ident::new("C"))],
+                        inner: ParamContent::ty(),
+                    },
+                },
+                Param {
+                    ident: Ident::new("G"),
+                    content: Parameterized {
+                        params: vec![Param::ty(Ident::new("C")), Param::ty(Ident::new("B"))],
+                        inner: ParamContent::Type {
+                            def: Some(TypeExpr::fun(
+                                -3,
+                                vec![Arg::ty(TypeExpr::var(-1)), Arg::ty(TypeExpr::var(-2))],
+                            )),
+                        },
+                    },
+                },
+                Param::ty(Ident::new("E")),
+            ],
+            inner: TypeExpr::fun(
+                -2,
+                vec![Arg::ty(TypeExpr::var(-4)), Arg::ty(TypeExpr::var(-1))],
+            ),
+        };
+        let output = TypeExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![
+                Arg::ty(TypeExpr::var(-42)),
+                Arg {
+                    value: Some(Parameterized {
+                        params: vec![Param::ty(Ident::new("B")), Param::ty(Ident::new("C"))],
+                        inner: ArgValue::Type(TypeExpr::fun(
+                            -25,
+                            vec![Arg::ty(TypeExpr::var(-2)), Arg::ty(TypeExpr::var(-1))],
+                        )),
+                    }),
+                },
+                Arg::def(),
+                Arg::ty(TypeExpr::var(-35)),
+            ]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TypeExpr::fun(
+                -23,
+                vec![Arg::ty(TypeExpr::var(-35)), Arg::ty(TypeExpr::var(-42)),]
+            )
+        );
     }
 }
