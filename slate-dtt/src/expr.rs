@@ -232,6 +232,25 @@ impl Param {
         }
         Ok(())
     }
+
+    fn extract_one(params: CtxCow<'_, [Self]>, idx: usize, prev_args: CtxCow<'_, [Arg]>) -> Self {
+        let (prev_params, mut param) = match params {
+            CtxCow::Borrowed(params) => (
+                CtxCow::Borrowed(CtxRef {
+                    value: &params.value[..idx],
+                    weaken_by: params.weaken_by,
+                }),
+                params.value[idx].weakened(idx, params.weaken_by),
+            ),
+            CtxCow::Owned(mut params) => {
+                params.truncate(idx + 1);
+                let param = params.pop().unwrap();
+                (CtxCow::Owned(params), param)
+            }
+        };
+        param.subst_impl(0, prev_params, prev_args);
+        param
+    }
 }
 
 impl Debug for Param {
@@ -389,16 +408,11 @@ impl ContextObject for ParamContent {
     }
 }
 
-// An argument corresponding to a given `Param`.
+/// An argument corresponding to a given `Param`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Arg {
-    // The type or term (depending on the param), parameterized equivalently to the param. `None` if
-    // the param is a definition.
-    // Note that substituting a term arg generally requires inserting a cast (to the param type) at
-    // every place where the param was replaced with the arg. E.g. if the param type is
-    // `%Any(A,B|e)`, it may be used as a term of type `A`, while the arg could be a term of type
-    // `B` via an implicit cast. In this case, the cast to `%Any(A,B|e)` reduces to applying the
-    // reverse direction of `e`.
+    /// The type or term (depending on the param), parameterized equivalently to the param. `None` if
+    /// the param is a definition.
     pub value: Option<Parameterized<ArgValue>>,
 }
 
@@ -572,20 +586,20 @@ impl Expr for () {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum BaseExpr<T: Expr> {
-    // A placeholder or error expression that should be propagated as far as possible in order to
-    // produce more useful diagnostics.
+    /// A placeholder or error expression that should be propagated as far as possible in order to
+    /// produce more useful diagnostics.
     Placeholder,
 
-    // Variable reference, with exactly one arg per parameterization.
+    /// Variable reference, with exactly one arg per parameterization.
     Var(VarExpr),
 
-    // Let-binding. All params must be definitions.
+    /// Let-binding. All params must be definitions.
     Let(Box<Parameterized<T>>),
 
-    // Matching on a term.
+    /// Matching on a term.
     Match(Box<MatchExpr<T>>),
 
-    // Projection, which is essentially a shorthand for matching on a single constructor.
+    /// Projection, which is essentially a shorthand for matching on a single constructor.
     Proj(Box<ProjExpr>),
 }
 
@@ -654,8 +668,16 @@ impl<T: Expr> BaseExpr<T> {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct VarExpr {
+    /// The De Bruijn index or level of the referenced variable.
     pub idx: ParamIdx,
+
+    /// One argument for each parameter of the referenced variable.
     pub args: Vec<Arg>,
+
+    /// Specifies that the type of the referenced variable matches the expected type exactly, up to
+    /// unfolding of definitions. Can be set to `true` by the type checker to optimize substitution,
+    /// which needs to insert an explicit cast otherwise.
+    pub ty_exact: bool,
 }
 
 impl VarExpr {
@@ -663,6 +685,7 @@ impl VarExpr {
         VarExpr {
             idx,
             args: Vec::new(),
+            ty_exact: false,
         }
     }
 
@@ -690,6 +713,7 @@ impl VarExpr {
         VarExpr {
             idx,
             args: self.args.weakened(offset, weaken_by),
+            ty_exact: self.ty_exact,
         }
     }
 
@@ -766,10 +790,10 @@ impl<T: Expr> ContextObject for TypedExpr<T> {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct MatchExpr<T: Expr> {
-    // The term to match on, whose type must reduce to a data type definition.
+    /// The term to match on, whose type must reduce to a data type definition.
     pub match_term: TypedExpr<TermExpr>,
 
-    // Exactly one arm for each constructor of the data type, in order.
+    /// Exactly one arm for each constructor of the data type, in order.
     pub arms: Vec<MatchArm<T>>,
 }
 
@@ -823,15 +847,15 @@ impl<T: Expr> ContextObject for MatchExpr<T> {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct MatchArm<T: Expr> {
-    // A type expression within the context of one parameter of type `match_term.ty`. When that
-    // parameter is substituted with `match_term.value`, the result must be the type of the match
-    // expression. The type of `value`, then, is given by simultaneously weakening `motive`
-    // according to the constructor parameters and substituting the implicit parameter with the
-    // resulting constructor term.
+    /// A type expression within the context of one parameter of type `match_term.ty`. When that
+    /// parameter is substituted with `match_term.value`, the result must be the type of the match
+    /// expression. The type of `value`, then, is given by simultaneously weakening `motive`
+    /// according to the constructor parameters and substituting the implicit parameter with the
+    /// resulting constructor term.
     pub motive: T::Ty,
 
-    // The value when matching against one particular constructor. Must be parameterized
-    // equivalently to the constructor.
+    /// The value when matching against one particular constructor. Must be parameterized
+    /// equivalently to the constructor.
     pub value: Parameterized<T>,
 }
 
@@ -885,11 +909,11 @@ impl<T: Expr> ContextObject for MatchArm<T> {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProjExpr {
-    // The term to match on, whose type must reduce to a data type definition with exactly one
-    // constructor and no custom equality definition.
+    /// The term to match on, whose type must reduce to a data type definition with exactly one
+    /// constructor and no custom equality definition.
     pub match_term: TypedExpr<TermExpr>,
 
-    // A reference to a constructor parameter with arguments.
+    /// A reference to a constructor parameter with arguments.
     pub proj: VarExpr,
 }
 
@@ -913,6 +937,7 @@ impl ContextObject for ProjExpr {
             proj: VarExpr {
                 idx: self.proj.idx,
                 args: self.proj.args.weakened(offset, weaken_by),
+                ty_exact: self.proj.ty_exact,
             },
         }
     }
@@ -933,7 +958,7 @@ impl ContextObject for ProjExpr {
 pub enum TypeExpr {
     Base(BaseExpr<TypeExpr>),
 
-    // Data type definition.
+    /// Data type definition.
     Data(DataType),
 }
 
@@ -943,7 +968,11 @@ impl TypeExpr {
     }
 
     pub const fn fun(idx: ParamIdx, args: Vec<Arg>) -> Self {
-        TypeExpr::Base(BaseExpr::Var(VarExpr { idx, args }))
+        TypeExpr::Base(BaseExpr::Var(VarExpr {
+            idx,
+            args,
+            ty_exact: false,
+        }))
     }
 }
 
@@ -1006,21 +1035,7 @@ impl ContextObject for TypeExpr {
                         };
                         *self = ty;
                     } else {
-                        let (prev_params, mut param) = match params {
-                            CtxCow::Borrowed(params) => (
-                                CtxCow::Borrowed(CtxRef {
-                                    value: &params.value[..idx],
-                                    weaken_by: params.weaken_by,
-                                }),
-                                params.value[idx].weakened(idx, params.weaken_by),
-                            ),
-                            CtxCow::Owned(mut params) => {
-                                params.truncate(idx + 1);
-                                let param = params.pop().unwrap();
-                                (CtxCow::Owned(params), param)
-                            }
-                        };
-                        param.subst_impl(0, prev_params, prev_args);
+                        let param = Param::extract_one(params, idx, prev_args);
                         let ParamContent::Type { def: Some(def) } = ParamContent::subst(
                             CtxCow::Owned(param.content),
                             CtxCow::Owned(take(&mut var_expr.args)),
@@ -1156,23 +1171,23 @@ impl ContextObject for Ctor {
 pub enum TermExpr {
     Base(BaseExpr<TermExpr>),
 
-    // Constructor reference, where the constructor is treated like a global variable within the
-    // context of the expression type.
-    Ctor(VarExpr),
+    /// Constructor reference, where the constructor is treated like a global variable within the
+    /// context of the expression type.
+    Ctor(CtorExpr),
 
-    // An explicit cast to a compatible type.
+    /// An explicit cast to a compatible type.
     Cast(Box<TypedExpr<TermExpr>>),
 
-    // A quoted type expression. As noted in the introduction, the parser simply produces an
-    // expression in the outer context, and client code must reinterpret it in a quoted context, by
-    // keeping all globals as-is and treating locals of type `Type` or `A.Inst` with `A : Type` as
-    // antiquotations.
+    /// A quoted type expression. As noted in the introduction, the parser simply produces an
+    /// expression in the outer context, and client code must reinterpret it in a quoted context, by
+    /// keeping all globals as-is and treating locals of type `Type` or `A.Inst` with `A : Type` as
+    /// antiquotations.
     QuotedType(Box<TypeExpr>),
 
-    // A quoted term expression. As noted in the introduction, the parser simply produces an
-    // expression in the outer context, and client code must reinterpret it in a quoted context, by
-    // keeping all globals as-is and treating locals of type `Type` or `A.Inst` with `A : Type` as
-    // antiquotations.
+    /// A quoted term expression. As noted in the introduction, the parser simply produces an
+    /// expression in the outer context, and client code must reinterpret it in a quoted context, by
+    /// keeping all globals as-is and treating locals of type `Type` or `A.Inst` with `A : Type` as
+    /// antiquotations.
     QuotedTerm(Box<TermExpr>),
 }
 
@@ -1182,14 +1197,19 @@ impl TermExpr {
     }
 
     pub const fn fun(idx: ParamIdx, args: Vec<Arg>) -> Self {
-        TermExpr::Base(BaseExpr::Var(VarExpr { idx, args }))
+        TermExpr::Base(BaseExpr::Var(VarExpr {
+            idx,
+            args,
+            ty_exact: false,
+        }))
     }
 
-    pub fn ctor(ctor_idx: usize, args: Vec<Arg>) -> Self {
-        TermExpr::Ctor(VarExpr {
-            idx: ctor_idx as ParamIdx,
-            args,
-        })
+    pub const fn ctor(idx: usize, args: Vec<Arg>) -> Self {
+        TermExpr::Ctor(CtorExpr { idx, args })
+    }
+
+    pub fn cast(ty: TypeExpr, term: TermExpr) -> Self {
+        TermExpr::Cast(Box::new(TypedExpr { ty, value: term }))
     }
 }
 
@@ -1224,11 +1244,29 @@ impl Debug for TermExpr {
 
 impl ContextObject for TermExpr {
     fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
-        todo!()
+        match self {
+            TermExpr::Base(base_expr) => base_expr.weaken(offset, weaken_by),
+            TermExpr::Ctor(ctor_expr) => ctor_expr.weaken(offset, weaken_by),
+            TermExpr::Cast(cast_expr) => cast_expr.weaken(offset, weaken_by),
+            TermExpr::QuotedType(ty) => ty.weaken(offset, weaken_by),
+            TermExpr::QuotedTerm(term) => term.weaken(offset, weaken_by),
+        }
     }
 
     fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
-        todo!()
+        match self {
+            TermExpr::Base(base_expr) => TermExpr::Base(base_expr.weakened(offset, weaken_by)),
+            TermExpr::Ctor(ctor_expr) => TermExpr::Ctor(ctor_expr.weakened(offset, weaken_by)),
+            TermExpr::Cast(cast_expr) => {
+                TermExpr::Cast(Box::new(cast_expr.weakened(offset, weaken_by)))
+            }
+            TermExpr::QuotedType(ty) => {
+                TermExpr::QuotedType(Box::new(ty.weakened(offset, weaken_by)))
+            }
+            TermExpr::QuotedTerm(term) => {
+                TermExpr::QuotedTerm(Box::new(term.weakened(offset, weaken_by)))
+            }
+        }
     }
 
     fn subst_impl(
@@ -1237,12 +1275,111 @@ impl ContextObject for TermExpr {
         params: CtxCow<'_, [Param]>,
         args: CtxCow<'_, [Arg]>,
     ) {
-        todo!()
+        match self {
+            TermExpr::Base(base_expr) => {
+                if let Some(var_expr) =
+                    base_expr.try_subst_impl(offset, params.as_borrowed(), args.as_borrowed())
+                {
+                    let idx = (var_expr.idx + ((offset + params.len()) as ParamIdx)) as usize;
+                    let (prev_args, arg) = args.project_idx(idx);
+                    if let Some(mut arg_value) = arg
+                        .project(|arg| match arg {
+                            Cow::Borrowed(arg) => Cow::Borrowed(&arg.value),
+                            Cow::Owned(arg) => Cow::Owned(arg.value),
+                        })
+                        .as_option()
+                    {
+                        arg_value.weaken(offset);
+                        let mut cast_ty = None;
+                        if !var_expr.ty_exact {
+                            let param = Param::extract_one(params, idx, prev_args);
+                            let ParamContent::Term { ty, def: None } = ParamContent::subst(
+                                CtxCow::Owned(param.content),
+                                CtxCow::borrowed(&var_expr.args),
+                            )
+                            .into_owned() else {
+                                panic!("term argument for non-term parameter");
+                            };
+                            cast_ty = Some(ty);
+                        }
+                        let ArgValue::Term(mut term) =
+                            ArgValue::subst(arg_value, CtxCow::Owned(take(&mut var_expr.args)))
+                                .into_owned()
+                        else {
+                            panic!("expected term argument");
+                        };
+                        if let Some(ty) = cast_ty {
+                            term = TermExpr::cast(ty, term);
+                        }
+                        *self = term;
+                    } else {
+                        let param = Param::extract_one(params, idx, prev_args);
+                        let ParamContent::Term {
+                            ty,
+                            def: Some(mut def),
+                        } = ParamContent::subst(
+                            CtxCow::Owned(param.content),
+                            CtxCow::Owned(take(&mut var_expr.args)),
+                        )
+                        .into_owned()
+                        else {
+                            panic!("expected term definition");
+                        };
+                        if !var_expr.ty_exact {
+                            def = TermExpr::cast(ty, def);
+                        }
+                        *self = def;
+                    }
+                }
+            }
+            TermExpr::Ctor(ctor_expr) => ctor_expr.subst_impl(offset, params, args),
+            TermExpr::Cast(cast_expr) => cast_expr.subst_impl(offset, params, args),
+            TermExpr::QuotedType(ty) => ty.subst_impl(offset, params, args),
+            TermExpr::QuotedTerm(term) => term.subst_impl(offset, params, args),
+        }
     }
 }
 
 impl Expr for TermExpr {
     type Ty = TypeExpr;
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct CtorExpr {
+    /// The index of the constructor within the data type.
+    pub idx: usize,
+
+    /// One argument for each parameter of the constructor.
+    pub args: Vec<Arg>,
+}
+
+impl Debug for CtorExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.idx)?;
+        Arg::dbg_fmt_args(&self.args, f)
+    }
+}
+
+impl ContextObject for CtorExpr {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.args.weaken(offset, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self {
+        CtorExpr {
+            idx: self.idx,
+            args: self.args.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.args.subst_impl(offset, params, args);
+    }
 }
 
 pub type Result<T> = std::result::Result<T, String>; // TODO: result enum
@@ -1654,6 +1791,137 @@ mod tests {
             TypeExpr::fun(
                 -23,
                 vec![Arg::ty(TypeExpr::var(-35)), Arg::ty(TypeExpr::var(-42)),]
+            )
+        );
+    }
+
+    #[test]
+    fn subst_term_plain() {
+        let input = Parameterized {
+            params: vec![Param::term(Ident::new("a"), TypeExpr::var(-23))],
+            inner: TermExpr::fun(-2, vec![Arg::term(TermExpr::var(-1))]),
+        };
+        let output = TermExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![Arg::term(TermExpr::var(-42))]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TermExpr::fun(
+                -1,
+                vec![Arg::term(TermExpr::cast(
+                    TypeExpr::var(-23),
+                    TermExpr::var(-42)
+                ))]
+            )
+        );
+    }
+
+    #[test]
+    fn subst_ty_term_plain() {
+        let input = Parameterized {
+            params: vec![
+                Param::ty(Ident::new("A")),
+                Param::term(Ident::new("a"), TypeExpr::var(-1)),
+            ],
+            inner: TermExpr::fun(-3, vec![Arg::term(TermExpr::var(-1))]),
+        };
+        let output = TermExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![
+                Arg::ty(TypeExpr::var(-23)),
+                Arg::term(TermExpr::var(-42)),
+            ]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TermExpr::fun(
+                -1,
+                vec![Arg::term(TermExpr::cast(
+                    TypeExpr::var(-23),
+                    TermExpr::var(-42)
+                ))]
+            )
+        );
+    }
+
+    #[test]
+    fn subst_term_def() {
+        let input = Parameterized {
+            params: vec![
+                Param::ty(Ident::new("A")),
+                Param {
+                    ident: Ident::new("f"),
+                    content: Parameterized {
+                        params: vec![
+                            Param::ty(Ident::new("B")),
+                            Param::term(Ident::new("b"), TypeExpr::var(-1)),
+                        ],
+                        inner: ParamContent::term(TypeExpr::var(-3)),
+                    },
+                },
+                Param::ty(Ident::new("C")),
+                Param::term(Ident::new("c"), TypeExpr::var(-1)),
+                Param {
+                    ident: Ident::new("d"),
+                    content: Parameterized::new(ParamContent::Term {
+                        ty: TypeExpr::var(-4),
+                        def: Some(TermExpr::fun(
+                            -3,
+                            vec![Arg::ty(TypeExpr::var(-2)), Arg::term(TermExpr::var(-1))],
+                        )),
+                    }),
+                },
+            ],
+            inner: TermExpr::fun(
+                -4,
+                vec![Arg::ty(TypeExpr::var(-5)), Arg::term(TermExpr::var(-1))],
+            ),
+        };
+        let output = TermExpr::subst(
+            CtxCow::Owned(input),
+            CtxCow::Owned(vec![
+                Arg::ty(TypeExpr::var(-42)),
+                Arg {
+                    value: Some(Parameterized {
+                        params: vec![
+                            Param::ty(Ident::new("B")),
+                            Param::term(Ident::new("b"), TypeExpr::var(-1)),
+                        ],
+                        inner: ArgValue::Term(TermExpr::fun(
+                            -25,
+                            vec![Arg::term(TermExpr::var(-1))],
+                        )),
+                    }),
+                },
+                Arg::ty(TypeExpr::var(-35)),
+                Arg::term(TermExpr::var(-51)),
+                Arg::def(),
+            ]),
+        );
+        assert_eq!(
+            output.into_owned(),
+            TermExpr::cast(
+                TypeExpr::var(-42),
+                TermExpr::fun(
+                    -23,
+                    vec![Arg::term(TermExpr::cast(
+                        TypeExpr::var(-42),
+                        TermExpr::cast(
+                            TypeExpr::var(-42),
+                            TermExpr::cast(
+                                TypeExpr::var(-42),
+                                TermExpr::fun(
+                                    -23,
+                                    vec![Arg::term(TermExpr::cast(
+                                        TypeExpr::var(-35),
+                                        TermExpr::cast(TypeExpr::var(-35), TermExpr::var(-51))
+                                    ))]
+                                )
+                            )
+                        )
+                    ))]
+                )
             )
         );
     }

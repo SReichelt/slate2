@@ -247,6 +247,7 @@ impl MetaGlobals {
         TypeExpr::Base(BaseExpr::Var(VarExpr {
             idx: self.inst_ty_idx,
             args: vec![Arg::term(ty_expr)],
+            ty_exact: false,
         }))
     }
 
@@ -490,9 +491,9 @@ impl MetaGlobals {
         quoted
     }
 
-    pub fn quote_ctor_term(&self, mut ctor_expr: VarExpr, ctors_len: usize) -> QuotedExpr {
+    pub fn quote_ctor_term(&self, mut ctor_expr: CtorExpr, ctors_len: usize) -> QuotedExpr {
         let mut quoted = self.quote_ctor_args(ctor_expr.args);
-        if ctor_expr.idx + 1 < ctors_len as ParamIdx {
+        if ctor_expr.idx + 1 < ctors_len {
             // For every ctor except the last, the innermost term is wrapped in the "left" sum ctor.
             quoted = self.inst_ctor_sum_left(quoted);
         }
@@ -835,6 +836,7 @@ mod tests {
                                             Arg::def(),
                                             Arg::term(TermExpr::var(-1)),
                                         ],
+                                        ty_exact: false,
                                     }))),
                                 },
                             },
@@ -859,6 +861,7 @@ mod tests {
                                         Arg::def(),
                                         Arg::term(TermExpr::var(-1)),
                                     ],
+                                    ty_exact: false,
                                 }))),
                             },
                         },
@@ -919,6 +922,7 @@ mod tests {
                                             Arg::def(),
                                             Arg::term(TermExpr::var(-1)),
                                         ],
+                                        ty_exact: false,
                                     },
                                 )))),
                             ),
@@ -942,6 +946,7 @@ mod tests {
                                             Arg::def(),
                                             Arg::term(TermExpr::var(-1)),
                                         ],
+                                        ty_exact: false,
                                     })),
                                 ))),
                             ),
@@ -971,6 +976,7 @@ mod tests {
                                 inner: ParamContent::term(TypeExpr::Base(BaseExpr::Var(VarExpr {
                                     idx: -2,
                                     args: vec![Arg::term(TermExpr::var(-1))],
+                                    ty_exact: false,
                                 }))),
                             },
                         },
@@ -987,6 +993,7 @@ mod tests {
                         BaseExpr::Var(VarExpr {
                             idx: -2,
                             args: vec![Arg::term(TermExpr::var(-1))],
+                            ty_exact: false,
                         }),
                     )))),
                 ),
@@ -994,7 +1001,7 @@ mod tests {
         );
     }
 
-    fn assert_quote_ctor_term(ctor_expr: VarExpr, ctors_len: usize, expected_expr: QuotedExpr) {
+    fn assert_quote_ctor_term(ctor_expr: CtorExpr, ctors_len: usize, expected_expr: QuotedExpr) {
         let input_dbg = format!("_.{ctor_expr:?} ({ctors_len} ctor(s))");
         let result_expr = TEST_META_GLOBALS.quote_ctor_term(ctor_expr, ctors_len);
         println!("{input_dbg} -> {result_expr:?}");
@@ -1008,7 +1015,7 @@ mod tests {
     fn quote_ctor_exprs() {
         // `c` in `{ c }` (`⊤`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: Vec::new(),
             },
@@ -1018,7 +1025,7 @@ mod tests {
 
         // `c` in `{ c | d }` (`⊤ ⊕ ⊤`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: Vec::new(),
             },
@@ -1028,7 +1035,7 @@ mod tests {
 
         // `d` in `{ c | d }` (`⊤ ⊕ ⊤`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 1,
                 args: Vec::new(),
             },
@@ -1038,7 +1045,7 @@ mod tests {
 
         // `c` in `{ c | d | e }` (`⊤ ⊕ (⊤ ⊕ ⊤)`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: Vec::new(),
             },
@@ -1048,7 +1055,7 @@ mod tests {
 
         // `d` in `{ c | d | e }` (`⊤ ⊕ (⊤ ⊕ ⊤)`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 1,
                 args: Vec::new(),
             },
@@ -1060,7 +1067,7 @@ mod tests {
 
         // `e` in `{ c | d | e }` (`⊤ ⊕ (⊤ ⊕ ⊤)`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 2,
                 args: Vec::new(),
             },
@@ -1072,7 +1079,7 @@ mod tests {
 
         // `c(#42)` in `{ c(A) | A %Type }` (`Type`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: vec![Arg::ty(TypeExpr::var(42))],
             },
@@ -1082,7 +1089,7 @@ mod tests {
 
         // `c(#42, #23)` in `{ c(A, B) | A,B %Type }` (`Type × Type`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: vec![Arg::ty(TypeExpr::var(42)), Arg::ty(TypeExpr::var(23))],
             },
@@ -1095,7 +1102,7 @@ mod tests {
 
         // `c(#42, #23, #43)` in `{ c(A, B, C) | A,B,C %Type }` (`Type × (Type × Type)`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: vec![
                     Arg::ty(TypeExpr::var(42)),
@@ -1116,7 +1123,7 @@ mod tests {
         // `c(#42, a ↦ a)` in `{ c(A, a ↦ b(a)) | A %Type; [a : A] b(a) : A }`
         //                    (`∑ A : Type. A.Inst → A.Inst`)
         assert_quote_ctor_term(
-            VarExpr {
+            CtorExpr {
                 idx: 0,
                 args: vec![
                     Arg::ty(TypeExpr::var(42)),
@@ -1282,6 +1289,7 @@ mod tests {
             VarExpr {
                 idx: 0,
                 args: vec![Arg::ty(TypeExpr::var(23))],
+                ty_exact: false,
             },
             TEST_META_GLOBALS.inst_proj_pi(
                 QuotedType::pi(Ident::new("A"), QuotedType::Type, QuotedType::Type),
@@ -1307,6 +1315,7 @@ mod tests {
             VarExpr {
                 idx: 0,
                 args: vec![Arg::ty(TypeExpr::var(23)), Arg::ty(TypeExpr::var(24))],
+                ty_exact: false,
             },
             TEST_META_GLOBALS.inst_proj_pi(
                 QuotedType::pi(Ident::new("B"), QuotedType::Type, QuotedType::Type),
