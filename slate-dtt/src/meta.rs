@@ -1,10 +1,16 @@
-// TODO: Generate the definitions in this file from meta.slate2.
+// TODO: Generate some of this file from meta.slate2.
+
+// TODO: It is probably a mistake to tie the concept of decomposition into primitive types to the
+// concept of quotation. Regarding the former, we should instead provide methods to construct
+// * the primitive types corresponding to a data type, and
+// * a (lazy) equivalence between the original type and the decomposition.
+// This requires adding the type of cardinals as a primitive type.
 
 use std::vec;
 
 use slate_lang_def::parser::layer3_parameter_identifier::ParamIdx;
 
-use crate::expr::*;
+use crate::{context::*, expr::*};
 
 pub struct MetaGlobals {
     // `Type %Type`
@@ -73,11 +79,11 @@ impl QuotedType {
         // Note: `target_ty` lives in a context with one additional param.
         target_ty: QuotedType,
     ) -> Self {
-        QuotedType::Pi(Box::new(MappedTypeArgs {
+        QuotedType::Pi(Box::new(MappedTypeArgs::new(
             param_ident,
             source_ty,
             target_ty,
-        }))
+        )))
     }
 
     pub fn sigma(
@@ -86,11 +92,11 @@ impl QuotedType {
         // Note: `target_ty` lives in a context with one additional param.
         target_ty: QuotedType,
     ) -> Self {
-        QuotedType::Sigma(Box::new(MappedTypeArgs {
+        QuotedType::Sigma(Box::new(MappedTypeArgs::new(
             param_ident,
             source_ty,
             target_ty,
-        }))
+        )))
     }
 
     pub fn sum(left_ty: QuotedType, right_ty: QuotedType) -> Self {
@@ -124,6 +130,58 @@ impl QuotedType {
     }
 }
 
+impl ContextObject for QuotedType {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        match self {
+            QuotedType::Bot => {}
+            QuotedType::Top => {}
+            QuotedType::Pi(args) => args.weaken(offset, weaken_by),
+            QuotedType::Sigma(args) => args.weaken(offset, weaken_by),
+            QuotedType::Sum(args) => args.weaken(offset, weaken_by),
+            QuotedType::Type => {}
+            QuotedType::Verbatim(ty_expr) => ty_expr.weaken(offset, weaken_by),
+            QuotedType::Let(let_expr) => let_expr.weaken(offset, weaken_by),
+        }
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self::Owned {
+        match self {
+            QuotedType::Bot => QuotedType::Bot,
+            QuotedType::Top => QuotedType::Top,
+            QuotedType::Pi(args) => QuotedType::Pi(Box::new(args.weakened(offset, weaken_by))),
+            QuotedType::Sigma(args) => {
+                QuotedType::Sigma(Box::new(args.weakened(offset, weaken_by)))
+            }
+            QuotedType::Sum(args) => QuotedType::Sum(Box::new(args.weakened(offset, weaken_by))),
+            QuotedType::Type => QuotedType::Type,
+            QuotedType::Verbatim(ty_expr) => {
+                QuotedType::Verbatim(ty_expr.weakened(offset, weaken_by))
+            }
+            QuotedType::Let(let_expr) => {
+                QuotedType::Let(Box::new(let_expr.weakened(offset, weaken_by)))
+            }
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        match self {
+            QuotedType::Bot => {}
+            QuotedType::Top => {}
+            QuotedType::Pi(ty_args) => ty_args.subst_impl(offset, params, args),
+            QuotedType::Sigma(ty_args) => ty_args.subst_impl(offset, params, args),
+            QuotedType::Sum(ty_args) => ty_args.subst_impl(offset, params, args),
+            QuotedType::Type => {}
+            QuotedType::Verbatim(ty_expr) => ty_expr.subst_impl(offset, params, args),
+            QuotedType::Let(let_expr) => let_expr.subst_impl(offset, params, args),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ComposedTypeArgs {
     pub left_ty: QuotedType,
@@ -131,6 +189,10 @@ pub struct ComposedTypeArgs {
 }
 
 impl ComposedTypeArgs {
+    pub fn new(left_ty: QuotedType, right_ty: QuotedType) -> Self {
+        ComposedTypeArgs { left_ty, right_ty }
+    }
+
     fn into_quoted_ctor_args(self, meta_globals: &MetaGlobals) -> Vec<Arg> {
         vec![
             Arg::term(self.left_ty.into_quoted_type_expr(meta_globals)),
@@ -146,6 +208,31 @@ impl ComposedTypeArgs {
     }
 }
 
+impl ContextObject for ComposedTypeArgs {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.left_ty.weaken(offset, weaken_by);
+        self.right_ty.weaken(offset, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self::Owned {
+        ComposedTypeArgs {
+            left_ty: self.left_ty.weakened(offset, weaken_by),
+            right_ty: self.right_ty.weakened(offset, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.left_ty
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.right_ty.subst_impl(offset, params, args);
+    }
+}
+
 #[derive(Clone)]
 pub struct MappedTypeArgs {
     pub param_ident: Ident,
@@ -155,6 +242,14 @@ pub struct MappedTypeArgs {
 }
 
 impl MappedTypeArgs {
+    pub fn new(param_ident: Ident, source_ty: QuotedType, target_ty: QuotedType) -> Self {
+        MappedTypeArgs {
+            param_ident,
+            source_ty,
+            target_ty,
+        }
+    }
+
     fn into_quoted_ctor_args(self, meta_globals: &MetaGlobals) -> Vec<Arg> {
         vec![
             Arg::term(self.source_ty.clone().into_quoted_type_expr(meta_globals)),
@@ -189,6 +284,32 @@ impl MappedTypeArgs {
     }
 }
 
+impl ContextObject for MappedTypeArgs {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.source_ty.weaken(offset, weaken_by);
+        self.target_ty.weaken(offset + 1, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self::Owned {
+        MappedTypeArgs {
+            param_ident: self.param_ident.clone(),
+            source_ty: self.source_ty.weakened(offset, weaken_by),
+            target_ty: self.target_ty.weakened(offset + 1, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.source_ty
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.target_ty.subst_impl(offset + 1, params, args);
+    }
+}
+
 #[derive(Clone)]
 pub struct QuotedLetType {
     pub param_ident: Ident,
@@ -210,6 +331,36 @@ impl QuotedLetType {
             params: vec![meta_globals.let_param(self.param_ident, self.param_ty, self.def_expr)],
             inner: self.inner.into_inst_ty(meta_globals),
         })))
+    }
+}
+
+impl ContextObject for QuotedLetType {
+    fn weaken(&mut self, offset: CtxOffset, weaken_by: CtxOffset) {
+        self.param_ty.weaken(offset, weaken_by);
+        self.def_expr.weaken(offset, weaken_by);
+        self.inner.weaken(offset + 1, weaken_by);
+    }
+
+    fn weakened(&self, offset: CtxOffset, weaken_by: CtxOffset) -> Self::Owned {
+        QuotedLetType {
+            param_ident: self.param_ident.clone(),
+            param_ty: self.param_ty.weakened(offset, weaken_by),
+            def_expr: self.def_expr.weakened(offset, weaken_by),
+            inner: self.inner.weakened(offset + 1, weaken_by),
+        }
+    }
+
+    fn subst_impl(
+        &mut self,
+        offset: CtxOffset,
+        params: CtxCow<'_, [Param]>,
+        args: CtxCow<'_, [Arg]>,
+    ) {
+        self.param_ty
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.def_expr
+            .subst_impl(offset, params.as_borrowed(), args.as_borrowed());
+        self.inner.subst_impl(offset + 1, params, args);
     }
 }
 
@@ -286,13 +437,10 @@ impl MetaGlobals {
 
     pub fn inst_proj_pi(
         &self,
-        ty: QuotedType,
+        args: MappedTypeArgs,
         pi_expr: QuotedExpr,
         arg_expr: QuotedExpr,
     ) -> QuotedExpr {
-        let QuotedType::Pi(args) = ty else {
-            panic!("projection does not match constructor")
-        };
         let source_ty = args.source_ty.into_inst_ty(self);
         TermExpr::fun(
             self.pi_app_term_idx,
@@ -318,21 +466,33 @@ impl MetaGlobals {
         TermExpr::ctor(0, vec![Arg::term(left_expr), Arg::term(right_expr)])
     }
 
-    pub fn inst_proj_sigma_left(&self, ty: QuotedType, sigma_expr: QuotedExpr) -> QuotedExpr {
-        self.inst_proj_tuple(ty, sigma_expr, 0)
+    pub fn inst_proj_sigma_left(&self, args: MappedTypeArgs, sigma_expr: QuotedExpr) -> QuotedExpr {
+        self.inst_proj_sigma(args, sigma_expr, 0)
     }
 
-    pub fn inst_proj_sigma_right(&self, ty: QuotedType, sigma_expr: QuotedExpr) -> QuotedExpr {
-        self.inst_proj_tuple(ty, sigma_expr, 1)
+    pub fn inst_proj_sigma_right(
+        &self,
+        args: MappedTypeArgs,
+        sigma_expr: QuotedExpr,
+    ) -> QuotedExpr {
+        self.inst_proj_sigma(args, sigma_expr, 1)
     }
 
-    fn inst_proj_tuple(&self, ty: QuotedType, expr: QuotedExpr, idx: usize) -> QuotedExpr {
+    fn inst_proj_sigma(&self, args: MappedTypeArgs, expr: QuotedExpr, idx: usize) -> QuotedExpr {
         TermExpr::Base(BaseExpr::Proj(Box::new(ProjExpr {
             match_term: TypedExpr {
-                ty: ty.into_inst_ty(self),
+                ty: TypeExpr::Data(DataType {
+                    ctors: vec![Ctor::new(
+                        Ident::none(),
+                        vec![
+                            Param::term(args.param_ident, args.source_ty.into_inst_ty(self)),
+                            Param::term(Ident::none(), args.target_ty.into_inst_ty(self)),
+                        ],
+                    )],
+                }),
                 value: expr,
             },
-            proj: VarExpr::new(idx as ParamIdx),
+            proj: VarExpr::new(idx as ParamIdx - 2),
         })))
     }
 
@@ -518,11 +678,12 @@ impl MetaGlobals {
         }
     }
 
-    pub fn quote_proj_term(&self, ctor: Ctor, term: TermExpr, mut proj: VarExpr) -> QuotedExpr {
-        let is_inner = proj.idx + 1 < ctor.params.len() as ParamIdx;
+    pub fn quote_proj_term(&self, ctor: Ctor, term: TermExpr, proj: VarExpr) -> QuotedExpr {
+        let is_inner = proj.idx < -1;
+        let mut idx = (proj.idx + (ctor.params.len() as ParamIdx)) as usize;
         let mut quoted_ty = self.quote_ctor(ctor);
         let mut quoted = Self::quote_term(term);
-        while proj.idx > 0 {
+        while idx > 0 {
             if let QuotedType::Let(let_ty) = quoted_ty {
                 // TODO: Need to substitute `def_expr` in the type.
                 // Moreover, what about the case where the projection actually refers to a
@@ -530,35 +691,57 @@ impl MetaGlobals {
                 todo!();
             } else {
                 // For every param we skip, we have to add a "right" sigma projection.
-                let QuotedType::Sigma(args) = &quoted_ty else {
+                let QuotedType::Sigma(args) = quoted_ty else {
                     panic!("projection does not match constructor")
                 };
-                // TODO: We actually need to substitute the left projection into `target_ty` here.
-                let right_ty = args.target_ty.clone();
-                quoted = self.inst_proj_sigma_right(quoted_ty, quoted);
-                quoted_ty = right_ty;
+                quoted_ty = args.target_ty.clone();
+                // TODO: This is quite inefficient because the constructed objects are often not
+                // needed. One solution would be to make params and/or args "lazy" when
+                // substituting.
+                let param = Param::term(
+                    args.param_ident.clone(),
+                    args.source_ty.clone().into_inst_ty(self),
+                );
+                quoted_ty.subst_impl(
+                    0,
+                    CtxCow::Owned(vec![param]),
+                    CtxCow::Owned(vec![Arg::term(
+                        self.inst_proj_sigma_left((*args).clone(), quoted.clone()),
+                    )]),
+                );
+                quoted = self.inst_proj_sigma_right(*args, quoted);
             }
-            proj.idx -= 1;
+            idx -= 1;
         }
         if is_inner {
             // For every param except the last, a "left" sigma projection is applied at the end.
-            let QuotedType::Sigma(args) = &quoted_ty else {
+            let QuotedType::Sigma(args) = quoted_ty else {
                 panic!("projection does not match constructor")
             };
             let left_ty = args.source_ty.clone();
-            quoted = self.inst_proj_sigma_left(quoted_ty, quoted);
+            quoted = self.inst_proj_sigma_left(*args, quoted);
             quoted_ty = left_ty;
         }
         for arg in proj.args {
             if let Some(arg_value) = arg.value {
-                let QuotedType::Pi(args) = &quoted_ty else {
+                let QuotedType::Pi(args) = quoted_ty else {
                     panic!("projection does not match constructor")
                 };
                 let quoted_arg_value = self.quote_arg_value(arg_value);
-                // TODO: Substitute `quoted_arg_value` into `target_ty`.
-                let target_ty = args.target_ty.clone();
-                quoted = self.inst_proj_pi(quoted_ty, quoted, quoted_arg_value);
-                quoted_ty = target_ty;
+                quoted_ty = args.target_ty.clone();
+                // TODO: This is quite inefficient because the constructed objects are often not
+                // needed. One solution would be to make params and/or args "lazy" when
+                // substituting.
+                let param = Param::term(
+                    args.param_ident.clone(),
+                    args.source_ty.clone().into_inst_ty(self),
+                );
+                quoted_ty.subst_impl(
+                    0,
+                    CtxCow::Owned(vec![param]),
+                    CtxCow::Owned(vec![Arg::term(quoted_arg_value.clone())]),
+                );
+                quoted = self.inst_proj_pi(*args, quoted, quoted_arg_value);
             } else {
                 todo!()
             }
@@ -1154,7 +1337,16 @@ mod tests {
         expected_expr: QuotedExpr,
     ) {
         let params_len = ctor.params.len();
-        let input_dbg = format!("{term:?}.{proj:?} ({params_len} param(s))");
+        let proj_expr = ProjExpr {
+            match_term: TypedExpr {
+                ty: TypeExpr::Data(DataType {
+                    ctors: vec![ctor.clone()],
+                }),
+                value: term.clone(),
+            },
+            proj: proj.clone(),
+        };
+        let input_dbg = format!("{proj_expr:?} ({params_len} param(s))");
         let result_expr = TEST_META_GLOBALS.quote_proj_term(ctor, term, proj);
         println!("{input_dbg} -> {result_expr:?}");
         assert_eq!(
@@ -1169,7 +1361,7 @@ mod tests {
         assert_quote_proj_term(
             Ctor::new(Ident::new("c"), vec![Param::ty(Ident::new("A"))]),
             TermExpr::var(42),
-            VarExpr::new(0),
+            VarExpr::new(-1),
             TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
         );
 
@@ -1180,9 +1372,9 @@ mod tests {
                 vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
             ),
             TermExpr::var(42),
-            VarExpr::new(0),
+            VarExpr::new(-2),
             TEST_META_GLOBALS.inst_proj_sigma_left(
-                QuotedType::sigma(Ident::new("A"), QuotedType::Type, QuotedType::Type),
+                MappedTypeArgs::new(Ident::new("A"), QuotedType::Type, QuotedType::Type),
                 TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
             ),
         );
@@ -1194,9 +1386,9 @@ mod tests {
                 vec![Param::ty(Ident::new("A")), Param::ty(Ident::new("B"))],
             ),
             TermExpr::var(42),
-            VarExpr::new(1),
+            VarExpr::new(-1),
             TEST_META_GLOBALS.inst_proj_sigma_right(
-                QuotedType::sigma(Ident::new("A"), QuotedType::Type, QuotedType::Type),
+                MappedTypeArgs::new(Ident::new("A"), QuotedType::Type, QuotedType::Type),
                 TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
             ),
         );
@@ -1212,9 +1404,9 @@ mod tests {
                 ],
             ),
             TermExpr::var(42),
-            VarExpr::new(0),
+            VarExpr::new(-3),
             TEST_META_GLOBALS.inst_proj_sigma_left(
-                QuotedType::sigma(
+                MappedTypeArgs::new(
                     Ident::new("A"),
                     QuotedType::Type,
                     QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
@@ -1234,11 +1426,11 @@ mod tests {
                 ],
             ),
             TermExpr::var(42),
-            VarExpr::new(1),
+            VarExpr::new(-2),
             TEST_META_GLOBALS.inst_proj_sigma_left(
-                QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                MappedTypeArgs::new(Ident::new("B"), QuotedType::Type, QuotedType::Type),
                 TEST_META_GLOBALS.inst_proj_sigma_right(
-                    QuotedType::sigma(
+                    MappedTypeArgs::new(
                         Ident::new("A"),
                         QuotedType::Type,
                         QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
@@ -1259,11 +1451,11 @@ mod tests {
                 ],
             ),
             TermExpr::var(42),
-            VarExpr::new(2),
+            VarExpr::new(-1),
             TEST_META_GLOBALS.inst_proj_sigma_right(
-                QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                MappedTypeArgs::new(Ident::new("B"), QuotedType::Type, QuotedType::Type),
                 TEST_META_GLOBALS.inst_proj_sigma_right(
-                    QuotedType::sigma(
+                    MappedTypeArgs::new(
                         Ident::new("A"),
                         QuotedType::Type,
                         QuotedType::sigma(Ident::new("B"), QuotedType::Type, QuotedType::Type),
@@ -1287,12 +1479,12 @@ mod tests {
             ),
             TermExpr::var(42),
             VarExpr {
-                idx: 0,
+                idx: -1,
                 args: vec![Arg::ty(TypeExpr::var(23))],
                 ty_exact: false,
             },
             TEST_META_GLOBALS.inst_proj_pi(
-                QuotedType::pi(Ident::new("A"), QuotedType::Type, QuotedType::Type),
+                MappedTypeArgs::new(Ident::new("A"), QuotedType::Type, QuotedType::Type),
                 TermExpr::QuotedTerm(Box::new(TermExpr::var(42))),
                 TermExpr::QuotedType(Box::new(TypeExpr::var(23))),
             ),
@@ -1313,14 +1505,14 @@ mod tests {
             ),
             TermExpr::var(42),
             VarExpr {
-                idx: 0,
+                idx: -1,
                 args: vec![Arg::ty(TypeExpr::var(23)), Arg::ty(TypeExpr::var(24))],
                 ty_exact: false,
             },
             TEST_META_GLOBALS.inst_proj_pi(
-                QuotedType::pi(Ident::new("B"), QuotedType::Type, QuotedType::Type),
+                MappedTypeArgs::new(Ident::new("B"), QuotedType::Type, QuotedType::Type),
                 TEST_META_GLOBALS.inst_proj_pi(
-                    QuotedType::pi(
+                    MappedTypeArgs::new(
                         Ident::new("A"),
                         QuotedType::Type,
                         QuotedType::pi(Ident::new("B"), QuotedType::Type, QuotedType::Type),

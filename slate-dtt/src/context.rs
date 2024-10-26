@@ -263,7 +263,7 @@ impl<'a, T: ?Sized + ToOwned> CtxCow<'a, T> {
     }
 
     // Intentionally not exported because it ignores `weaken_by`.
-    fn value(&'a self) -> &'a T {
+    pub(crate) fn value(&'a self) -> &'a T {
         match self {
             CtxCow::Borrowed(ctx_ref) => ctx_ref.value,
             CtxCow::Owned(value) => value.borrow(),
@@ -438,6 +438,8 @@ pub trait ContextObject: ToOwned<Owned: BorrowMut<Self>> {
     ///   as necessary. `params` is assumed to live in the context that is offset by both `offset`
     ///   and `params.len()`.
     /// * Locals < `-(offset + params.len())` are increased by `params`.
+    // TOOPT: We should improve this API in such a way that implementations can count the number
+    // of uses of each arg and then take each arg when it is known not be used later.
     fn subst_impl(
         &mut self,
         offset: CtxOffset,
